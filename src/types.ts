@@ -34,6 +34,32 @@ export interface GameQuestion {
   differentFollowUp: string;
 }
 
+export interface GameDefinition {
+  schemaVersion: 1;
+  id: string;
+  matchId: string;
+  gameType: string;
+  title: string;
+  eyebrow: string;
+  description: string;
+  whyItFits: string;
+  estimatedMinutes: number;
+  topics: string[];
+  questions: GameQuestion[];
+  generatedBy: 'fallback' | 'ai';
+  generatedAt: string;
+}
+
+export interface AiGameStatus {
+  configured: boolean;
+  model: string | null;
+}
+
+export interface AiGameResponse {
+  game: GameDefinition;
+  cached: boolean;
+}
+
 export interface RoundResult {
   question: GameQuestion;
   protagonist: ParticipantId;

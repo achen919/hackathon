@@ -1,8 +1,9 @@
+import { useEffect, useRef } from 'react';
 import { Avatar } from './Avatar';
 import { getUser, otherParticipant, perspectiveLabel, toneFor } from '../lib/participants';
 import type {
+  GameDefinition,
   GamePhase,
-  GameQuestion,
   MatchPayload,
   ParticipantId,
   RoundResult,
@@ -11,7 +12,7 @@ import type {
 interface IcebreakerGameProps {
   open: boolean;
   match: MatchPayload;
-  questions: GameQuestion[];
+  game: GameDefinition;
   phase: GamePhase;
   roundIndex: number;
   answer: number | null;
@@ -34,7 +35,7 @@ interface IcebreakerGameProps {
 export function IcebreakerGame({
   open,
   match,
-  questions,
+  game,
   phase,
   roundIndex,
   answer,
@@ -53,8 +54,54 @@ export function IcebreakerGame({
   onRestart,
   onViewerChange,
 }: IcebreakerGameProps) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  useEffect(() => {
+    if (!open) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
+    const frame = window.requestAnimationFrame(() => {
+      const firstButton = dialog?.querySelector<HTMLElement>('button:not(:disabled)');
+      (firstButton ?? dialog)?.focus();
+    });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeRef.current();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialog) return;
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>('button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex="-1"])'),
+      );
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener('keydown', onKeyDown);
+      previousFocus?.focus();
+    };
+  }, [open]);
+
   if (!open) return null;
 
+  const questions = game.questions;
   const question = questions[roundIndex] ?? questions[questions.length - 1];
   const protagonist = roundIndex % 2 === 0 ? starter : otherParticipant(starter);
   const guesser = otherParticipant(protagonist);
@@ -75,22 +122,28 @@ export function IcebreakerGame({
       }}
     >
       <section
+        ref={dialogRef}
         className="game-sheet"
         role="dialog"
+        tabIndex={-1}
         aria-modal="true"
         aria-labelledby="game-title"
       >
         <header className="game-sheet__header">
           <div>
-            <p className="eyebrow">如果是你 · 默契接力</p>
-            <h2 id="game-title">没有输赢，猜错也会多一个话题</h2>
+            <p className="eyebrow">{game.eyebrow} · {game.gameType}</p>
+            <h2 id="game-title">{game.title}</h2>
           </div>
           <button className="icon-button" type="button" onClick={onClose} aria-label="收起游戏">
             ×
           </button>
         </header>
 
-        <div className="game-progress" aria-label={`游戏进度，第 ${Math.min(roundIndex + 1, questions.length)} 轮，共 ${questions.length} 轮`}>
+        <div
+          className="game-progress"
+          style={{ gridTemplateColumns: `repeat(${questions.length}, minmax(0, 1fr))` }}
+          aria-label={`游戏进度，第 ${Math.min(roundIndex + 1, questions.length)} 轮，共 ${questions.length} 轮`}
+        >
           {questions.map((item, index) => (
             <span
               key={item.id}
@@ -108,13 +161,14 @@ export function IcebreakerGame({
               其中 {matchedCount} 次碰巧同频，{results.length - matchedCount} 次发现新线索。
               差异不是扣分，是下一段对话的入口。
             </p>
+            <p className="game-complete__reason">这局为什么适合你们：{game.whyItFits}</p>
             <div className="game-complete__people">
               <Avatar name={match.user_a.nickname} tone={toneFor('a')} size="large" />
               <span className="game-complete__line">一起完成</span>
               <Avatar name={match.user_b.nickname} tone={toneFor('b')} size="large" />
             </div>
             <button className="primary-button primary-button--wide" type="button" onClick={onRestart}>
-              再来一局
+              重玩本局
             </button>
             <button className="text-button" type="button" onClick={onClose}>
               回到聊天
@@ -158,11 +212,13 @@ export function IcebreakerGame({
                 </div>
                 <p className="question-source">{question.source}</p>
                 <h3 className="question-title">{question.prompt}</h3>
-                <div className="choice-grid" role="group" aria-label="选择你的答案">
+                <div className="choice-grid" role="radiogroup" aria-label="选择你的答案">
                   {question.options.map((option, index) => (
                     <button
                       key={option}
                       type="button"
+                      role="radio"
+                      aria-checked={answer === index}
                       className={`choice-button ${answer === index ? 'is-selected' : ''}`}
                       onClick={() => onAnswerChange(index)}
                     >
@@ -210,11 +266,13 @@ export function IcebreakerGame({
                 </div>
                 <p className="question-source">{question.source}</p>
                 <h3 className="question-title">{protagonistUser.nickname} 会怎么选？</h3>
-                <div className="choice-grid" role="group" aria-label="猜猜对方的答案">
+                <div className="choice-grid" role="radiogroup" aria-label="猜猜对方的答案">
                   {question.options.map((option, index) => (
                     <button
                       key={option}
                       type="button"
+                      role="radio"
+                      aria-checked={guess === index}
                       className={`choice-button ${guess === index ? 'is-selected' : ''}`}
                       onClick={() => onGuessChange(index)}
                     >

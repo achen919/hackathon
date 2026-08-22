@@ -13,6 +13,9 @@ Environment=HOST=127.0.0.1
 Environment=PORT=8788
 Environment=TRUST_PROXY=1
 Environment=STATIC_DIR=/var/www/hackathon
+Environment=STATE_DIR=/var/lib/hackathon-chat
+Environment=PUBLIC_ORIGIN=https://hackathon.shcyr.com
+Environment=AI_ALLOWED_ORIGINS=https://api.openai-next.com
 EnvironmentFile=/etc/hackathon-chat.env
 ExecStart=/usr/bin/node server/index.mjs
 Restart=on-failure
@@ -22,6 +25,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
+StateDirectory=hackathon-chat
+StateDirectoryMode=0700
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

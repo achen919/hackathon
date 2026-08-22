@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Avatar } from './components/Avatar';
 import { IcebreakerGame } from './components/IcebreakerGame';
 import { ProfileExplorer } from './components/ProfileExplorer';
 import { demoMatch } from './data/demoMatch';
-import { buildQuestionDeck } from './game/questions';
+import { buildFallbackGame, isGameDefinition } from './game/questions';
 import {
   genderLabel,
   getUser,
@@ -12,6 +12,8 @@ import {
   toneFor,
 } from './lib/participants';
 import type {
+  AiGameResponse,
+  AiGameStatus,
   GamePhase,
   MatchMessage,
   MatchPayload,
@@ -38,10 +40,15 @@ export default function App() {
   const [messages, setMessages] = useState<MatchMessage[]>(demoMatch.messages);
   const [dataSource, setDataSource] = useState<'loading' | 'live' | 'demo'>('demo');
   const [sourceMessage, setSourceMessage] = useState('稳定演示样例 · 可从接口随机抽取');
+  const [gameContextId, setGameContextId] = useState<string | null>(null);
   const [viewer, setViewer] = useState<ParticipantId>('a');
   const [drafts, setDrafts] = useState<Record<ParticipantId, string>>({ a: '', b: '' });
   const [profilesOpen, setProfilesOpen] = useState(false);
   const [gameOpen, setGameOpen] = useState(false);
+  const [activeGame, setActiveGame] = useState(() => buildFallbackGame(demoMatch));
+  const [aiStatus, setAiStatus] = useState<AiGameStatus | null>(null);
+  const [gameGeneration, setGameGeneration] = useState<'idle' | 'loading' | 'ready' | 'fallback'>('idle');
+  const [gameNotice, setGameNotice] = useState('从接口抽取案例后，AI 会读取双方完整上下文，为这一对临场出题。');
   const [gamePhase, setGamePhase] = useState<GamePhase>('idle');
   const [gameStarter, setGameStarter] = useState<ParticipantId>('a');
   const [roundIndex, setRoundIndex] = useState(0);
@@ -49,8 +56,9 @@ export default function App() {
   const [guess, setGuess] = useState<number | null>(null);
   const [results, setResults] = useState<RoundResult[]>([]);
   const timelineRef = useRef<HTMLElement>(null);
+  const generationVersionRef = useRef(0);
 
-  const questions = useMemo(() => buildQuestionDeck(match), [match]);
+  const questions = activeGame.questions;
   const peer = otherParticipant(viewer);
   const currentUser = getUser(match, viewer);
   const otherUser = getUser(match, peer);
@@ -71,13 +79,34 @@ export default function App() {
   ];
   const gameEligible = !closureSignals.some((signal) => recentConversation.includes(signal));
 
+  useEffect(() => {
+    let active = true;
+    void fetch('/api/games/status', { headers: { Accept: 'application/json' } })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Unable to load AI status');
+        return (await response.json()) as AiGameStatus;
+      })
+      .then((status) => {
+        if (active) setAiStatus(status);
+      })
+      .catch(() => {
+        if (active) setAiStatus(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   async function loadMatch() {
+    generationVersionRef.current += 1;
     setDataSource('loading');
     setSourceMessage('正在随机载入一对比赛案例…');
 
     try {
       const response = await fetch('/api/match', { headers: { Accept: 'application/json' } });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const nextGameContextId = response.headers.get('x-game-context-id');
+      if (!nextGameContextId) throw new Error('Missing game context');
 
       const payload = (await response.json()) as MatchPayload;
       if (!payload.user_a || !payload.user_b || !Array.isArray(payload.messages)) {
@@ -86,6 +115,10 @@ export default function App() {
 
       setMatch(payload);
       setMessages(payload.messages);
+      setGameContextId(nextGameContextId);
+      setActiveGame(buildFallbackGame(payload));
+      setGameGeneration('idle');
+      setGameNotice('新案例已载入，AI 会根据双方完整上下文重新设计一局。');
       setDataSource('live');
       setSourceMessage(`已缓存案例 ${payload.match_id.slice(-8)}`);
       setViewer('a');
@@ -95,6 +128,10 @@ export default function App() {
     } catch {
       setMatch(demoMatch);
       setMessages(demoMatch.messages);
+      setGameContextId(null);
+      setActiveGame(buildFallbackGame(demoMatch));
+      setGameGeneration('fallback');
+      setGameNotice('接口暂时不可用，已切换到稳定演示题卡。');
       setDataSource('demo');
       setSourceMessage(fallbackMessage);
       setViewer('a');
@@ -128,8 +165,13 @@ export default function App() {
   }
 
   function restoreDemo() {
+    generationVersionRef.current += 1;
     setMatch(demoMatch);
     setMessages(demoMatch.messages);
+    setGameContextId(null);
+    setActiveGame(buildFallbackGame(demoMatch));
+    setGameGeneration('idle');
+    setGameNotice('从接口抽取案例后，AI 会读取双方完整上下文，为这一对临场出题。');
     setDataSource('demo');
     setSourceMessage('稳定演示样例 · 可从接口随机抽取');
     setViewer('a');
@@ -138,10 +180,67 @@ export default function App() {
     resetGame(false);
   }
 
+  async function generateAndStart(fresh = false) {
+    if (!gameEligible || gameGeneration === 'loading') return;
+    if (aiStatus?.configured === false || !gameContextId) {
+      const fallback = buildFallbackGame({ ...match, messages, message_count: messages.length });
+      setActiveGame(fallback);
+      setGameGeneration('fallback');
+      setGameNotice(
+        aiStatus?.configured === false
+          ? 'AI 尚未在管理后台配置，先用安全题卡继续演示；配置后即可生成专属类型。'
+          : '当前是本地演示案例；从接口抽取真实案例后，即可生成专属游戏。',
+      );
+      resetGame(true);
+      return;
+    }
+    const runVersion = ++generationVersionRef.current;
+    setGameGeneration('loading');
+    setGameNotice('AI 正在理解双方资料、偏好与完整聊天，设计一局只属于你们的游戏…');
+
+    try {
+      const response = await fetch('/api/games/generate', {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contextId: gameContextId, fresh }),
+      });
+      const payload = (await response.json()) as Partial<AiGameResponse> & { code?: string };
+      if (!response.ok || !isGameDefinition(payload.game) || payload.game.matchId !== match.match_id) {
+        throw new Error(payload.code ?? `HTTP ${response.status}`);
+      }
+      if (runVersion !== generationVersionRef.current) return;
+      setActiveGame(payload.game);
+      setAiStatus((current) => ({ configured: true, model: current?.model ?? null }));
+      setGameGeneration('ready');
+      setGameNotice(payload.cached ? '已取回这对用户刚刚生成的专属游戏。' : `AI 选择了「${payload.game.gameType}」：${payload.game.whyItFits}`);
+      resetGame(true);
+    } catch (error) {
+      if (runVersion !== generationVersionRef.current) return;
+      const fallback = buildFallbackGame({ ...match, messages, message_count: messages.length });
+      setActiveGame(fallback);
+      setGameGeneration('fallback');
+      const code = error instanceof Error ? error.message : '';
+      if (code === 'AI_NOT_CONFIGURED') {
+        setAiStatus({ configured: false, model: null });
+        setGameNotice('AI 尚未在管理后台配置，先用安全题卡继续演示；配置后即可生成专属类型。');
+      } else if (code === 'AI_REFRESH_LIMIT') {
+        setGameGeneration('ready');
+        setGameNotice('这对用户的两次智能换题机会已用完，已保留当前专属游戏，可重新玩这一局。');
+        resetGame(true);
+        return;
+      } else if (code === 'AI_AUTH_FAILED') {
+        setGameNotice('AI 密钥或模型暂不可用，已自动切换到安全题卡。请在管理后台检查配置。');
+      } else {
+        setGameNotice('AI 此刻没有及时返回，已自动切换到安全题卡，游戏仍可正常进行。');
+      }
+      resetGame(true);
+    }
+  }
+
   function startOrResumeGame() {
     if (!gameEligible) return;
     if (gamePhase === 'idle' || gamePhase === 'complete') {
-      resetGame(true);
+      void generateAndStart(gamePhase === 'complete');
       return;
     }
     setGameOpen(true);
@@ -203,8 +302,9 @@ export default function App() {
   }
 
   const gameCardStatus = (() => {
+    if (gameGeneration === 'loading') return 'AI 正在临场出题…';
     if (gamePhase === 'complete') return `完成 · ${matchedCount} 次同频，${results.length - matchedCount} 个新发现`;
-    if (gamePhase === 'idle') return '3 个小问题 · 约 3 分钟';
+    if (gamePhase === 'idle') return `${questions.length} 个小问题 · 约 ${activeGame.estimatedMinutes} 分钟`;
     if (gamePhase === 'revealed') return `第 ${roundIndex + 1} 轮已揭晓`;
     return `进行中 · 第 ${roundIndex + 1}/${questions.length} 轮`;
   })();
@@ -220,7 +320,7 @@ export default function App() {
         <nav className="rail-nav">
           <button className="rail-button is-active" type="button" aria-label="聊天">◌</button>
           <button className="rail-button" type="button" aria-label="匹配">♡</button>
-          <button className="rail-button" type="button" aria-label="个人资料">⌾</button>
+          <button className="rail-button" type="button" aria-label="AI 游戏管理后台" onClick={() => { window.location.href = '/admin'; }}>⌾</button>
         </nav>
         <Avatar name={currentUser.nickname} tone={toneFor(viewer)} size="small" />
       </aside>
@@ -276,7 +376,7 @@ export default function App() {
             ))}
           </div>
           <div className="chat-header__actions">
-            <button className="secondary-button compact-only" type="button" onClick={startOrResumeGame} disabled={!gameEligible}>
+            <button className="secondary-button compact-only" type="button" onClick={startOrResumeGame} disabled={!gameEligible || gameGeneration === 'loading'}>
               ✦ 小游戏
             </button>
             <button
@@ -324,29 +424,30 @@ export default function App() {
             );
           })}
 
-          <article className={`game-invite ${gamePhase !== 'idle' ? 'is-active' : ''} ${!gameEligible ? 'is-ineligible' : ''}`}>
+          <article className={`game-invite ${gamePhase !== 'idle' ? 'is-active' : ''} ${!gameEligible ? 'is-ineligible' : ''}`} aria-busy={gameGeneration === 'loading'}>
             <div className="game-invite__glow" aria-hidden="true">✦</div>
             <div className="game-invite__topline">
-              <span className="game-label">破冰小局</span>
+              <span className="game-label">{activeGame.generatedBy === 'ai' ? 'AI 专属小局' : '破冰小局'}</span>
               <span>{gameEligible ? gameCardStatus : '此刻不推荐发起'}</span>
             </div>
-            <h2>{gameEligible ? '来一局「如果是你」吗？' : '尊重结束，也是一种认真'}</h2>
+            <h2>{gameEligible ? activeGame.title : '尊重结束，也是一种认真'}</h2>
             <p>
               {gameEligible
-                ? '一方偷偷选择，另一方凭感觉猜。没有输赢，猜错反而会多一个可以继续聊的话题。'
+                ? activeGame.description
                 : '最近对话里出现了明确的结束信号。此时不应该用游戏重新施压，系统会安静收起邀请。'}
             </p>
             {gameEligible && (
               <div className="topic-chips" aria-label="游戏话题">
-                <span>周末模式</span>
-                <span>陪伴偏好</span>
-                <span>留个下次</span>
+                {activeGame.topics.map((topic) => <span key={topic}>{topic}</span>)}
               </div>
             )}
-            <button className="game-invite__button" type="button" onClick={gameEligible ? startOrResumeGame : restoreDemo}>
+            {gameEligible && <p className={`game-ai-note is-${gameGeneration}`} role="status" aria-live="polite">{gameNotice}</p>}
+            <button className="game-invite__button" type="button" onClick={gameEligible ? startOrResumeGame : restoreDemo} disabled={gameGeneration === 'loading'}>
               {gameEligible
-                ? gamePhase === 'idle' || gamePhase === 'complete'
-                  ? '一起玩'
+                ? gameGeneration === 'loading'
+                  ? '正在生成…'
+                  : gamePhase === 'idle' || gamePhase === 'complete'
+                    ? aiStatus?.configured === false || !gameContextId ? '先玩安全题卡' : 'AI 生成专属游戏'
                   : '继续这一局'
                 : '回到适合破冰的演示样例'}
               <span aria-hidden="true">→</span>
@@ -355,7 +456,7 @@ export default function App() {
         </section>
 
         <footer className="chat-composer">
-          <button className="composer-game-button" type="button" onClick={startOrResumeGame} disabled={!gameEligible}>
+          <button className="composer-game-button" type="button" onClick={startOrResumeGame} disabled={!gameEligible || gameGeneration === 'loading'}>
             <span aria-hidden="true">✦</span>
             小游戏
           </button>
@@ -424,8 +525,8 @@ export default function App() {
         <section className="round-card">
           <div className="section-heading">
             <div>
-              <span className="eyebrow">今晚的小局</span>
-              <h2>由浅到深，不越界</h2>
+              <span className="eyebrow">{activeGame.generatedBy === 'ai' ? 'AI 为这对用户生成' : '今晚的小局'}</span>
+              <h2>{activeGame.gameType}</h2>
             </div>
             <span className="round-count">{results.length}/{questions.length}</span>
           </div>
@@ -445,8 +546,8 @@ export default function App() {
         <section className="safety-note">
           <span aria-hidden="true">☂</span>
           <div>
-            <strong>只用聊过的公开话题</strong>
-            <p>不会把私密资料变成题目，也不会替任何一方自动发送。</p>
+            <strong>理解完整资料，题面守住边界</strong>
+            <p>私密偏好只用于避开雷区，不直接暴露；任何跟进都由本人确认后发送。</p>
           </div>
         </section>
       </aside>
@@ -454,7 +555,7 @@ export default function App() {
       <IcebreakerGame
         open={gameOpen}
         match={match}
-        questions={questions}
+        game={activeGame}
         phase={gamePhase}
         roundIndex={roundIndex}
         answer={answer}

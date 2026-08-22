@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { Avatar } from './Avatar';
 import { genderLabel, getUser, perspectiveLabel, toneFor } from '../lib/participants';
 import type { MatchPayload, ParticipantId } from '../types';
@@ -143,6 +144,51 @@ export function ProfileExplorer({
   onViewerChange,
   onClose,
 }: ProfileExplorerProps) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  useEffect(() => {
+    if (!open) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
+    const frame = window.requestAnimationFrame(() => {
+      const firstButton = dialog?.querySelector<HTMLElement>('button:not(:disabled)');
+      (firstButton ?? dialog)?.focus();
+    });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeRef.current();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialog) return;
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>('button:not(:disabled), [href], [tabindex]:not([tabindex="-1"])'),
+      );
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener('keydown', onKeyDown);
+      previousFocus?.focus();
+    };
+  }, [open]);
+
   if (!open) return null;
 
   return (
@@ -154,8 +200,10 @@ export function ProfileExplorer({
       }}
     >
       <section
+        ref={dialogRef}
         className="profile-explorer"
         role="dialog"
+        tabIndex={-1}
         aria-modal="true"
         aria-labelledby="profile-explorer-title"
       >
