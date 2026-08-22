@@ -1,19 +1,28 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import type { CarnivalExclusiveSeriesId } from '../carnival-exclusive';
 import { exclusiveSeriesById } from '../carnival-exclusive';
+import type {
+  CarnivalExclusiveGameDefinition,
+  CarnivalExclusiveInteraction,
+  CarnivalExclusiveQuestionDefinition,
+  CarnivalExclusivePresentationMotion,
+  CarnivalExclusivePresentationScene,
+  CarnivalExclusivePresentationTone,
+  CarnivalExclusiveRevealEffect,
+} from '../carnival-types';
 import type { ParticipantId } from '../types';
 import type { CarnivalParticipantPublicState } from './CarnivalGameDialog';
 import '../carnival-game.css';
 
-export interface CarnivalExclusiveQuestion {
-  id: string;
-  label: string;
-  source: string;
-  prompt: string;
-  options: string[];
-  matchedFollowUp?: string;
-  differentFollowUp?: string;
-}
+export interface CarnivalExclusiveQuestion extends CarnivalExclusiveQuestionDefinition {}
 
 export interface CarnivalExclusiveRoundResult {
   questionId: string;
@@ -31,6 +40,10 @@ export interface CarnivalExclusivePublicState {
   seriesId: CarnivalExclusiveSeriesId;
   title: string;
   description: string;
+  engine?: CarnivalExclusiveGameDefinition['engine'];
+  generatedBy?: CarnivalExclusiveGameDefinition['generatedBy'];
+  presentation?: CarnivalExclusiveGameDefinition['presentation'];
+  ending?: CarnivalExclusiveGameDefinition['ending'];
   series?: {
     matchedEyebrow?: string;
     matchedTitle?: string;
@@ -97,6 +110,155 @@ function isAnswerRole(role: string) {
 
 function isGuessRole(role: string) {
   return ['guesser', 'guessing'].includes(role);
+}
+
+const DEFAULT_INTERACTION: CarnivalExclusiveInteraction = { kind: 'card-grid', variant: 'tiles' };
+const TONES = new Set<CarnivalExclusivePresentationTone>(['coral', 'violet', 'mint', 'gold', 'blue']);
+const SCENES = new Set<CarnivalExclusivePresentationScene>(['court', 'archive', 'cinema', 'lab', 'cosmos']);
+const MOTIONS = new Set<CarnivalExclusivePresentationMotion>(['pop', 'float', 'slide', 'orbit', 'pulse']);
+const REVEAL_EFFECTS = new Set<CarnivalExclusiveRevealEffect>(['confetti', 'ripple', 'spotlight', 'stars', 'cards']);
+
+function safeInteraction(value: unknown, optionCount: number): CarnivalExclusiveInteraction {
+  if (!value || typeof value !== 'object') return DEFAULT_INTERACTION;
+  const interaction = value as Partial<CarnivalExclusiveInteraction>;
+  if (interaction.kind === 'card-grid' && optionCount >= 2 && optionCount <= 4 && (interaction.variant === 'tiles' || interaction.variant === 'tickets')) return interaction as CarnivalExclusiveInteraction;
+  if (interaction.kind === 'swipe-deck' && optionCount === 2 && (interaction.variant === 'split' || interaction.variant === 'stack')) return interaction as CarnivalExclusiveInteraction;
+  if (interaction.kind === 'mood-dial' && optionCount >= 3 && optionCount <= 4 && (interaction.variant === 'compass' || interaction.variant === 'meter')) return interaction as CarnivalExclusiveInteraction;
+  if (interaction.kind === 'orbit-pick' && optionCount >= 3 && optionCount <= 4 && (interaction.variant === 'constellation' || interaction.variant === 'bubbles')) return interaction as CarnivalExclusiveInteraction;
+  return DEFAULT_INTERACTION;
+}
+
+function safePresentation(
+  presentation: CarnivalExclusiveGameDefinition['presentation'] | undefined,
+  legacyTone: CarnivalExclusivePresentationTone = 'violet',
+) {
+  return {
+    tone: presentation ? TONES.has(presentation.tone) ? presentation.tone : 'violet' : legacyTone,
+    scene: presentation && SCENES.has(presentation.scene) ? presentation.scene : 'archive',
+    motion: presentation && MOTIONS.has(presentation.motion) ? presentation.motion : 'pop',
+    revealEffect: presentation && REVEAL_EFFECTS.has(presentation.revealEffect) ? presentation.revealEffect : 'cards',
+  } as const;
+}
+
+function moveChoice(
+  event: ReactKeyboardEvent<HTMLButtonElement>,
+  index: number,
+  count: number,
+  onChange: (value: number) => void,
+) {
+  if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault();
+  const next = event.key === 'Home'
+    ? 0
+    : event.key === 'End'
+      ? count - 1
+      : (index + (event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1) + count) % count;
+  onChange(next);
+  event.currentTarget.parentElement
+    ?.querySelector<HTMLButtonElement>(`[data-choice-index="${next}"]`)
+    ?.focus();
+}
+
+export function CarnivalExclusiveChoiceRenderer({
+  question,
+  choice,
+  onChange,
+  disabled = false,
+  ariaLabel,
+  preview = false,
+}: {
+  question: CarnivalExclusiveQuestionDefinition;
+  choice: number | null;
+  onChange: (value: number) => void;
+  disabled?: boolean;
+  ariaLabel: string;
+  preview?: boolean;
+}) {
+  const swipeStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  const suppressSwipeClickUntilRef = useRef(0);
+  const [swipeDrag, setSwipeDrag] = useState<{ index: number; x: number } | null>(null);
+  useEffect(() => {
+    swipeStartRef.current = null;
+    suppressSwipeClickUntilRef.current = 0;
+    setSwipeDrag(null);
+  }, [question.id]);
+  const optionCount = question.options.length;
+  const interaction = safeInteraction(question.interaction, optionCount);
+  const options = question.options.map((option, index) => {
+    const selected = choice === index;
+    const letter = String.fromCharCode(65 + index);
+    const orbitStyle = {
+      '--exclusive-option-angle': `${(360 / optionCount) * index}deg`,
+      '--exclusive-option-angle-negative': `${(-360 / optionCount) * index}deg`,
+    } as CSSProperties;
+    const swipeStyle = swipeDrag?.index === index
+      ? { '--exclusive-swipe-drag-x': `${swipeDrag.x}px` } as CSSProperties
+      : undefined;
+    return (
+      <button
+        key={`${question.id}-${index}`}
+        type="button"
+        role="radio"
+        aria-checked={selected}
+        aria-label={`${letter}，${option}`}
+        tabIndex={selected || (choice === null && index === 0) ? 0 : -1}
+        data-choice-index={index}
+        className={`${selected ? 'is-selected' : ''} ${swipeDrag?.index === index ? 'is-dragging' : ''}`}
+        disabled={disabled}
+        style={interaction.kind === 'orbit-pick' ? orbitStyle : swipeStyle}
+        onClick={(event) => {
+          if (event.detail > 0 && Date.now() < suppressSwipeClickUntilRef.current) return;
+          onChange(index);
+        }}
+        onPointerDown={(event) => {
+          if (interaction.kind !== 'swipe-deck' || disabled) return;
+          swipeStartRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+          setSwipeDrag({ index, x: 0 });
+          event.currentTarget.setPointerCapture?.(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          const start = swipeStartRef.current;
+          if (interaction.kind !== 'swipe-deck' || !start || start.pointerId !== event.pointerId) return;
+          const deltaX = event.clientX - start.x;
+          const deltaY = event.clientY - start.y;
+          if (Math.abs(deltaX) > Math.abs(deltaY)) event.preventDefault();
+          setSwipeDrag({ index, x: Math.max(-110, Math.min(110, deltaX)) });
+        }}
+        onPointerUp={(event) => {
+          const start = swipeStartRef.current;
+          swipeStartRef.current = null;
+          setSwipeDrag(null);
+          if (interaction.kind !== 'swipe-deck' || !start || start.pointerId !== event.pointerId) return;
+          const deltaX = event.clientX - start.x;
+          const deltaY = event.clientY - start.y;
+          if (Math.abs(deltaX) < 38 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.15) return;
+          suppressSwipeClickUntilRef.current = Date.now() + 450;
+          onChange(deltaX < 0 ? 0 : 1);
+        }}
+        onPointerCancel={() => { swipeStartRef.current = null; setSwipeDrag(null); }}
+        onKeyDown={(event) => moveChoice(event, index, optionCount, onChange)}
+      >
+        {interaction.kind === 'card-grid' && <span className="carnival-exclusive-choice__key">{letter}</span>}
+        {interaction.kind === 'swipe-deck' && <span className="carnival-exclusive-choice__gesture" aria-hidden="true">{index % 2 === 0 ? '↙' : '↗'}</span>}
+        {interaction.kind === 'mood-dial' && <span className="carnival-exclusive-choice__tick" aria-hidden="true">{index + 1}</span>}
+        {interaction.kind === 'orbit-pick' && <span className="carnival-exclusive-choice__star" aria-hidden="true">✦</span>}
+        <strong>{option}</strong>
+        {interaction.kind === 'swipe-deck' && <small>{selected ? '已收入牌组' : '轻触选中'}</small>}
+      </button>
+    );
+  });
+
+  return (
+    <div
+      className={`carnival-exclusive-choice carnival-exclusive-choice--${interaction.kind} is-${interaction.variant} ${preview ? 'is-preview' : ''}`}
+      role="radiogroup"
+      aria-label={ariaLabel}
+    >
+      {interaction.kind === 'mood-dial' && <span className="carnival-exclusive-choice__dial" aria-hidden="true"><i /><b>直觉刻度</b></span>}
+      {interaction.kind === 'orbit-pick' && <span className="carnival-exclusive-choice__core" aria-hidden="true">选一颗<br />心动星球</span>}
+      {options}
+    </div>
+  );
 }
 
 export function CarnivalExclusiveGameDialog({
@@ -222,6 +384,12 @@ export function CarnivalExclusiveGameDialog({
   const peer = other(participant);
   const selfJoined = invite.participants[participant].joined;
   const series = exclusiveSeriesById(gameState?.seriesId ?? invite.seriesId);
+  const visual = safePresentation(gameState?.presentation, series?.tone ?? 'violet');
+  const generatedByLabel = gameState?.generatedBy === 'ai'
+    ? 'AI 生成'
+    : gameState?.generatedBy === 'fallback'
+      ? '安全离线生成'
+      : null;
   const stateMismatch = Boolean(gameState && (
     gameState.inviteId !== invite.inviteId ||
     gameState.templateId !== 'custom' ||
@@ -233,7 +401,7 @@ export function CarnivalExclusiveGameDialog({
     <div className="carnival-game-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section
         ref={dialogRef}
-        className={`carnival-game-dialog carnival-exclusive-game is-${series?.tone ?? 'violet'}`}
+        className={`carnival-game-dialog carnival-exclusive-game is-${visual.tone} scene-${visual.scene} motion-${visual.motion}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -242,7 +410,7 @@ export function CarnivalExclusiveGameDialog({
       >
         <header className="carnival-game-header">
           <div>
-            <p className="carnival-game-kicker">专属小游戏 · {series?.shortTitle ?? '双人局'} · {invite.inviteId.slice(-6)}</p>
+            <p className="carnival-game-kicker">专属小游戏 · {series?.shortTitle ?? '双人局'}{generatedByLabel ? ` · ${generatedByLabel}` : ''} · {invite.inviteId.slice(-6)}</p>
             <h2 id={titleId}>{gameState?.title ?? series?.title ?? '等待游戏开始'}</h2>
           </div>
           <button className="carnival-game-close" type="button" onClick={onClose} aria-label="关闭专属小游戏">×</button>
@@ -343,6 +511,7 @@ function ExclusiveRound({
   const differentEyebrow = state.series?.differentEyebrow ?? localSeries?.differentEyebrow ?? '发现新线索';
   const differentTitle = state.series?.differentTitle ?? localSeries?.differentTitle ?? '两个答案都值得继续聊';
   const resultUnit = state.series?.resultUnit ?? localSeries?.resultUnit ?? '条新线索';
+  const visual = safePresentation(state.presentation, localSeries?.tone ?? 'violet');
   const mineToAnswer = state.phase === 'answering' && isAnswerRole(state.self.role) && !state.self.submitted;
   const mineToGuess = state.phase === 'guessing' && isGuessRole(state.self.role) && !state.self.submitted;
   const myTurn = mineToAnswer || mineToGuess;
@@ -350,13 +519,13 @@ function ExclusiveRound({
   if (state.phase === 'completed') {
     const results = state.results ?? [];
     const sameCount = results.filter((result) => result.answer === result.guess).length;
-    const finalPrompt = results.at(-1)?.followUp;
+    const finalPrompt = state.ending?.chatPrompt ?? results.at(-1)?.followUp;
     return (
-      <div className="carnival-game-body carnival-exclusive-complete" aria-live="polite">
+      <div className={`carnival-game-body carnival-exclusive-complete effect-${visual.revealEffect}`} aria-live="polite">
         <span className="carnival-exclusive-complete__spark" aria-hidden="true">✦</span>
         <p className="carnival-game-eyebrow">三轮专属小游戏完成</p>
-        <h3 data-exclusive-focus tabIndex={-1}>收下 {results.length || 3} {resultUnit}</h3>
-        <p>{sameCount} 次碰巧同频，{Math.max(0, results.length - sameCount)} 次发现不同角度。差异不是扣分，是下一段聊天的入口。</p>
+        <h3 data-exclusive-focus tabIndex={-1}>{state.ending?.headline ?? `收下 ${results.length || 3} ${resultUnit}`}</h3>
+        <p>{state.ending?.summary ?? `${sameCount} 次碰巧同频，${Math.max(0, results.length - sameCount)} 次发现不同角度。差异不是扣分，是下一段聊天的入口。`}</p>
         <div className="carnival-exclusive-result-list">
           {results.map((result, index) => {
             const resultQuestion = state.questions?.find((item) => item.id === result.questionId)
@@ -387,7 +556,7 @@ function ExclusiveRound({
       ?? (matched ? question.matchedFollowUp : question.differentFollowUp)
       ?? '可以聊聊：为什么你们会做出这样的选择？';
     return (
-      <div className="carnival-game-body carnival-exclusive-reveal" aria-live="polite">
+      <div className={`carnival-game-body carnival-exclusive-reveal effect-${visual.revealEffect}`} aria-live="polite">
         <div className={`carnival-exclusive-reveal__burst ${matched ? 'is-matched' : ''}`} aria-hidden="true">{matched ? '✦' : '↗'}</div>
         <p className="carnival-game-eyebrow">第 {state.roundIndex + 1} 轮 · {matched ? matchedEyebrow : differentEyebrow}</p>
         <h3 data-exclusive-focus tabIndex={-1}>{matched ? matchedTitle : differentTitle}</h3>
@@ -442,20 +611,13 @@ function ExclusiveRound({
         <h3 data-exclusive-focus tabIndex={-1}>{mineToGuess ? `${protagonist.nickname} 会怎么选？` : question.prompt}</h3>
         {mineToGuess && <p className="carnival-exclusive-question-copy">原题：{question.prompt}</p>}
       </div>
-      <div className="carnival-exclusive-options" role="radiogroup" aria-label={mineToAnswer ? '选择你的答案' : '猜猜对方的答案'}>
-        {question.options.map((option, index) => (
-          <button
-            key={`${question.id}-${index}`}
-            type="button"
-            role="radio"
-            aria-checked={choice === index}
-            className={choice === index ? 'is-selected' : ''}
-            onClick={() => setChoice(index)}
-          >
-            <span>{String.fromCharCode(65 + index)}</span><strong>{option}</strong>
-          </button>
-        ))}
-      </div>
+      <CarnivalExclusiveChoiceRenderer
+        question={question}
+        choice={choice}
+        onChange={setChoice}
+        disabled={pending}
+        ariaLabel={mineToAnswer ? '选择你的答案' : '猜猜对方的答案'}
+      />
       <button
         className="carnival-game-primary carnival-exclusive-submit"
         type="button"

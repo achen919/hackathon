@@ -3,6 +3,8 @@ import type {
   CarnivalCreateInviteInput,
   CarnivalGameActionInput,
   CarnivalGameActionResponse,
+  CarnivalGamePreview,
+  CarnivalGamePreviewInput,
   CarnivalGameType,
   CarnivalGender,
   CarnivalInvite,
@@ -17,6 +19,8 @@ import type {
   CarnivalRoom,
   CarnivalState,
   CarnivalTextMessage,
+  CarnivalExclusiveGameDefinition,
+  CarnivalExclusiveInteraction,
 } from './carnival-types';
 import { exclusiveSeriesById, type CarnivalExclusiveSeriesId } from './carnival-exclusive';
 
@@ -195,6 +199,106 @@ function promptPreview(value: unknown): CarnivalPromptPreview {
   };
 }
 
+const PRESENTATION_TONES = new Set(['coral', 'violet', 'mint', 'gold', 'blue']);
+const PRESENTATION_SCENES = new Set(['court', 'archive', 'cinema', 'lab', 'cosmos']);
+const PRESENTATION_MOTIONS = new Set(['pop', 'float', 'slide', 'orbit', 'pulse']);
+const REVEAL_EFFECTS = new Set(['confetti', 'ripple', 'spotlight', 'stars', 'cards']);
+
+function enumValue<T extends string>(value: unknown, allowed: Set<string>, fallback: T): T {
+  return typeof value === 'string' && allowed.has(value) ? value as T : fallback;
+}
+
+function exclusiveInteraction(value: unknown, optionCount: number): CarnivalExclusiveInteraction | null {
+  if (!isObject(value)) return null;
+  if (value.kind === 'card-grid' && optionCount >= 2 && optionCount <= 4 && (value.variant === 'tiles' || value.variant === 'tickets')) {
+    return { kind: value.kind, variant: value.variant };
+  }
+  if (value.kind === 'swipe-deck' && optionCount === 2 && (value.variant === 'split' || value.variant === 'stack')) {
+    return { kind: value.kind, variant: value.variant };
+  }
+  if (value.kind === 'mood-dial' && optionCount >= 3 && optionCount <= 4 && (value.variant === 'compass' || value.variant === 'meter')) {
+    return { kind: value.kind, variant: value.variant };
+  }
+  if (value.kind === 'orbit-pick' && optionCount >= 3 && optionCount <= 4 && (value.variant === 'constellation' || value.variant === 'bubbles')) {
+    return { kind: value.kind, variant: value.variant };
+  }
+  return null;
+}
+
+function exclusiveQuestion(value: unknown, index: number) {
+  if (!isObject(value)) throw new CarnivalApiError('可玩预览包含无法识别的题目。', 0, 'CARNIVAL_BAD_RESPONSE');
+  const options = Array.isArray(value.options) && value.options.length >= 2 && value.options.length <= 4 &&
+    value.options.every((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+    ? value.options.map((item) => item.trim())
+    : [];
+  const prompt = text(value.prompt).trim();
+  if (!prompt || options.length < 2) {
+    throw new CarnivalApiError('可玩预览的题面不完整。', 0, 'CARNIVAL_BAD_RESPONSE');
+  }
+  const interaction = exclusiveInteraction(value.interaction, options.length);
+  if (!interaction) {
+    throw new CarnivalApiError('可玩预览包含不支持的互动规则。', 0, 'CARNIVAL_BAD_RESPONSE');
+  }
+  return {
+    id: text(value.id, `preview-question-${index + 1}`),
+    label: text(value.label, `互动 ${index + 1}`),
+    source: text(value.source, '根据双方公开聊天现做'),
+    prompt,
+    options,
+    interaction,
+    matchedFollowUp: text(value.matchedFollowUp) || undefined,
+    differentFollowUp: text(value.differentFollowUp) || undefined,
+  };
+}
+
+function generatedGame(value: unknown): CarnivalExclusiveGameDefinition {
+  const source = isObject(value) && isObject(value.definition) ? value.definition : value;
+  if (!isObject(source)) throw new CarnivalApiError('可玩预览缺少游戏内容。', 0, 'CARNIVAL_BAD_RESPONSE');
+  if (source.schemaVersion !== 3 || source.templateId !== 'custom' || source.engine !== 'exclusive-choice-v1') {
+    throw new CarnivalApiError('可玩预览使用了不支持的游戏协议。', 0, 'CARNIVAL_BAD_RESPONSE');
+  }
+  const series = exclusiveSeriesById(source.seriesId);
+  const questions = Array.isArray(source.questions) && source.questions.length === 3
+    ? source.questions.map(exclusiveQuestion)
+    : [];
+  if (!series || questions.length !== 3 || (source.generatedBy !== 'ai' && source.generatedBy !== 'fallback')) {
+    throw new CarnivalApiError('可玩预览缺少系列或题目。', 0, 'CARNIVAL_BAD_RESPONSE');
+  }
+  const presentation = isObject(source.presentation) ? source.presentation : {};
+  const ending = isObject(source.ending) ? source.ending : {};
+  return {
+    schemaVersion: 3,
+    templateId: 'custom',
+    seriesId: series.id,
+    engine: 'exclusive-choice-v1',
+    generatedBy: source.generatedBy,
+    title: text(source.title, series.title).slice(0, 120),
+    description: text(source.description, series.description).slice(0, 360),
+    presentation: {
+      tone: enumValue(presentation.tone, PRESENTATION_TONES, 'violet'),
+      scene: enumValue(presentation.scene, PRESENTATION_SCENES, 'archive'),
+      motion: enumValue(presentation.motion, PRESENTATION_MOTIONS, 'pop'),
+      revealEffect: enumValue(presentation.revealEffect, REVEAL_EFFECTS, 'cards'),
+    },
+    ending: {
+      headline: text(ending.headline, '你们完成了这局专属游戏').slice(0, 120),
+      summary: text(ending.summary, '把刚才出现的同频和不同，留给下一段聊天慢慢展开。').slice(0, 360),
+      chatPrompt: text(ending.chatPrompt, '刚才哪一个选择最让你意外？').slice(0, 240),
+    },
+    questions,
+  };
+}
+
+function gamePreview(value: unknown): CarnivalGamePreview {
+  if (!isObject(value)) throw new CarnivalApiError('可玩预览响应格式错误。', 0, 'CARNIVAL_BAD_RESPONSE');
+  const previewToken = text(value.previewToken);
+  const expiresAt = text(value.expiresAt);
+  if (!previewToken || !expiresAt) {
+    throw new CarnivalApiError('可玩预览缺少版本令牌。', 0, 'CARNIVAL_BAD_RESPONSE');
+  }
+  return { previewToken, expiresAt, game: generatedGame(value.game) };
+}
+
 async function requestJson(
   fetcher: typeof fetch,
   url: string,
@@ -286,6 +390,22 @@ export function createCarnivalApi({
       }));
     },
 
+    async createGamePreview(
+      token: string,
+      input: CarnivalGamePreviewInput,
+      signal?: AbortSignal,
+    ) {
+      return gamePreview(await requestJson(fetcher, `${path}/game-preview`, {
+        method: 'POST', signal,
+        headers: { ...bearer(token), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          templateId: 'custom',
+          seriesId: input.seriesId,
+          prompt: input.prompt,
+        }),
+      }));
+    },
+
     async createInvite(
       token: string,
       input: CarnivalCreateInviteInput,
@@ -302,6 +422,7 @@ export function createCarnivalApi({
           templateId: input.templateId,
           ...(input.seriesId ? { seriesId: input.seriesId } : {}),
           prompt: input.prompt,
+          ...(input.previewToken ? { previewToken: input.previewToken } : {}),
         }),
       });
       if (!isObject(payload)) throw new CarnivalApiError('邀请响应格式错误。', 0, 'CARNIVAL_BAD_RESPONSE');

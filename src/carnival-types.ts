@@ -110,11 +110,74 @@ export interface CarnivalPromptPreview {
   maxLength: number;
 }
 
+export type CarnivalExclusiveInteraction =
+  | { kind: 'card-grid'; variant: 'tiles' | 'tickets' }
+  | { kind: 'swipe-deck'; variant: 'split' | 'stack' }
+  | { kind: 'mood-dial'; variant: 'compass' | 'meter' }
+  | { kind: 'orbit-pick'; variant: 'constellation' | 'bubbles' };
+
+export type CarnivalExclusivePresentationTone = 'coral' | 'violet' | 'mint' | 'gold' | 'blue';
+export type CarnivalExclusivePresentationScene = 'court' | 'archive' | 'cinema' | 'lab' | 'cosmos';
+export type CarnivalExclusivePresentationMotion = 'pop' | 'float' | 'slide' | 'orbit' | 'pulse';
+export type CarnivalExclusiveRevealEffect = 'confetti' | 'ripple' | 'spotlight' | 'stars' | 'cards';
+
+export interface CarnivalExclusiveQuestionDefinition {
+  id: string;
+  label: string;
+  source: string;
+  prompt: string;
+  options: string[];
+  /** v2 invitations omit this; renderers must fall back to card-grid/tiles. */
+  interaction?: CarnivalExclusiveInteraction;
+  matchedFollowUp?: string;
+  differentFollowUp?: string;
+}
+
+export interface CarnivalExclusiveGeneratedQuestionDefinition extends CarnivalExclusiveQuestionDefinition {
+  interaction: CarnivalExclusiveInteraction;
+}
+
+export interface CarnivalExclusiveGameDefinition {
+  schemaVersion: 3;
+  templateId: 'custom';
+  seriesId: CarnivalExclusiveSeriesId;
+  engine: 'exclusive-choice-v1';
+  generatedBy: 'ai' | 'fallback';
+  title: string;
+  description: string;
+  presentation: {
+    tone: CarnivalExclusivePresentationTone;
+    scene: CarnivalExclusivePresentationScene;
+    motion: CarnivalExclusivePresentationMotion;
+    revealEffect: CarnivalExclusiveRevealEffect;
+  };
+  ending: {
+    headline: string;
+    summary: string;
+    chatPrompt: string;
+  };
+  questions: CarnivalExclusiveGeneratedQuestionDefinition[];
+}
+
+export interface CarnivalGamePreviewInput {
+  templateId: 'custom';
+  seriesId: CarnivalExclusiveSeriesId;
+  prompt: string;
+}
+
+export interface CarnivalGamePreview {
+  previewToken: string;
+  expiresAt: string;
+  game: CarnivalExclusiveGameDefinition;
+}
+
 export interface CarnivalCreateInviteInput {
   templateId: string;
   /** Required when templateId is custom. */
   seriesId?: CarnivalExclusiveSeriesId;
   prompt: string;
+  /** Binds the invitation to the exact generated preview the creator played. */
+  previewToken?: string;
   /** Sent as an Idempotency-Key header, not included in the JSON body. */
   idempotencyKey: string;
 }
@@ -145,6 +208,11 @@ export interface CarnivalApi {
     signal?: AbortSignal,
     seriesId?: CarnivalExclusiveSeriesId,
   ): Promise<CarnivalPromptPreview>;
+  createGamePreview(
+    token: string,
+    input: CarnivalGamePreviewInput,
+    signal?: AbortSignal,
+  ): Promise<CarnivalGamePreview>;
   createInvite(
     token: string,
     input: CarnivalCreateInviteInput,

@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { compactMatchForAi, createAiGameService, isGeneratedGamePayload } from './ai-game.mjs';
+import {
+  compactMatchForAi,
+  createAiGameService,
+  isGeneratedGamePayload,
+  isGeneratedPromptGamePayload,
+} from './ai-game.mjs';
 import {
   buildPromptPreview,
   isTemplateShapeValid,
@@ -51,6 +56,31 @@ const validPayload = {
   })),
 };
 
+const validPromptPayload = {
+  ...validPayload,
+  estimatedMinutes: 4,
+  presentation: {
+    tone: 'violet',
+    scene: 'archive',
+    motion: 'slide',
+    revealEffect: 'cards',
+  },
+  questions: validPayload.questions.map((question, index) => ({
+    ...question,
+    options: index === 1 ? question.options.slice(0, 2) : question.options,
+    interaction: index === 0
+      ? { kind: 'card-grid', variant: 'tickets' }
+      : index === 1
+        ? { kind: 'swipe-deck', variant: 'stack' }
+        : { kind: 'orbit-pick', variant: 'constellation' },
+  })),
+  ending: {
+    headline: '收下三条聊天线索',
+    summary: '同频与不同答案都会成为下一段聊天的入口，这局没有输赢。',
+    chatPrompt: '刚才哪一关的答案最让你意外，为什么？',
+  },
+};
+
 test('validates output and keeps renamed labels on the stable profile-riddle mechanics', async () => {
   let requestBody;
   const fetchImpl = async (_url, init) => {
@@ -86,7 +116,7 @@ test('custom AI generation pins series id, guidance, shape, mechanics, and cache
   let requestBody;
   const fetchImpl = async (_url, init) => {
     requestBody = JSON.parse(init.body);
-    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(validPayload) } }] }), {
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(validPromptPayload) } }] }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
@@ -104,17 +134,26 @@ test('custom AI generation pins series id, guidance, shape, mechanics, and cache
   const serializedMessages = JSON.stringify(requestBody.messages);
   assert.match(serializedMessages, /chat-archaeology/);
   assert.match(serializedMessages, /exclusive_game_chat_archaeology_v1/);
+  assert.equal(requestBody.response_format.json_schema.schema.properties.presentation.additionalProperties, false);
   assert.equal(game.templateId, 'custom');
   assert.equal(game.seriesId, 'chat-archaeology');
+  assert.equal(game.schemaVersion, 3);
+  assert.equal(game.engine, 'exclusive-choice-v1');
+  assert.equal(game.presentation.scene, 'archive');
+  assert.equal(game.questions[1].interaction.kind, 'swipe-deck');
   assert.equal(game.mechanics.kind, 'exclusive-series');
+  assert.equal(game.mechanics.engine, 'exclusive-choice-v1');
   assert.equal(game.mechanics.templateKey, 'exclusive_game_chat_archaeology_v1');
-  assert.equal(isTemplateShapeValid(validPayload, 'custom', 'chat-archaeology'), true);
+  assert.equal(isGeneratedPromptGamePayload(validPromptPayload), true);
+  assert.equal(isTemplateShapeValid(validPromptPayload, 'custom', 'chat-archaeology'), true);
   assert.equal(isTemplateShapeValid({
-    ...validPayload,
-    questions: validPayload.questions.map((question) => ({ ...question, options: question.options.slice(0, 2) })),
+    ...validPromptPayload,
+    questions: validPromptPayload.questions.map((question, index) => index === 0
+      ? { ...question, interaction: { kind: 'swipe-deck', variant: 'stack' } }
+      : question),
   }, 'custom', 'chat-archaeology'), false);
   assert.throws(
-    () => isTemplateShapeValid(validPayload, 'custom', 'missing'),
+    () => isTemplateShapeValid(validPromptPayload, 'custom', 'missing'),
     /Unsupported exclusive game series/,
   );
   const firstKey = service.cacheKey(customConfig, match, { templateId: 'custom', seriesId: 'courtside' });

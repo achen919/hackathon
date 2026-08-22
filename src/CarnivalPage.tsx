@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 import {
+  CarnivalApiError,
   carnivalErrorMessage,
   defaultCarnivalApi,
   isAbortError,
@@ -28,6 +29,7 @@ import type {
   CarnivalGameActionResponse,
   CarnivalGameType,
   CarnivalGender,
+  CarnivalGamePreview,
   CarnivalInvite,
   CarnivalNetworkGameContext,
   CarnivalPageProps,
@@ -36,6 +38,7 @@ import type {
   CarnivalTextMessage,
 } from './carnival-types';
 import { CarnivalGameBridge } from './components/CarnivalGameBridge';
+import { CarnivalExclusiveChoiceRenderer } from './components/CarnivalExclusiveGameDialog';
 import './carnival.css';
 
 const DEFAULT_STORAGE_KEY = 'liangpei:carnival:token';
@@ -64,11 +67,27 @@ const DEFAULT_GAME_TYPES: CarnivalGameType[] = [
   {
     templateId: 'custom',
     label: '专属小游戏',
-    description: '从聊天中挑选最适合你们的五种三轮双人玩法。',
+    description: '用 AI 游戏工坊现场生成，或从五个三轮双人系列中挑一局。',
     enabled: true,
     available: true,
   },
 ];
+
+const PROMPT_GAME_STAGES = [
+  ['理解你们', '整理公开聊天与这次 Prompt'],
+  ['选择玩法', '匹配最适合的互动引擎'],
+  ['搭建场景', '生成视觉、题面与动效'],
+  ['试玩检查', '锁定可邀请的同一版本'],
+] as const;
+
+const REGENERABLE_PREVIEW_ERROR_CODES = new Set([
+  'INVALID_GAME_PREVIEW',
+  'GAME_PREVIEW_EXPIRED',
+  'GAME_PREVIEW_FORBIDDEN',
+  'GAME_PREVIEW_MISMATCH',
+  'GAME_PREVIEW_STALE',
+  'GAME_PREVIEW_ALREADY_USED',
+]);
 
 type TimelineEntry =
   | { kind: 'message'; id: string; createdAt: string; message: CarnivalTextMessage }
@@ -109,6 +128,62 @@ function safeRemoveToken(storageKey: string) {
 function requestId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
   return `invite-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function waitForVisibleBuildStages(startedAt: number, signal: AbortSignal) {
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return Promise.resolve();
+  const remaining = Math.max(0, 2_600 - (Date.now() - startedAt));
+  if (remaining === 0 || signal.aborted) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const finish = () => {
+      window.clearTimeout(timer);
+      signal.removeEventListener('abort', finish);
+      resolve();
+    };
+    const timer = window.setTimeout(finish, remaining);
+    signal.addEventListener('abort', finish, { once: true });
+  });
+}
+
+function gamePreviewContextFingerprint(room: {
+  roomId: string;
+  messages: CarnivalTextMessage[];
+} | undefined) {
+  if (!room) return '';
+  return JSON.stringify([
+    room.roomId,
+    room.messages.map((message) => [
+      message.messageId,
+      message.senderId,
+      message.content,
+      message.createdAt,
+    ]),
+  ]);
+}
+
+function regenerablePreviewErrorMessage(error: CarnivalApiError) {
+  if (error.code === 'GAME_PREVIEW_STALE') return '聊天刚有新内容，旧预览已失效。请按最新聊天重新生成后再邀请。';
+  if (error.code === 'GAME_PREVIEW_EXPIRED') return '这份可玩预览已过期，请重新生成一个邀请版本。';
+  if (error.code === 'GAME_PREVIEW_ALREADY_USED') return '这个预览版本已经发过邀请，请重新生成一个新版本。';
+  if (error.code === 'GAME_PREVIEW_MISMATCH') return 'Prompt 或玩法已变化，请重新生成与当前内容一致的预览。';
+  return '这个预览版本已经不可用，请重新生成后再发邀请。';
+}
+
+function moveRadioGroupChoice(event: KeyboardEvent<HTMLButtonElement>) {
+  if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+  const group = event.currentTarget.parentElement;
+  if (!group) return;
+  const options = Array.from(group.querySelectorAll<HTMLButtonElement>('[role="radio"]:not(:disabled)'));
+  const current = options.indexOf(event.currentTarget);
+  if (current < 0 || options.length === 0) return;
+  event.preventDefault();
+  const next = event.key === 'Home'
+    ? 0
+    : event.key === 'End'
+      ? options.length - 1
+      : (current + (event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1) + options.length) % options.length;
+  options[next]?.focus();
+  options[next]?.click();
 }
 
 function formatClock(value: string) {
@@ -251,6 +326,120 @@ function ModalShell({
   );
 }
 
+function PromptGamePreviewCard({
+  preview,
+  expired,
+}: {
+  preview: CarnivalGamePreview;
+  expired: boolean;
+}) {
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const [roundIndex, setRoundIndex] = useState(0);
+  const [choices, setChoices] = useState<Array<number | null>>(() => preview.game.questions.map(() => null));
+  const completed = roundIndex >= preview.game.questions.length;
+  const question = preview.game.questions[Math.min(roundIndex, preview.game.questions.length - 1)];
+  const choice = choices[roundIndex] ?? null;
+  const visual = preview.game.presentation;
+  useEffect(() => {
+    titleRef.current?.focus();
+  }, [completed, preview.previewToken]);
+  const interactionLabel = question.interaction?.kind === 'swipe-deck'
+    ? '滑动牌组'
+    : question.interaction?.kind === 'mood-dial'
+      ? '情绪转盘'
+      : question.interaction?.kind === 'orbit-pick'
+        ? '星轨选择'
+        : '互动卡片';
+  const hasUnplayedOtherRound = choices.some((item, index) => index !== roundIndex && item === null);
+  const choose = (value: number) => {
+    setChoices((current) => current.map((item, index) => index === roundIndex ? value : item));
+  };
+  const advance = () => {
+    const nextUnplayed = choices.findIndex((item, index) => index > roundIndex && item === null);
+    if (nextUnplayed >= 0) {
+      setRoundIndex(nextUnplayed);
+      return;
+    }
+    const firstUnplayed = choices.findIndex((item) => item === null);
+    setRoundIndex(firstUnplayed >= 0 ? firstUnplayed : preview.game.questions.length);
+  };
+  const restart = () => {
+    setChoices(preview.game.questions.map(() => null));
+    setRoundIndex(0);
+  };
+  return (
+    <section
+      className={`carnival-prompt-game-preview is-${visual.tone} scene-${visual.scene} motion-${visual.motion} ${expired ? 'is-expired' : ''}`}
+      aria-labelledby="carnival-prompt-game-preview-title"
+      aria-disabled={expired}
+    >
+      <header>
+        <div><span><i aria-hidden="true" /> LIVE PREVIEW</span><small>本地试玩 · 不会提交答案</small></div>
+        <div className="carnival-prompt-game-preview__badges">
+          <b>{preview.game.generatedBy === 'ai' ? 'AI 生成' : '安全离线生成'}</b>
+          <b>{completed ? '试玩结尾' : interactionLabel}</b>
+        </div>
+      </header>
+      <div className="carnival-prompt-game-preview__scene" aria-hidden="true"><i /><i /><i /></div>
+      <nav className="carnival-prompt-game-preview__rounds" aria-label="切换试玩回合">
+        {preview.game.questions.map((item, index) => (
+          <button
+            key={item.id}
+            type="button"
+            aria-current={!completed && roundIndex === index ? 'step' : undefined}
+            className={!completed && roundIndex === index ? 'is-current' : choices[index] !== null ? 'is-played' : ''}
+            disabled={expired}
+            onClick={() => setRoundIndex(index)}
+          >
+            <i aria-hidden="true">{choices[index] !== null ? '✓' : index + 1}</i>{item.label}
+          </button>
+        ))}
+      </nav>
+      {completed ? (
+        <div className={`carnival-prompt-game-preview__ending effect-${visual.revealEffect}`} aria-live="polite">
+          <span aria-hidden="true">✦</span>
+          <p>三轮本地试玩完成</p>
+          <h3 ref={titleRef} id="carnival-prompt-game-preview-title" tabIndex={-1}>{preview.game.ending.headline}</h3>
+          <strong>{preview.game.ending.summary}</strong>
+          <ol>
+            {preview.game.questions.map((item, index) => {
+              const selectedIndex = choices[index];
+              return <li key={item.id}><i>{index + 1}</i>{selectedIndex === null ? '未试玩' : item.options[selectedIndex]}</li>;
+            })}
+          </ol>
+          <button type="button" disabled={expired} onClick={restart}>从头再试玩</button>
+        </div>
+      ) : (
+        <>
+          <div className="carnival-prompt-game-preview__copy">
+            <p>{question.label} · 第 {roundIndex + 1}/3 轮试玩</p>
+            <h3 ref={titleRef} id="carnival-prompt-game-preview-title" tabIndex={-1}>{preview.game.title}</h3>
+            <span>{question.prompt}</span>
+          </div>
+          <CarnivalExclusiveChoiceRenderer
+            question={question}
+            choice={choice}
+            onChange={choose}
+            disabled={expired}
+            ariaLabel={`试玩第 ${roundIndex + 1} 轮，选择一个答案`}
+            preview
+          />
+          <div className="carnival-prompt-game-preview__actions">
+            <button type="button" disabled={expired || roundIndex === 0} onClick={() => setRoundIndex((current) => Math.max(0, current - 1))}>上一轮</button>
+            <button type="button" disabled={expired || choice === null} onClick={advance}>
+              {roundIndex === 2 ? hasUnplayedOtherRound ? '补完其他回合' : '完成三轮试玩' : '下一轮'}
+            </button>
+          </div>
+        </>
+      )}
+      <footer aria-live="polite">
+        <span>{completed ? `聊聊看：${preview.game.ending.chatPrompt}` : choice === null ? '点一个选项试试手感' : `已试玩：${question.options[choice] ?? '已选择'}（未提交）`}</span>
+        <small>{expired ? '这个邀请版本已过期，请重新生成' : `邀请版本保留至 ${formatClock(preview.expiresAt)}`}</small>
+      </footer>
+    </section>
+  );
+}
+
 export default function CarnivalPage({
   api = defaultCarnivalApi,
   pollIntervalMs = 1_000,
@@ -290,6 +479,14 @@ export default function CarnivalPage({
   const [promptError, setPromptError] = useState<string | null>(null);
   const promptVersionRef = useRef(0);
   const promptControllerRef = useRef<AbortController | null>(null);
+  const [gamePreview, setGamePreview] = useState<CarnivalGamePreview | null>(null);
+  const [gamePreviewStatus, setGamePreviewStatus] = useState<'idle' | 'generating' | 'ready' | 'error'>('idle');
+  const [gamePreviewError, setGamePreviewError] = useState<string | null>(null);
+  const [gamePreviewStage, setGamePreviewStage] = useState(0);
+  const gamePreviewVersionRef = useRef(0);
+  const gamePreviewControllerRef = useRef<AbortController | null>(null);
+  const gamePreviewContextRef = useRef<string | null>(null);
+  const latestRoomContextRef = useRef('');
 
   const [inviteSending, setInviteSending] = useState(false);
   const inviteSendingRef = useRef(false);
@@ -312,6 +509,17 @@ export default function CarnivalPage({
     controllersRef.current.delete(controller);
   }, []);
 
+  const invalidateGamePreview = useCallback(() => {
+    gamePreviewVersionRef.current += 1;
+    gamePreviewControllerRef.current?.abort();
+    gamePreviewControllerRef.current = null;
+    gamePreviewContextRef.current = null;
+    setGamePreview(null);
+    setGamePreviewStatus('idle');
+    setGamePreviewError(null);
+    setGamePreviewStage(0);
+  }, []);
+
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -319,8 +527,18 @@ export default function CarnivalPage({
       controllersRef.current.forEach((controller) => controller.abort());
       controllersRef.current.clear();
       promptControllerRef.current?.abort();
+      gamePreviewControllerRef.current?.abort();
     };
   }, []);
+
+  useEffect(() => {
+    if (gamePreviewStatus !== 'generating') return undefined;
+    setGamePreviewStage(0);
+    const timer = window.setInterval(() => {
+      setGamePreviewStage((current) => Math.min(PROMPT_GAME_STAGES.length - 1, current + 1));
+    }, 650);
+    return () => window.clearInterval(timer);
+  }, [gamePreviewStatus]);
 
   const applyState = useCallback((nextState: CarnivalState) => {
     if (!mountedRef.current) return;
@@ -337,6 +555,7 @@ export default function CarnivalPage({
     promptControllerRef.current?.abort();
     promptControllerRef.current = null;
     promptVersionRef.current += 1;
+    invalidateGamePreview();
     safeRemoveToken(storageKey);
     stateRef.current = null;
     setCarnivalState(null);
@@ -361,7 +580,7 @@ export default function CarnivalPage({
     setManualSyncing(false);
     setLeaveError(null);
     setJoinError(notice ?? null);
-  }, [storageKey]);
+  }, [invalidateGamePreview, storageKey]);
 
   const restoreSession = useCallback(async (sessionToken: string) => {
     const controller = makeController();
@@ -428,6 +647,8 @@ export default function CarnivalPage({
   const room = carnivalState?.status === 'matched' ? carnivalState.room : undefined;
   const self = carnivalState?.self;
   const partner = room?.participants.find((participant) => participant.participantId !== self?.participantId);
+  const currentRoomContext = useMemo(() => gamePreviewContextFingerprint(room), [room]);
+  latestRoomContextRef.current = currentRoomContext;
   const gameTypes = useMemo(() => {
     const configured = carnivalState?.gameTypes.filter((option) => option.enabled) ?? [];
     const visible = configured.length > 0 ? configured : DEFAULT_GAME_TYPES;
@@ -435,7 +656,9 @@ export default function CarnivalPage({
       ? {
           ...option,
           available: true,
-          description: option.description || '从聊天中挑选最适合你们的五种三轮双人玩法。',
+          description: !option.description || option.description === '从聊天中挑选最适合你们的五种三轮双人玩法。'
+            ? '用 AI 游戏工坊现场生成，或从五个三轮双人系列中挑一局。'
+            : option.description,
         }
       : option);
   }, [carnivalState?.gameTypes]);
@@ -459,13 +682,30 @@ export default function CarnivalPage({
     [room?.messages],
   );
   const exclusiveSeriesOptions = useMemo(() => {
+    const promptArcade = CARNIVAL_EXCLUSIVE_SERIES.find((series) => series.id === 'prompt-arcade');
     const recommended = CARNIVAL_EXCLUSIVE_SERIES.find(
       (series) => series.id === exclusiveRecommendation.seriesId,
     );
-    return recommended
-      ? [recommended, ...CARNIVAL_EXCLUSIVE_SERIES.filter((series) => series.id !== recommended.id)]
-      : [...CARNIVAL_EXCLUSIVE_SERIES];
+    return [
+      ...(promptArcade ? [promptArcade] : []),
+      ...(recommended && recommended.id !== promptArcade?.id ? [recommended] : []),
+      ...CARNIVAL_EXCLUSIVE_SERIES.filter(
+        (series) => series.id !== promptArcade?.id && series.id !== recommended?.id,
+      ),
+    ];
   }, [exclusiveRecommendation.seriesId]);
+
+  useEffect(() => {
+    const previewContext = gamePreviewContextRef.current;
+    if (
+      !previewContext ||
+      previewContext === currentRoomContext ||
+      (!gamePreview && gamePreviewStatus !== 'generating')
+    ) return;
+    invalidateGamePreview();
+    setGamePreviewStatus('error');
+    setGamePreviewError('聊天刚有新内容，已清除旧预览。请按最新上下文重新生成。');
+  }, [currentRoomContext, gamePreview, gamePreviewStatus, invalidateGamePreview]);
 
   const timeline = useMemo<TimelineEntry[]>(() => {
     if (!room) return [];
@@ -625,6 +865,7 @@ export default function CarnivalPage({
   ) => {
     if (!token) return;
     if (option.templateId === 'custom' && !seriesId) return;
+    invalidateGamePreview();
     promptControllerRef.current?.abort();
     const controller = makeController();
     promptControllerRef.current = controller;
@@ -654,11 +895,12 @@ export default function CarnivalPage({
       releaseController(controller);
       if (promptControllerRef.current === controller) promptControllerRef.current = null;
     }
-  }, [api, clearLocalSession, makeController, releaseController, room?.messages, token]);
+  }, [api, clearLocalSession, invalidateGamePreview, makeController, releaseController, room?.messages, token]);
 
   function selectGameType(option: CarnivalGameType) {
     if (!option.available) return;
     if (option.templateId === 'custom') {
+      invalidateGamePreview();
       promptVersionRef.current += 1;
       promptControllerRef.current?.abort();
       promptControllerRef.current = null;
@@ -685,6 +927,7 @@ export default function CarnivalPage({
     setStudioOpen(true);
     setInviteError(null);
     setSelectedSeriesId(null);
+    invalidateGamePreview();
     void loadPrompt(firstAvailable);
   }
 
@@ -692,7 +935,77 @@ export default function CarnivalPage({
     promptVersionRef.current += 1;
     promptControllerRef.current?.abort();
     promptControllerRef.current = null;
+    invalidateGamePreview();
     setStudioOpen(false);
+  }
+
+  async function generateGamePreview() {
+    if (
+      !token ||
+      !selectedGameType?.available ||
+      selectedGameType.templateId !== 'custom' ||
+      !selectedSeriesId ||
+      prompt.trim().length < 20 ||
+      gamePreviewStatus === 'generating'
+    ) return;
+    const contextAtStart = currentRoomContext;
+    invalidateGamePreview();
+    gamePreviewContextRef.current = contextAtStart;
+    const controller = makeController();
+    gamePreviewControllerRef.current = controller;
+    const version = gamePreviewVersionRef.current;
+    setGamePreviewStatus('generating');
+    setGamePreviewError(null);
+    const startedAt = Date.now();
+    try {
+      const nextPreview = await api.createGamePreview(token, {
+        templateId: 'custom',
+        seriesId: selectedSeriesId,
+        prompt: prompt.trim(),
+      }, controller.signal);
+      await waitForVisibleBuildStages(startedAt, controller.signal);
+      if (controller.signal.aborted || version !== gamePreviewVersionRef.current || !mountedRef.current) return;
+      if (nextPreview.game.seriesId !== selectedSeriesId) {
+        gamePreviewContextRef.current = null;
+        setGamePreviewStatus('error');
+        setGamePreviewError('生成结果与所选系列不一致，请重新生成。');
+        return;
+      }
+      if (contextAtStart !== latestRoomContextRef.current) {
+        invalidateGamePreview();
+        setGamePreviewStatus('error');
+        setGamePreviewError('生成期间聊天有了新内容，请按最新上下文重新生成。');
+        return;
+      }
+      setGamePreview(nextPreview);
+      setGamePreviewStage(PROMPT_GAME_STAGES.length);
+      setGamePreviewStatus('ready');
+    } catch (error) {
+      if (controller.signal.aborted || isAbortError(error) || version !== gamePreviewVersionRef.current || !mountedRef.current) return;
+      if (error instanceof CarnivalApiError && REGENERABLE_PREVIEW_ERROR_CODES.has(error.code)) {
+        gamePreviewContextRef.current = null;
+        setGamePreviewStatus('error');
+        setGamePreviewError(regenerablePreviewErrorMessage(error));
+        return;
+      }
+      if (isCarnivalUnauthorized(error)) {
+        clearLocalSession('登录状态已失效，请重新加入游园会。');
+        return;
+      }
+      gamePreviewContextRef.current = null;
+      setGamePreviewStatus('error');
+      setGamePreviewError(carnivalErrorMessage(error));
+    } finally {
+      releaseController(controller);
+      if (gamePreviewControllerRef.current === controller) gamePreviewControllerRef.current = null;
+    }
+  }
+
+  function editPrompt(value: string) {
+    invalidateGamePreview();
+    setPrompt(value);
+    setPromptStatus('editing');
+    setPromptError(null);
   }
 
   const submitInvite = useCallback(async (draftInvite: PendingInviteDraft) => {
@@ -711,27 +1024,45 @@ export default function CarnivalPage({
       }
     } catch (error) {
       if (!controller.signal.aborted && !isAbortError(error) && mountedRef.current) {
-        if (isCarnivalUnauthorized(error)) clearLocalSession('登录状态已失效，请重新加入游园会。');
-        else setInviteError(carnivalErrorMessage(error));
+        if (error instanceof CarnivalApiError && REGENERABLE_PREVIEW_ERROR_CODES.has(error.code)) {
+          const message = regenerablePreviewErrorMessage(error);
+          invalidateGamePreview();
+          setPendingInvite(null);
+          setInviteError(null);
+          setGamePreviewStatus('error');
+          setGamePreviewError(message);
+          setStudioOpen(true);
+        } else if (isCarnivalUnauthorized(error)) {
+          clearLocalSession('登录状态已失效，请重新加入游园会。');
+        } else {
+          setInviteError(carnivalErrorMessage(error));
+        }
       }
     } finally {
       releaseController(controller);
       inviteSendingRef.current = false;
       if (mountedRef.current) setInviteSending(false);
     }
-  }, [api, applyState, clearLocalSession, makeController, releaseController, token]);
+  }, [api, applyState, clearLocalSession, invalidateGamePreview, makeController, releaseController, token]);
 
   function createInvite() {
+    const customPreview = selectedGameType?.templateId === 'custom' && gamePreview &&
+      gamePreview.game.seriesId === selectedSeriesId &&
+      gamePreviewContextRef.current === currentRoomContext &&
+      Date.parse(gamePreview.expiresAt) > Date.now()
+      ? gamePreview
+      : null;
     if (
       !selectedGameType ||
       !selectedGameType.available ||
       prompt.trim().length < 20 ||
-      (selectedGameType.templateId === 'custom' && !selectedSeriesId)
+      (selectedGameType.templateId === 'custom' && (!selectedSeriesId || !customPreview))
     ) return;
     void submitInvite({
       templateId: selectedGameType.templateId,
       ...(selectedSeriesId ? { seriesId: selectedSeriesId } : {}),
       prompt: prompt.trim(),
+      ...(customPreview ? { previewToken: customPreview.previewToken } : {}),
       idempotencyKey: requestId(),
       label: exclusiveSeriesById(selectedSeriesId)?.shortTitle ?? selectedGameType.label,
     });
@@ -793,6 +1124,15 @@ export default function CarnivalPage({
   const activeInvite = room?.invites.find((invitation) => invitation.inviteId === activeInviteId) ?? null;
   const activeGameContext = activeInvite ? makeGameContext(activeInvite) : null;
   const modalOpen = studioOpen || Boolean(activeGameContext);
+  const gamePreviewExpired = Boolean(gamePreview && (
+    !Number.isFinite(Date.parse(gamePreview.expiresAt)) || Date.parse(gamePreview.expiresAt) <= Date.now()
+  ));
+  const hasCurrentGamePreview = Boolean(
+    gamePreview &&
+    !gamePreviewExpired &&
+    gamePreview.game.seriesId === selectedSeriesId &&
+    gamePreviewContextRef.current === currentRoomContext,
+  );
 
   if (restoring) {
     return (
@@ -1099,8 +1439,10 @@ export default function CarnivalPage({
                   type="button"
                   role="radio"
                   aria-checked={selectedSeriesId === series.id}
+                  tabIndex={selectedSeriesId === series.id || (!selectedSeriesId && series === exclusiveSeriesOptions[0]) ? 0 : -1}
                   className={`is-${series.tone} ${selectedSeriesId === series.id ? 'is-selected' : ''}`}
                   onClick={() => selectExclusiveSeries(series.id)}
+                  onKeyDown={moveRadioGroupChoice}
                 >
                   <span className="carnival-exclusive-series__icon" aria-hidden="true">{series.icon}</span>
                   <span className="carnival-exclusive-series__copy">
@@ -1117,7 +1459,7 @@ export default function CarnivalPage({
         )}
 
         <label className="carnival-prompt-field">
-          <span>{selectedSeries ? `「${selectedSeries.shortTitle}」Prompt` : '本局 Prompt'} <em>可以在发出前修改</em></span>
+          <span>{selectedSeries ? `「${selectedSeries.shortTitle}」Prompt` : '本局 Prompt'} <em>{gamePreview ? '修改后需重新生成预览' : '可以在发出前修改'}</em></span>
           <textarea
             value={prompt}
             maxLength={promptMaxLength}
@@ -1128,7 +1470,7 @@ export default function CarnivalPage({
               : selectedGameType?.templateId === 'custom' && !selectedSeries
                 ? '请先从上方选择一种专属系列'
                 : '写下希望这局更关注什么'}
-            onChange={(event) => { setPrompt(event.target.value); setPromptStatus('editing'); setPromptError(null); }}
+            onChange={(event) => editPrompt(event.target.value)}
             data-autofocus
           />
           <small>{prompt.length}/{promptMaxLength}</small>
@@ -1142,6 +1484,32 @@ export default function CarnivalPage({
             )}
           </div>
         )}
+        {selectedGameType?.templateId === 'custom' && gamePreviewStatus === 'generating' && (
+          <section className="carnival-prompt-game-building" role="status" aria-live="polite" aria-label={`正在${PROMPT_GAME_STAGES[gamePreviewStage]?.[0] ?? '生成游戏'}`}>
+            <header><span aria-hidden="true">✦</span><div><strong>正在把 Prompt 变成可玩的游戏</strong><small>不只是生成题目，还会现做玩法、场景和动效</small></div></header>
+            <ol>
+              {PROMPT_GAME_STAGES.map(([title, detail], index) => (
+                <li key={title} className={index < gamePreviewStage ? 'is-complete' : index === gamePreviewStage ? 'is-current' : ''}>
+                  <i aria-hidden="true">{index < gamePreviewStage ? '✓' : index + 1}</i>
+                  <span><strong>{title}</strong><small>{detail}</small></span>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
+        {selectedGameType?.templateId === 'custom' && gamePreviewError && (
+          <div className="carnival-studio-error" role="alert">
+            <span>{gamePreviewError}</span>
+            <button type="button" onClick={() => void generateGamePreview()}>重试生成预览</button>
+          </div>
+        )}
+        {selectedGameType?.templateId === 'custom' && gamePreview && (
+          <PromptGamePreviewCard
+            key={gamePreview.previewToken}
+            preview={gamePreview}
+            expired={gamePreviewExpired}
+          />
+        )}
         <footer className="carnival-game-studio__actions">
           <button className="carnival-secondary" type="button" onClick={closeStudio}>先不发</button>
           <button
@@ -1149,13 +1517,25 @@ export default function CarnivalPage({
             type="button"
             disabled={
               promptStatus === 'loading' ||
+              gamePreviewStatus === 'generating' ||
               prompt.trim().length < 20 ||
               !selectedGameType?.available ||
               (selectedGameType.templateId === 'custom' && !selectedSeries)
             }
-            onClick={createInvite}
+            onClick={() => {
+              if (selectedGameType?.templateId === 'custom' && !hasCurrentGamePreview) void generateGamePreview();
+              else createInvite();
+            }}
           >
-            生成邀请卡片 <span aria-hidden="true">→</span>
+            {selectedGameType?.templateId === 'custom'
+              ? hasCurrentGamePreview
+                ? '用这个版本发邀请'
+                : gamePreviewStatus === 'generating'
+                  ? `正在${PROMPT_GAME_STAGES[gamePreviewStage]?.[0] ?? '生成'}`
+                  : gamePreviewExpired
+                    ? '重新生成可玩预览'
+                    : '生成可玩预览'
+              : '生成邀请卡片'} <span aria-hidden="true">→</span>
           </button>
         </footer>
       </ModalShell>

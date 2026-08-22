@@ -124,7 +124,7 @@ export function carnivalMatchFromState(state) {
 
 export function buildCarnivalFallbackGame(match, templateId, label, selection = {}) {
   if (templateId === 'custom') {
-    return buildExclusiveFallbackGame(match, selection.seriesId, label || '专属小游戏');
+    return buildExclusiveFallbackGame(match, selection.seriesId, label || '专属小游戏', selection);
   }
   const topic = publicTopic(match.messages);
   const questions = templateId === 'keyword-wheel'

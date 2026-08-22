@@ -9,13 +9,18 @@ import { createCarnivalHttpHandler } from './carnival-http.mjs';
 import { createCarnivalService } from './carnival-service.mjs';
 import { createMemoryConfigStore } from './config-store.mjs';
 
-async function withCarnival(run, { configStore = createMemoryConfigStore(), aiService } = {}) {
+async function withCarnival(run, {
+  configStore = createMemoryConfigStore(),
+  aiService,
+  httpOptions = {},
+} = {}) {
   const temporaryRoot = await mkdtemp(join(tmpdir(), 'carnival-http-test-'));
   const service = createCarnivalService({ stateDir: temporaryRoot });
   const handler = createCarnivalHttpHandler({
     service,
     configStore,
     ...(aiService ? { aiService } : {}),
+    ...httpOptions,
   });
   const server = createServer(async (request, response) => {
     if (!(await handler(request, response))) {
@@ -258,6 +263,7 @@ test('custom HTTP flow preserves series and invite ids while keeping answers pri
     assert.equal(customType.available, true);
     assert.deepEqual(customType.series.map((item) => item.seriesId), [
       'courtside', 'chat-archaeology', 'weekend-studio', 'contrast-lab', 'future-trailer',
+      'prompt-arcade',
     ]);
 
     const invalid = await jsonRequest(baseUrl, '/api/carnival/prompt', {
@@ -305,6 +311,9 @@ test('custom HTTP flow preserves series and invite ids while keeping answers pri
       const answererInvite = answererView.payload.room.invites.find((item) => item.inviteId === inviteId);
       const definition = answererInvite.game.definition;
       const questionId = definition.question.id;
+      const optionCount = definition.question.options.length;
+      const answer = roundIndex % optionCount;
+      const guess = (answer + 1) % optionCount;
       assert.equal(definition.roundIndex, roundIndex);
       assert.equal(definition.protagonistId, 'a');
       assert.equal(definition.self.role, 'answerer');
@@ -316,7 +325,7 @@ test('custom HTTP flow preserves series and invite ids while keeping answers pri
           action: 'exclusive.answer',
           payload: {
             questionId,
-            answer: roundIndex,
+            answer,
             requestId: `http-answer-round-${roundIndex}`,
             expectedRevision: definition.revision,
           },
@@ -330,7 +339,7 @@ test('custom HTTP flow preserves series and invite ids while keeping answers pri
       assert.equal(guesserInvite.game.definition.protagonistId, 'b');
       assert.equal(guesserInvite.game.definition.guesserId, 'a');
       assert.equal(guesserInvite.game.definition.revealedRound, null);
-      assert.equal(JSON.stringify(guesserInvite).includes(`"answer":${roundIndex}`), false);
+      assert.equal(JSON.stringify(guesserInvite).includes(`"answer":${answer}`), false);
 
       const guessed = await jsonRequest(baseUrl, '/api/carnival/games/action', {
         method: 'POST', token: guesser.token,
@@ -339,7 +348,7 @@ test('custom HTTP flow preserves series and invite ids while keeping answers pri
           action: 'exclusive.guess',
           payload: {
             questionId,
-            guess: (roundIndex + 1) % 3,
+            guess,
             requestId: `http-guess-round-${roundIndex}`,
             expectedRevision: guesserInvite.game.definition.revision,
           },
@@ -347,7 +356,7 @@ test('custom HTTP flow preserves series and invite ids while keeping answers pri
       });
       assert.equal(guessed.response.status, 200);
       assert.equal(guessed.payload.invite.game.definition.revealedRound.questionId, questionId);
-      assert.equal(guessed.payload.invite.game.definition.revealedRound.answer, roundIndex);
+      assert.equal(guessed.payload.invite.game.definition.revealedRound.answer, answer);
 
       const next = await jsonRequest(baseUrl, '/api/carnival/games/action', {
         method: 'POST', token: answerer.token,
@@ -448,6 +457,268 @@ test('custom invitation idempotency rejects changed series or prompt without ano
     assert.equal(state.payload.room.invites.length, 1);
     assert.equal(state.payload.room.invites[0].inviteId, first.payload.invite.inviteId);
   }, { configStore, aiService });
+});
+
+test('prompt-game preview is reused byte-for-byte without a second AI call and keeps answers private', async () => {
+  let aiCalls = 0;
+  const configStore = createMemoryConfigStore({ apiKey: 'test-only-provider-key' });
+  const aiService = {
+    async generate(_config, match, selection) {
+      aiCalls += 1;
+      return buildCarnivalFallbackGame(match, selection.templateId, selection.gameLabel, {
+        // A schema-valid provider result for another series must not escape in
+        // the preview; the HTTP layer should replace it with the safe local game.
+        seriesId: 'future-trailer',
+        prompt: selection.prompt,
+      });
+    },
+  };
+  await withCarnival(async (baseUrl) => {
+    const users = await pairedUsers(baseUrl);
+    await unlock(baseUrl, users);
+    const prompt = '请做一局宇宙轨道主题的双人选择游戏，用星球围绕的方式让我们猜彼此会怎么选。';
+    const preview = await jsonRequest(baseUrl, '/api/carnival/game-preview', {
+      method: 'POST',
+      token: users.a.token,
+      body: { templateId: 'custom', seriesId: 'prompt-arcade', prompt },
+    });
+    assert.equal(preview.response.status, 201);
+    assert.match(preview.payload.previewToken, /^[A-Za-z0-9_-]{20,120}$/);
+    assert.equal(Date.parse(preview.payload.expiresAt) > Date.now(), true);
+    assert.equal(preview.payload.game.schemaVersion, 3);
+    assert.equal(preview.payload.game.engine, 'exclusive-choice-v1');
+    assert.equal(preview.payload.game.presentation.scene, 'cosmos');
+    assert.equal(preview.payload.game.questions[0].interaction.kind, 'orbit-pick');
+    assert.equal(preview.payload.game.seriesId, 'prompt-arcade');
+    assert.equal(preview.payload.game.mechanics.seriesId, 'prompt-arcade');
+    assert.equal(preview.payload.game.mechanics.templateKey, 'exclusive_game_prompt_arcade_v1');
+    assert.equal(aiCalls, 1);
+
+    const inviteRequest = {
+      method: 'POST',
+      token: users.a.token,
+      headers: { 'Idempotency-Key': 'prompt-preview-create-key-001' },
+      body: {
+        templateId: 'custom',
+        seriesId: 'prompt-arcade',
+        prompt,
+        previewToken: preview.payload.previewToken,
+      },
+    };
+    const created = await jsonRequest(baseUrl, '/api/carnival/invites', inviteRequest);
+    const replay = await jsonRequest(baseUrl, '/api/carnival/invites', inviteRequest);
+    assert.equal(created.response.status, 201);
+    assert.equal(replay.response.status, 201);
+    assert.equal(replay.payload.invite.inviteId, created.payload.invite.inviteId);
+    assert.equal(created.payload.invite.game.gameId, preview.payload.game.id);
+    assert.equal(created.payload.invite.game.definition.engine, 'exclusive-choice-v1');
+    assert.deepEqual(created.payload.invite.game.definition.presentation, preview.payload.game.presentation);
+    assert.deepEqual(
+      created.payload.invite.game.definition.questions.map((question) => question.interaction),
+      preview.payload.game.questions.map((question) => question.interaction),
+    );
+    assert.deepEqual(created.payload.invite.game.definition.ending, preview.payload.game.ending);
+    assert.equal(aiCalls, 1);
+
+    const inviteId = created.payload.invite.inviteId;
+    await jsonRequest(baseUrl, '/api/carnival/games/action', {
+      method: 'POST', token: users.b.token, body: { inviteId, action: 'join' },
+    });
+    const creatorState = await jsonRequest(baseUrl, '/api/carnival/state', { token: users.a.token });
+    const creatorInvite = creatorState.payload.room.invites.find((item) => item.inviteId === inviteId);
+    const questionId = creatorInvite.game.definition.question.id;
+    const answered = await jsonRequest(baseUrl, '/api/carnival/games/action', {
+      method: 'POST', token: users.a.token,
+      body: {
+        inviteId,
+        action: 'exclusive.answer',
+        payload: {
+          questionId,
+          answer: 0,
+          requestId: 'prompt-preview-private-answer-01',
+          expectedRevision: creatorInvite.game.definition.revision,
+        },
+      },
+    });
+    assert.equal(answered.response.status, 200);
+    const peerState = await jsonRequest(baseUrl, '/api/carnival/state', { token: users.b.token });
+    const peerInvite = peerState.payload.room.invites.find((item) => item.inviteId === inviteId);
+    assert.equal(peerInvite.game.definition.phase, 'guessing');
+    assert.equal(peerInvite.game.definition.question.interaction.kind, 'orbit-pick');
+    assert.equal(peerInvite.game.definition.revealedRound, null);
+    assert.equal(JSON.stringify(peerInvite).includes('"answer":0'), false);
+  }, { configStore, aiService });
+});
+
+test('rejects a preview when public chat changes while AI generation is in flight', async () => {
+  let releaseGeneration;
+  let markGenerationStarted;
+  const generationStarted = new Promise((resolve) => { markGenerationStarted = resolve; });
+  const generationRelease = new Promise((resolve) => { releaseGeneration = resolve; });
+  const configStore = createMemoryConfigStore({ apiKey: 'test-only-provider-key' });
+  const aiService = {
+    async generate(_config, match, selection) {
+      markGenerationStarted();
+      await generationRelease;
+      return buildCarnivalFallbackGame(match, selection.templateId, selection.gameLabel, {
+        seriesId: selection.seriesId,
+        prompt: selection.prompt,
+      });
+    },
+  };
+  await withCarnival(async (baseUrl) => {
+    const users = await pairedUsers(baseUrl);
+    await unlock(baseUrl, users);
+    const pendingPreview = jsonRequest(baseUrl, '/api/carnival/game-preview', {
+      method: 'POST', token: users.a.token,
+      body: {
+        templateId: 'custom',
+        seriesId: 'prompt-arcade',
+        prompt: '请生成一局星空轨道主题的双人选择游戏，让双方轻松猜彼此会选择哪一颗星球。',
+      },
+    });
+    await generationStarted;
+    const message = await jsonRequest(baseUrl, '/api/carnival/messages', {
+      method: 'POST', token: users.b.token,
+      body: { content: '生成期间又聊到了一部新电影。' },
+    });
+    assert.equal(message.response.status, 201);
+    releaseGeneration();
+    const preview = await pendingPreview;
+    assert.equal(preview.response.status, 409);
+    assert.equal(preview.payload.code, 'GAME_PREVIEW_STALE');
+  }, { configStore, aiService });
+});
+
+test('prompt-game preview tokens reject forgery, cross-user use, changed input, stale chat, and duplicate sends', async () => {
+  let aiCalls = 0;
+  const configStore = createMemoryConfigStore({ apiKey: 'test-only-provider-key' });
+  const aiService = {
+    async generate(_config, match, selection) {
+      aiCalls += 1;
+      return buildCarnivalFallbackGame(match, selection.templateId, selection.gameLabel, {
+        seriesId: selection.seriesId,
+        prompt: selection.prompt,
+      });
+    },
+  };
+  await withCarnival(async (baseUrl) => {
+    const users = await pairedUsers(baseUrl);
+    await unlock(baseUrl, users);
+    const prompt = '请生成一局电影票根风格的卡牌双人游戏，围绕公开聊天轻松猜猜对方的选择。';
+    const makePreview = (user = users.a, value = prompt) => jsonRequest(baseUrl, '/api/carnival/game-preview', {
+      method: 'POST', token: user.token,
+      body: { templateId: 'custom', seriesId: 'prompt-arcade', prompt: value },
+    });
+    const sendPreview = (user, previewToken, key, overrides = {}) => jsonRequest(baseUrl, '/api/carnival/invites', {
+      method: 'POST', token: user.token,
+      headers: { 'Idempotency-Key': key },
+      body: {
+        templateId: 'custom', seriesId: 'prompt-arcade', prompt, previewToken, ...overrides,
+      },
+    });
+
+    const bound = await makePreview();
+    assert.equal(bound.response.status, 201);
+    const crossUser = await sendPreview(users.b, bound.payload.previewToken, 'preview-cross-user-key-0001');
+    assert.equal(crossUser.response.status, 403);
+    assert.equal(crossUser.payload.code, 'GAME_PREVIEW_FORBIDDEN');
+    const changedPrompt = await sendPreview(
+      users.a,
+      bound.payload.previewToken,
+      'preview-changed-prompt-key-01',
+      { prompt: `${prompt}\n再额外加入一条不同规则。` },
+    );
+    assert.equal(changedPrompt.response.status, 409);
+    assert.equal(changedPrompt.payload.code, 'GAME_PREVIEW_MISMATCH');
+    const changedSeries = await sendPreview(
+      users.a,
+      bound.payload.previewToken,
+      'preview-changed-series-key-01',
+      { seriesId: 'future-trailer' },
+    );
+    assert.equal(changedSeries.response.status, 409);
+    assert.equal(changedSeries.payload.code, 'GAME_PREVIEW_MISMATCH');
+    const forged = await sendPreview(users.a, 'forged_preview_token_1234567890', 'preview-forged-token-key-001');
+    assert.equal(forged.response.status, 410);
+    assert.equal(forged.payload.code, 'GAME_PREVIEW_EXPIRED');
+
+    const stale = await makePreview();
+    await jsonRequest(baseUrl, '/api/carnival/messages', {
+      method: 'POST', token: users.b.token, body: { content: '预览之后新增的一条公开聊天。' },
+    });
+    const staleSend = await sendPreview(users.a, stale.payload.previewToken, 'preview-stale-chat-key-0001');
+    assert.equal(staleSend.response.status, 409);
+    assert.equal(staleSend.payload.code, 'GAME_PREVIEW_STALE');
+
+    const [previewA, alternatePreviewA, previewB] = await Promise.all([
+      makePreview(users.a),
+      makePreview(users.a),
+      makePreview(users.b),
+    ]);
+    const sentA = await sendPreview(users.a, previewA.payload.previewToken, 'preview-parallel-a-key-00001');
+    const replayedA = await sendPreview(users.a, previewA.payload.previewToken, 'preview-parallel-a-key-00001');
+    assert.equal(replayedA.response.status, 201);
+    assert.equal(replayedA.payload.invite.inviteId, sentA.payload.invite.inviteId);
+    const callsBeforeVersionConflict = aiCalls;
+    const changedPreviewSameKey = await sendPreview(
+      users.a,
+      alternatePreviewA.payload.previewToken,
+      'preview-parallel-a-key-00001',
+    );
+    assert.equal(changedPreviewSameKey.response.status, 409);
+    assert.equal(changedPreviewSameKey.payload.code, 'IDEMPOTENCY_CONFLICT');
+    assert.equal(aiCalls, callsBeforeVersionConflict);
+    const afterConflict = await jsonRequest(baseUrl, '/api/carnival/state', { token: users.a.token });
+    assert.equal(afterConflict.payload.room.invites.length, 1);
+
+    const sentB = await sendPreview(users.b, previewB.payload.previewToken, 'preview-parallel-b-key-00001');
+    assert.equal(sentA.response.status, 201);
+    assert.equal(sentB.response.status, 201);
+    assert.notEqual(sentA.payload.invite.inviteId, sentB.payload.invite.inviteId);
+    const reusedWithNewKey = await sendPreview(users.a, previewA.payload.previewToken, 'preview-second-send-key-0001');
+    assert.equal(reusedWithNewKey.response.status, 409);
+    assert.equal(reusedWithNewKey.payload.code, 'GAME_PREVIEW_ALREADY_USED');
+    assert.equal(aiCalls, 5);
+  }, { configStore, aiService });
+});
+
+test('prompt-game preview tokens expire after five minutes', async () => {
+  let timestamp = 1_900_000_000_000;
+  let aiCalls = 0;
+  const configStore = createMemoryConfigStore({ apiKey: 'test-only-provider-key' });
+  const aiService = {
+    async generate(_config, match, selection) {
+      aiCalls += 1;
+      return buildCarnivalFallbackGame(match, selection.templateId, selection.gameLabel, {
+        seriesId: selection.seriesId,
+        prompt: selection.prompt,
+      });
+    },
+  };
+  await withCarnival(async (baseUrl) => {
+    const users = await pairedUsers(baseUrl);
+    await unlock(baseUrl, users);
+    const prompt = '请生成一局星空轨道主题的双人小游戏，让双方用星球卡片猜彼此的轻松偏好。';
+    const preview = await jsonRequest(baseUrl, '/api/carnival/game-preview', {
+      method: 'POST', token: users.a.token,
+      body: { templateId: 'custom', seriesId: 'prompt-arcade', prompt },
+    });
+    assert.equal(preview.response.status, 201);
+    assert.equal(Date.parse(preview.payload.expiresAt), timestamp + 5 * 60_000);
+    timestamp += 5 * 60_000 + 1;
+    const expired = await jsonRequest(baseUrl, '/api/carnival/invites', {
+      method: 'POST', token: users.a.token,
+      headers: { 'Idempotency-Key': 'preview-expired-send-key-001' },
+      body: {
+        templateId: 'custom', seriesId: 'prompt-arcade', prompt,
+        previewToken: preview.payload.previewToken,
+      },
+    });
+    assert.equal(expired.response.status, 410);
+    assert.equal(expired.payload.code, 'GAME_PREVIEW_EXPIRED');
+    assert.equal(aiCalls, 1);
+  }, { configStore, aiService, httpOptions: { now: () => timestamp } });
 });
 
 test('carnival mutations reject cross-origin requests and invalid bearer tokens', async () => {

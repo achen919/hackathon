@@ -3,6 +3,11 @@ import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promi
 import { join } from 'node:path';
 import { hasUnsafeContactOrLink, hasUnsafeGameText } from './game-templates.mjs';
 import { exclusiveSeriesForId, requireExclusiveSeries } from './exclusive-series.mjs';
+import {
+  PROMPT_GAME_ENGINE,
+  PROMPT_GAME_SCHEMA_VERSION,
+  assertPromptGameDefinition,
+} from './prompt-game.mjs';
 
 export const CARNIVAL_TEMPLATE_IDS = Object.freeze([
   'profile-riddle',
@@ -142,8 +147,21 @@ function hashToken(token) {
   return createHash('sha256').update(token).digest('base64url');
 }
 
-function inviteRequestFingerprint(templateId, seriesId, prompt) {
-  return hashToken(JSON.stringify([templateId, seriesId ?? null, prompt]));
+function normalizePreviewVersionHash(value) {
+  if (value === undefined || value === null) return null;
+  const normalized = normalizeString(value, 'previewVersionHash', { min: 43, max: 43 });
+  if (!/^[A-Za-z0-9_-]{43}$/.test(normalized)) {
+    fail('INVALID_INPUT', 'previewVersionHash must be a SHA-256 base64url digest', 400);
+  }
+  return normalized;
+}
+
+function inviteRequestFingerprint(templateId, seriesId, prompt, previewVersionHash = null) {
+  const fields = [templateId, seriesId ?? null, prompt];
+  // Preserve the historical three-field digest for invitations made without a
+  // preview, while binding preview-backed requests to a one-way token digest.
+  if (previewVersionHash) fields.push(previewVersionHash);
+  return hashToken(JSON.stringify(fields));
 }
 
 function exclusiveActionRequestFingerprint(input) {
@@ -324,6 +342,28 @@ function validateCarnivalGameDefinition(templateId, seriesId, value, limits) {
       game.mechanics?.templateKey !== series.templateKey
     ) {
       fail('INVALID_GAME', 'exclusive-series mechanics do not match the selected series', 400);
+    }
+    const promptGameCandidate = game.schemaVersion === PROMPT_GAME_SCHEMA_VERSION ||
+      game.engine !== undefined ||
+      game.presentation !== undefined ||
+      game.ending !== undefined ||
+      game.mechanics?.engine !== undefined ||
+      (Array.isArray(game.questions) && game.questions.some(
+        (question) => isRecord(question) && question.interaction !== undefined,
+      ));
+    if (promptGameCandidate) {
+      if (game.engine !== PROMPT_GAME_ENGINE || game.mechanics?.engine !== PROMPT_GAME_ENGINE) {
+        fail('INVALID_GAME', 'custom prompt game must use exclusive-choice-v1', 400);
+      }
+      try {
+        assertPromptGameDefinition(game, { hasUnsafeText: hasUnsafeGameText });
+      } catch {
+        fail('INVALID_GAME', 'custom prompt game does not match the exclusive-choice-v1 schema', 400);
+      }
+      return game;
+    }
+    if (game.schemaVersion !== 2) {
+      fail('INVALID_GAME', 'legacy custom games must use schema version 2', 400);
     }
     if (!Array.isArray(game.questions) || game.questions.length !== 3) {
       fail('INVALID_GAME', 'exclusive-series must contain exactly three questions', 400);
@@ -949,7 +989,8 @@ export function createCarnivalService(options = {}) {
       ? null
       : normalizeString(input.idempotencyKey, 'idempotencyKey', { min: 20, max: 120 });
     const idempotencyKeyHash = idempotencyKey === null ? null : hashToken(idempotencyKey);
-    const requestFingerprint = inviteRequestFingerprint(templateId, seriesId, prompt);
+    const previewVersionHash = normalizePreviewVersionHash(input?.previewVersionHash);
+    const requestFingerprint = inviteRequestFingerprint(templateId, seriesId, prompt, previewVersionHash);
     return transact((timestamp) => {
       const participant = participantForToken(token);
       const room = activeRoomFor(participant);
@@ -1036,7 +1077,13 @@ export function createCarnivalService(options = {}) {
         const templateId = normalizeTemplateId(input.templateId);
         const seriesId = normalizeSeriesId(templateId, input.seriesId);
         const prompt = normalizeString(input.prompt, 'prompt', { min: 20, max: 1_500 });
-        const requestFingerprint = inviteRequestFingerprint(templateId, seriesId, prompt);
+        const previewVersionHash = normalizePreviewVersionHash(input.previewVersionHash);
+        const requestFingerprint = inviteRequestFingerprint(
+          templateId,
+          seriesId,
+          prompt,
+          previewVersionHash,
+        );
         if (invite.requestFingerprint && invite.requestFingerprint !== requestFingerprint) {
           fail('IDEMPOTENCY_CONFLICT', 'Idempotency key was already used for another invitation', 409);
         }

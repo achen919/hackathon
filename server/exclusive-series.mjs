@@ -1,4 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import {
+  PROMPT_GAME_ENGINE,
+  PROMPT_GAME_SCHEMA_VERSION,
+  applyPromptGamePlan,
+} from './prompt-game.mjs';
 
 export const EXCLUSIVE_SERIES_IDS = Object.freeze([
   'courtside',
@@ -6,6 +11,7 @@ export const EXCLUSIVE_SERIES_IDS = Object.freeze([
   'weekend-studio',
   'contrast-lab',
   'future-trailer',
+  'prompt-arcade',
 ]);
 
 const SERIES = [
@@ -98,6 +104,24 @@ const SERIES = [
     differentEyebrow: '预告片开启双线叙事',
     differentTitle: '下一集有了两个好方向',
     resultUnit: '条下一集线索',
+  },
+  {
+    seriesId: 'prompt-arcade',
+    templateKey: 'exclusive_game_prompt_arcade_v1',
+    title: 'AI 游戏工坊 · 说一句就开局',
+    shortTitle: 'AI 游戏工坊',
+    icon: '◇',
+    tone: 'blue',
+    eyebrow: 'Prompt 现场生成',
+    description: '写下想玩的主题和感觉，AI 会从安全交互组件中组合一局有专属画面与触感的双人游戏。',
+    duration: '3 关 · 约 3 分钟',
+    tags: ['Prompt 生成', '玩法混搭', '双端同步'],
+    generationBrief: '根据可编辑 Prompt 在 card-grid、swipe-deck、mood-dial、orbit-pick 四种安全交互中选择并组合；只能输出声明式 JSON，不得输出或请求执行 HTML、CSS、JavaScript、URL 或自定义事件规则。',
+    matchedEyebrow: '你们触发了同一种反馈',
+    matchedTitle: '这一关默契同步',
+    differentEyebrow: '游戏解锁一条新分支',
+    differentTitle: '两个选择都让剧情继续',
+    resultUnit: '个专属互动关卡',
   },
 ];
 
@@ -238,12 +262,21 @@ function futureTrailer(topics) {
   ];
 }
 
+function promptArcade(topics) {
+  return [
+    question('arcade-opening', '第一关 · 主题入口', source(topics[0]), '如果这局从一个轻松主题开场，TA 最可能先点哪一个？', options(topics.map((topic) => topic.label), ['周末灵感', '日常小事', '最近兴趣', '聊天彩蛋']), '第一关触发了相同入口。这个主题里最想先分享哪件事？', '你们打开了两条支线。为什么这一条更吸引你？'),
+    question('arcade-rhythm', '第二关 · 相处节奏', '把玩法落在可当场解释的日常偏好，不判断人格或关系', 'TA 玩双人小游戏时，更喜欢哪一种节奏？', ['快速凭直觉选择', '慢一点想清楚', '轮流带对方探索', '边玩边聊原因'], '节奏同步了。什么细节会让这种互动更舒服？', '不同节奏也可以组队。怎样组合会让两个人都自在？'),
+    question('arcade-bonus', '第三关 · 彩蛋出口', source(topics[1]), '完成这局后，TA 更想把哪个彩蛋留进聊天？', options(topics.slice(1).map((topic) => `继续聊${topic.label}`), ['交换一个最近发现', '补完一个小故事', '留一道下次问题', '分享今天的小瞬间']), '彩蛋也选到一起了。可以从哪一句自然开始？', '两个彩蛋都值得保留。你想先听 TA 讲哪一个？'),
+  ];
+}
+
 const QUESTION_BUILDERS = {
   courtside,
   'chat-archaeology': archaeology,
   'weekend-studio': weekendStudio,
   'contrast-lab': contrastLab,
   'future-trailer': futureTrailer,
+  'prompt-arcade': promptArcade,
 };
 
 export function buildExclusiveSeriesPrompt(match, seriesId) {
@@ -251,7 +284,10 @@ export function buildExclusiveSeriesPrompt(match, seriesId) {
   const topics = rankExclusiveTopics(match);
   const publicTopicLine = topics.filter((topic) => topic.mentions > 0).map((topic) => topic.label).join('、') || '周末安排、日常节奏';
   const count = textMessages(match).length;
-  return `请生成「${series.title}」专属双人小游戏。\n\n已读取 ${count} 条公开文本聊天；可使用的公开主题：${publicTopicLine}。\n\n系列 ID：${series.seriesId}\n内容模板：${series.generationBrief}\n\n固定生成 3 轮；每轮包含题目、3-4 个互斥短选项、同频追问和差异追问。只使用公开聊天和服务端允许的非敏感信号，不输出匹配度、输赢或人格结论，不替用户表白、承诺、交换联系方式或自动发送消息。`;
+  if (series.seriesId === 'prompt-arcade') {
+    return `做一个以「${publicTopicLine}」为灵感的轻松双人小游戏。画面像夜晚星空游乐场，三轮分别用左右滑卡、情绪刻度和星球轨道来选择；节奏轻快，每轮揭晓后给一句自然、没有压力的聊天问题。当前可参考 ${count} 条公开聊天，只使用双方已经聊过的安全话题。`;
+  }
+  return `请生成「${series.title}」专属双人小游戏。\n\n已读取 ${count} 条公开文本聊天；可使用的公开主题：${publicTopicLine}。\n\n系列 ID：${series.seriesId}\n内容模板：${series.generationBrief}\n\n引擎固定为 ${PROMPT_GAME_ENGINE}，固定生成 3 轮。每轮必须选择 card-grid、swipe-deck、mood-dial、orbit-pick 之一：swipe-deck 恰好 2 个选项，mood-dial / orbit-pick 为 3-4 个选项，card-grid 为 2-4 个选项。还要生成受限 presentation token 与 ending 文案。只输出指定 JSON，绝不输出 HTML、CSS、JavaScript、URL、自定义组件或动作规则。只使用公开聊天和服务端允许的非敏感信号，不输出匹配度、输赢或人格结论，不替用户表白、承诺、交换联系方式或自动发送消息。`;
 }
 
 export function buildExclusiveMechanics(seriesId) {
@@ -260,6 +296,7 @@ export function buildExclusiveMechanics(seriesId) {
     kind: 'exclusive-series',
     seriesId: series.seriesId,
     templateKey: series.templateKey,
+    engine: PROMPT_GAME_ENGINE,
     matchedEyebrow: series.matchedEyebrow,
     matchedTitle: series.matchedTitle,
     differentEyebrow: series.differentEyebrow,
@@ -268,13 +305,16 @@ export function buildExclusiveMechanics(seriesId) {
   };
 }
 
-export function buildExclusiveFallbackGame(match, seriesId, gameLabel = '专属小游戏') {
+export function buildExclusiveFallbackGame(match, seriesId, gameLabel = '专属小游戏', selection = {}) {
   const series = requireExclusiveSeries(seriesId);
   const topics = rankExclusiveTopics(match);
   const observed = topics.filter((topic) => topic.mentions > 0);
   const topicLine = observed.length ? observed.slice(0, 2).map((topic) => `「${topic.label}」`).join('和') : null;
+  const prompt = typeof selection?.prompt === 'string' ? selection.prompt : '';
+  const planned = applyPromptGamePlan(QUESTION_BUILDERS[series.seriesId](topics), prompt, series.seriesId);
   return {
-    schemaVersion: 2,
+    schemaVersion: PROMPT_GAME_SCHEMA_VERSION,
+    engine: PROMPT_GAME_ENGINE,
     id: randomUUID(),
     matchId: match.match_id,
     templateId: 'custom',
@@ -287,8 +327,14 @@ export function buildExclusiveFallbackGame(match, seriesId, gameLabel = '专属�
       ? `从你们公开聊过的${topicLine}开始，三轮都没有标准答案。`
       : '当前明确共同主题不多，因此从通用暖场题开始，不伪造聊天依据。',
     estimatedMinutes: series.seriesId === 'chat-archaeology' ? 4 : 3,
-    topics: observed.length ? observed.slice(0, 3).map((topic) => topic.label) : ['周末安排', '日常节奏', '聊天偏好'],
-    questions: QUESTION_BUILDERS[series.seriesId](topics),
+    topics: topics.slice(0, 3).map((topic) => topic.label),
+    presentation: planned.presentation,
+    questions: planned.questions,
+    ending: {
+      headline: `收下 3 ${series.resultUnit}`,
+      summary: '同频和不同答案都会变成下一段聊天的入口，这局没有输赢，也不评价匹配度。',
+      chatPrompt: planned.questions.at(-1).differentFollowUp,
+    },
     mechanics: buildExclusiveMechanics(series.seriesId),
     generatedBy: 'fallback',
     generatedAt: new Date().toISOString(),

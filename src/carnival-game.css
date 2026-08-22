@@ -737,6 +737,11 @@
 .carnival-exclusive-game.is-mint { --exclusive-accent: #2f8c6c; --exclusive-soft: #eaf8f2; }
 .carnival-exclusive-game.is-gold { --exclusive-accent: #b57c24; --exclusive-soft: #fff5dc; }
 .carnival-exclusive-game.is-blue { --exclusive-accent: #447ec8; --exclusive-soft: #eaf3ff; }
+.carnival-exclusive-game.scene-court .carnival-exclusive-round { background: linear-gradient(180deg, #fff, #fff5ef); }
+.carnival-exclusive-game.scene-archive .carnival-exclusive-round { background: linear-gradient(180deg, #fff, #f8f5ff); }
+.carnival-exclusive-game.scene-cinema .carnival-exclusive-round { background: linear-gradient(180deg, #fff, #eef8f5); }
+.carnival-exclusive-game.scene-lab .carnival-exclusive-round { background: linear-gradient(180deg, #fff, #fff9e9); }
+.carnival-exclusive-game.scene-cosmos .carnival-exclusive-round { background: linear-gradient(180deg, #fff, #f1efff); }
 .carnival-exclusive-game .carnival-game-kicker,
 .carnival-exclusive-game .carnival-game-eyebrow { color: var(--exclusive-accent); }
 .carnival-exclusive-game .carnival-game-primary { background: linear-gradient(135deg, var(--exclusive-accent), color-mix(in srgb, var(--exclusive-accent) 78%, #26222c)); }
@@ -767,6 +772,267 @@
 .carnival-exclusive-options button > span { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 11px; background: var(--exclusive-soft); color: var(--exclusive-accent); font-size: 12px; font-weight: 900; }
 .carnival-exclusive-options button strong { font-size: 13px; line-height: 1.45; }
 .carnival-exclusive-submit { width: 100%; }
+
+.carnival-exclusive-choice {
+  position: relative;
+  width: 100%;
+  isolation: isolate;
+}
+.carnival-exclusive-choice button {
+  border: 1px solid var(--cg-line);
+  background: #fff;
+  color: var(--cg-ink);
+  cursor: pointer;
+}
+.carnival-exclusive-choice button:disabled { cursor: not-allowed; opacity: 0.62; }
+.carnival-exclusive-choice button.is-selected {
+  border-color: color-mix(in srgb, var(--exclusive-accent) 62%, transparent);
+  background: var(--exclusive-soft);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--exclusive-accent) 15%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--exclusive-accent) 14%, transparent);
+}
+.carnival-exclusive-choice--card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.carnival-exclusive-choice--card-grid button {
+  display: grid;
+  min-height: 94px;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 11px;
+  padding: 13px;
+  border-radius: 18px;
+  text-align: left;
+}
+.carnival-exclusive-choice--card-grid button strong { font-size: 13px; line-height: 1.45; }
+.carnival-exclusive-choice__key {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--exclusive-soft);
+  color: var(--exclusive-accent);
+  font-size: 12px;
+  font-weight: 900;
+}
+.carnival-exclusive-choice--card-grid.is-tickets button {
+  position: relative;
+  border-style: dashed;
+  border-radius: 12px 20px 20px 12px;
+  background-image: radial-gradient(circle at 0 50%, var(--cg-paper) 0 7px, transparent 8px);
+}
+.carnival-exclusive-choice--card-grid.is-tickets button::after {
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 49px;
+  border-left: 1px dashed color-mix(in srgb, var(--exclusive-accent) 30%, var(--cg-line));
+  content: '';
+}
+.carnival-exclusive-choice--card-grid.is-tickets button strong { padding-left: 7px; }
+
+.carnival-exclusive-choice--swipe-deck {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 13px;
+  padding: 7px 4px 10px;
+  perspective: 900px;
+  touch-action: pan-y;
+}
+.carnival-exclusive-choice--swipe-deck button {
+  --exclusive-swipe-rotation: -1.5deg;
+  position: relative;
+  display: grid;
+  min-height: 132px;
+  align-content: space-between;
+  gap: 10px;
+  padding: 15px;
+  overflow: hidden;
+  border-radius: 22px;
+  text-align: left;
+  transform: translateX(var(--exclusive-swipe-drag-x, 0)) rotate(var(--exclusive-swipe-rotation));
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+.carnival-exclusive-choice--swipe-deck button:nth-child(even) { --exclusive-swipe-rotation: 1.5deg; }
+.carnival-exclusive-choice--swipe-deck button:hover,
+.carnival-exclusive-choice--swipe-deck button.is-selected { transform: rotate(0) translateY(-4px); }
+.carnival-exclusive-choice--swipe-deck button.is-dragging,
+.carnival-exclusive-choice--swipe-deck button.is-dragging:hover,
+.carnival-exclusive-choice--swipe-deck button.is-dragging.is-selected { transform: translateX(var(--exclusive-swipe-drag-x, 0)) rotate(var(--exclusive-swipe-rotation)) scale(0.985); transition: none; }
+.carnival-exclusive-choice--swipe-deck button::after {
+  position: absolute;
+  width: 92px;
+  height: 92px;
+  right: -30px;
+  bottom: -36px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--exclusive-accent) 11%, transparent);
+  content: '';
+}
+.carnival-exclusive-choice--swipe-deck button strong { position: relative; z-index: 1; font-size: 15px; line-height: 1.4; }
+.carnival-exclusive-choice--swipe-deck button small { color: var(--cg-muted); font-size: 9px; }
+.carnival-exclusive-choice__gesture { color: var(--exclusive-accent); font-size: 24px; font-weight: 900; }
+.carnival-exclusive-choice--swipe-deck.is-stack { grid-template-columns: 1fr; padding-right: 18px; padding-left: 18px; }
+.carnival-exclusive-choice--swipe-deck.is-stack button { min-height: 88px; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; transform: translateX(-5px) rotate(-0.8deg); }
+.carnival-exclusive-choice--swipe-deck.is-stack button:nth-child(even) { transform: translateX(5px) rotate(0.8deg); }
+.carnival-exclusive-choice--swipe-deck.is-stack button:hover,
+.carnival-exclusive-choice--swipe-deck.is-stack button.is-selected { transform: translateY(-2px); }
+.carnival-exclusive-choice--swipe-deck.is-stack button.is-dragging,
+.carnival-exclusive-choice--swipe-deck.is-stack button.is-dragging:hover,
+.carnival-exclusive-choice--swipe-deck.is-stack button.is-dragging.is-selected { transform: translateX(var(--exclusive-swipe-drag-x, 0)) rotate(var(--exclusive-swipe-rotation)) scale(0.985); }
+
+.carnival-exclusive-choice--mood-dial {
+  display: grid;
+  min-height: 290px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: end;
+  gap: 10px;
+  padding: 122px 6px 6px;
+  border-radius: 26px;
+  background: radial-gradient(circle at 50% 38%, var(--exclusive-soft), transparent 42%), #fbfaf9;
+}
+.carnival-exclusive-choice--mood-dial button {
+  display: flex;
+  min-height: 62px;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border-radius: 999px;
+  text-align: left;
+}
+.carnival-exclusive-choice--mood-dial button strong { font-size: 11px; line-height: 1.35; }
+.carnival-exclusive-choice__tick {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--exclusive-soft);
+  color: var(--exclusive-accent);
+  font-size: 10px;
+  font-weight: 900;
+}
+.carnival-exclusive-choice__dial {
+  position: absolute;
+  z-index: -1;
+  top: 22px;
+  left: 50%;
+  display: grid;
+  width: 112px;
+  height: 112px;
+  place-items: center;
+  border: 10px solid color-mix(in srgb, var(--exclusive-accent) 14%, #fff);
+  border-radius: 50%;
+  background: #fff;
+  color: var(--exclusive-accent);
+  box-shadow: 0 13px 35px color-mix(in srgb, var(--exclusive-accent) 13%, transparent);
+  transform: translateX(-50%);
+}
+.carnival-exclusive-choice__dial::before,
+.carnival-exclusive-choice__dial::after { position: absolute; background: color-mix(in srgb, var(--exclusive-accent) 23%, transparent); content: ''; }
+.carnival-exclusive-choice__dial::before { width: 1px; height: 80%; }
+.carnival-exclusive-choice__dial::after { width: 80%; height: 1px; }
+.carnival-exclusive-choice__dial i { width: 3px; height: 34px; border-radius: 99px; background: var(--exclusive-accent); transform: translateY(-8px) rotate(28deg); transform-origin: 50% 100%; }
+.carnival-exclusive-choice__dial b { position: absolute; bottom: 15px; font-size: 8px; }
+.carnival-exclusive-choice--mood-dial.is-meter { min-height: 274px; grid-template-columns: 1fr; padding: 12px 8px 12px 76px; background: linear-gradient(90deg, var(--exclusive-soft), #fbfaf9 34%); }
+.carnival-exclusive-choice--mood-dial.is-meter .carnival-exclusive-choice__dial { top: 50%; left: 35px; width: 34px; height: 220px; border: 0; border-radius: 99px; transform: translate(-50%, -50%); }
+.carnival-exclusive-choice--mood-dial.is-meter .carnival-exclusive-choice__dial::before { width: 7px; height: 78%; border-radius: 99px; background: linear-gradient(var(--exclusive-accent), color-mix(in srgb, var(--exclusive-accent) 12%, #fff)); }
+.carnival-exclusive-choice--mood-dial.is-meter .carnival-exclusive-choice__dial::after,
+.carnival-exclusive-choice--mood-dial.is-meter .carnival-exclusive-choice__dial i { display: none; }
+.carnival-exclusive-choice--mood-dial.is-meter .carnival-exclusive-choice__dial b { bottom: 8px; writing-mode: vertical-rl; }
+.carnival-exclusive-choice--mood-dial.is-meter button { border-radius: 15px; }
+
+.carnival-exclusive-choice--orbit-pick {
+  position: relative;
+  min-height: 350px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--exclusive-accent) 14%, transparent);
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--exclusive-accent) 15%, transparent), transparent 16%),
+    radial-gradient(circle at 20% 22%, #fff 0 1px, transparent 2px),
+    radial-gradient(circle at 78% 28%, #fff 0 1px, transparent 2px),
+    linear-gradient(145deg, #242038, #3a3358);
+}
+.carnival-exclusive-choice--orbit-pick::before,
+.carnival-exclusive-choice--orbit-pick::after {
+  position: absolute;
+  inset: 50%;
+  width: 258px;
+  height: 258px;
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 50%;
+  content: '';
+  transform: translate(-50%, -50%);
+}
+.carnival-exclusive-choice--orbit-pick::after { width: 184px; height: 184px; border-style: dashed; }
+.carnival-exclusive-choice--orbit-pick button {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: 108px;
+  min-height: 74px;
+  place-items: center;
+  gap: 4px;
+  padding: 9px;
+  border-color: rgba(255,255,255,0.24);
+  border-radius: 24px;
+  background: rgba(255,255,255,0.93);
+  text-align: center;
+  transform: translate(-50%, -50%) rotate(var(--exclusive-option-angle)) translateX(128px) rotate(var(--exclusive-option-angle-negative));
+}
+.carnival-exclusive-choice--orbit-pick button strong { font-size: 10px; line-height: 1.3; }
+.carnival-exclusive-choice--orbit-pick button.is-selected { background: #fff; transform: translate(-50%, -50%) rotate(var(--exclusive-option-angle)) translateX(128px) rotate(var(--exclusive-option-angle-negative)) scale(1.08); }
+.carnival-exclusive-choice__star { color: var(--exclusive-accent); font-size: 13px; }
+.carnival-exclusive-choice__core {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: 92px;
+  height: 92px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--exclusive-accent);
+  color: #fff;
+  box-shadow: 0 0 0 12px color-mix(in srgb, var(--exclusive-accent) 16%, transparent), 0 0 42px color-mix(in srgb, var(--exclusive-accent) 48%, transparent);
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.4;
+  text-align: center;
+  transform: translate(-50%, -50%);
+}
+.carnival-exclusive-choice--orbit-pick.is-bubbles { background: linear-gradient(155deg, #e9f5ff, #f5edff 52%, #fff0ee); }
+.carnival-exclusive-choice--orbit-pick.is-bubbles::before,
+.carnival-exclusive-choice--orbit-pick.is-bubbles::after { border-color: color-mix(in srgb, var(--exclusive-accent) 18%, transparent); }
+
+.motion-pop .carnival-exclusive-choice button { animation: exclusive-choice-pop 260ms ease-out both; }
+.motion-float .carnival-exclusive-choice button { animation: exclusive-choice-float 2.7s ease-in-out infinite alternate; }
+.motion-slide .carnival-exclusive-choice button { animation: exclusive-choice-slide 320ms ease-out both; }
+.motion-orbit .carnival-exclusive-choice--orbit-pick::before { animation: exclusive-ring-spin 16s linear infinite; }
+.motion-pulse .carnival-exclusive-choice__core,
+.motion-pulse .carnival-exclusive-choice__dial { animation: exclusive-choice-pulse 1.9s ease-in-out infinite; }
+
+.carnival-exclusive-reveal.effect-ripple .carnival-exclusive-reveal__burst { animation: exclusive-reveal-ripple 1.6s ease-out infinite; }
+.carnival-exclusive-reveal.effect-spotlight { background: radial-gradient(circle at 50% 30%, var(--exclusive-soft), transparent 42%); }
+.carnival-exclusive-reveal.effect-stars .carnival-exclusive-reveal__burst,
+.carnival-exclusive-complete.effect-stars .carnival-exclusive-complete__spark { box-shadow: 0 0 36px color-mix(in srgb, var(--exclusive-accent) 38%, transparent); }
+.carnival-exclusive-reveal.effect-confetti::before,
+.carnival-exclusive-complete.effect-confetti::before { color: var(--exclusive-accent); content: '✦  ·  ◆  ·  ✦'; font-size: 17px; letter-spacing: 0.6em; }
+.carnival-exclusive-reveal.effect-cards .carnival-exclusive-reveal__burst { transform: rotate(-5deg); }
+
+@keyframes exclusive-choice-pop { from { opacity: 0; transform: scale(0.94); } }
+@keyframes exclusive-choice-float { to { translate: 0 -4px; } }
+@keyframes exclusive-choice-slide { from { opacity: 0; translate: 18px 0; } }
+@keyframes exclusive-ring-spin { to { rotate: 360deg; } }
+@keyframes exclusive-choice-pulse { 50% { scale: 1.04; } }
+@keyframes exclusive-reveal-ripple { 50% { box-shadow: 0 0 0 18px color-mix(in srgb, var(--exclusive-accent) 0%, transparent); } }
 
 .carnival-exclusive-reveal,
 .carnival-exclusive-complete { display: grid; justify-items: center; gap: 16px; text-align: center; }
@@ -840,6 +1106,23 @@
   .carnival-rapid-options > i { width: 36px; height: 36px; border-width: 4px; }
   .carnival-exclusive-options { grid-template-columns: 1fr; }
   .carnival-exclusive-options button { min-height: 72px; }
+  .carnival-exclusive-choice--card-grid { grid-template-columns: 1fr; }
+  .carnival-exclusive-choice--card-grid button { min-height: 72px; }
+  .carnival-exclusive-choice--swipe-deck button { min-height: 118px; padding: 13px; }
+  .carnival-exclusive-choice--mood-dial { min-height: 278px; padding-top: 116px; }
+  .carnival-exclusive-choice--orbit-pick { min-height: 310px; }
+  .carnival-exclusive-choice--orbit-pick::before { width: 216px; height: 216px; }
+  .carnival-exclusive-choice--orbit-pick::after { width: 154px; height: 154px; }
+  .carnival-exclusive-choice--orbit-pick button,
+  .carnival-exclusive-choice--orbit-pick button.is-selected {
+    width: 92px;
+    min-height: 66px;
+    transform: translate(-50%, -50%) rotate(var(--exclusive-option-angle)) translateX(106px) rotate(var(--exclusive-option-angle-negative));
+  }
+  .carnival-exclusive-choice--orbit-pick button.is-selected {
+    transform: translate(-50%, -50%) rotate(var(--exclusive-option-angle)) translateX(106px) rotate(var(--exclusive-option-angle-negative)) scale(1.06);
+  }
+  .carnival-exclusive-choice__core { width: 78px; height: 78px; }
   .carnival-exclusive-compare { grid-template-columns: 1fr; }
   .carnival-exclusive-compare > b { min-height: 20px; }
   .carnival-exclusive-result-list { grid-template-columns: 1fr; }
@@ -851,6 +1134,19 @@
   .carnival-game-turn em { display: none; }
   .carnival-rapid-options button { min-height: 132px; }
   .carnival-wheel-label > span { width: 52px; font-size: 9px; }
+  .carnival-exclusive-choice--swipe-deck { grid-template-columns: 1fr; }
+  .carnival-exclusive-choice--swipe-deck button { min-height: 86px; }
+  .carnival-exclusive-choice--swipe-deck button { grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; }
+  .carnival-exclusive-choice--orbit-pick { min-height: 286px; }
+  .carnival-exclusive-choice--orbit-pick button,
+  .carnival-exclusive-choice--orbit-pick button.is-selected {
+    width: 84px;
+    min-height: 62px;
+    transform: translate(-50%, -50%) rotate(var(--exclusive-option-angle)) translateX(92px) rotate(var(--exclusive-option-angle-negative));
+  }
+  .carnival-exclusive-choice--orbit-pick button.is-selected {
+    transform: translate(-50%, -50%) rotate(var(--exclusive-option-angle)) translateX(92px) rotate(var(--exclusive-option-angle-negative)) scale(1.04);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

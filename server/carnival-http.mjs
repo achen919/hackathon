@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createAiCapacityGate } from './ai-capacity.mjs';
 import { createAiGameService } from './ai-game.mjs';
 import { buildCarnivalFallbackGame, carnivalMatchFromState } from './carnival-games.mjs';
@@ -8,10 +8,16 @@ import { exclusiveSeriesForId, requireExclusiveSeries } from './exclusive-series
 import {
   buildPromptPreview,
   configuredGameType,
+  hasUnsafeGameText,
   normalizePlayerPrompt,
   publicGameTypes,
   templateForId,
 } from './game-templates.mjs';
+import { assertPromptGameDefinition } from './prompt-game.mjs';
+
+const GAME_PREVIEW_TTL_MS = 5 * 60_000;
+const GAME_PREVIEW_TOKEN_PATTERN = /^[A-Za-z0-9_-]{20,120}$/;
+const MAX_GAME_PREVIEWS = 2_000;
 
 function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -146,6 +152,7 @@ function networkGameState(rawInvite, state, serverNowMs) {
     revision,
     serverNowMs,
     templateId: rawInvite.templateId,
+    schemaVersion: game.schemaVersion,
     title: game.title,
     description: game.description,
     generatedBy: game.generatedBy,
@@ -260,6 +267,11 @@ function networkGameState(rawInvite, state, serverNowMs) {
             : progress.answerSubmitted ? 'guessing' : 'waiting-answer';
     return {
       ...base,
+      ...(game.engine ? {
+        engine: game.engine,
+        presentation: structuredClone(game.presentation),
+        ending: structuredClone(game.ending),
+      } : {}),
       seriesId: series.seriesId,
       series: {
         seriesId: series.seriesId,
@@ -289,6 +301,7 @@ function networkGameState(rawInvite, state, serverNowMs) {
         source: question.source,
         prompt: question.prompt,
         options: question.options,
+        ...(question.interaction ? { interaction: structuredClone(question.interaction) } : {}),
       } : null,
       questions: game.questions.map((item) => ({
         id: item.id,
@@ -298,6 +311,7 @@ function networkGameState(rawInvite, state, serverNowMs) {
         options: item.options,
         matchedFollowUp: item.matchedFollowUp,
         differentFollowUp: item.differentFollowUp,
+        ...(item.interaction ? { interaction: structuredClone(item.interaction) } : {}),
       })),
       self: {
         participantId: 'a',
@@ -436,7 +450,33 @@ function tokenKey(token) {
 
 function invitationRequestFingerprint(body, normalizedPrompt) {
   return createHash('sha256')
-    .update(JSON.stringify([body.templateId, body.seriesId ?? null, normalizedPrompt]))
+    .update(JSON.stringify([
+      body.templateId,
+      body.seriesId ?? null,
+      normalizedPrompt,
+      body.previewToken ?? null,
+    ]))
+    .digest('base64url');
+}
+
+function promptFingerprint(prompt) {
+  return createHash('sha256').update(prompt).digest('base64url');
+}
+
+function roomContextRevision(rawState) {
+  if (rawState?.status !== 'matched' || !rawState.room) {
+    throw new CarnivalError('NOT_MATCHED', 'Participant is not in a carnival room', 409);
+  }
+  const messages = Array.isArray(rawState.room.messages) ? rawState.room.messages : [];
+  return createHash('sha256')
+    .update(rawState.room.id)
+    .update('\0')
+    .update(JSON.stringify(messages.map((message) => [
+      message.id,
+      message.senderId,
+      message.content,
+      message.createdAt,
+    ])))
     .digest('base64url');
 }
 
@@ -447,12 +487,15 @@ export function createCarnivalHttpHandler({
   configStore = createConfigStore(),
   aiService = createAiGameService(),
   aiGate,
+  now = Date.now,
+  previewTokenFactory = () => randomBytes(32).toString('base64url'),
 } = {}) {
   const knownPaths = new Set([
     '/api/carnival/join',
     '/api/carnival/state',
     '/api/carnival/messages',
     '/api/carnival/prompt',
+    '/api/carnival/game-preview',
     '/api/carnival/invites',
     '/api/carnival/games/action',
     '/api/carnival/session',
@@ -460,9 +503,11 @@ export function createCarnivalHttpHandler({
   const takeJoinRate = createRateLimiter(20, 10 * 60_000);
   const takeMessageRate = createRateLimiter(90, 60_000);
   const takeInviteRate = createRateLimiter(8, 10 * 60_000);
+  const takePreviewRate = createRateLimiter(8, 10 * 60_000);
   const takeActionRate = createRateLimiter(180, 10 * 60_000);
   const capacityGate = aiGate ?? createAiCapacityGate();
   const inFlightInvites = new Map();
+  const gamePreviews = new Map();
 
   async function gameTypesAndConfig() {
     try {
@@ -486,8 +531,196 @@ export function createCarnivalHttpHandler({
     return publicState(raw, gameTypes);
   }
 
+  function currentTimestamp() {
+    const value = Number(now());
+    if (!Number.isFinite(value)) throw new TypeError('Carnival HTTP clock must return a finite timestamp');
+    return value;
+  }
+
+  function pruneGamePreviews(timestamp = currentTimestamp()) {
+    for (const [previewToken, preview] of gamePreviews) {
+      if (preview.expiresAt <= timestamp) gamePreviews.delete(previewToken);
+    }
+    while (gamePreviews.size >= MAX_GAME_PREVIEWS) {
+      const oldest = gamePreviews.keys().next().value;
+      if (!oldest) break;
+      gamePreviews.delete(oldest);
+    }
+  }
+
+  function allocatePreviewToken() {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const previewToken = previewTokenFactory();
+      if (typeof previewToken !== 'string' || !GAME_PREVIEW_TOKEN_PATTERN.test(previewToken)) {
+        throw new TypeError('previewTokenFactory must return a 20 to 120 character base64url token');
+      }
+      if (!gamePreviews.has(previewToken)) return previewToken;
+    }
+    throw new Error('Unable to allocate a unique game preview token');
+  }
+
+  async function prepareGameRequest(token, body, normalizedPrompt) {
+    const rawState = await service.getState(token);
+    if (!rawState.canInvite) {
+      throw new CarnivalError('INVITE_LOCKED', 'Ten text messages are required before inviting a game', 409);
+    }
+    const { config, gameTypes } = await gameTypesAndConfig();
+    const selected = config
+      ? configuredGameType(config.gameTypes, body.templateId)
+      : DEFAULT_GAME_TYPES.find((item) => item.id === body.templateId);
+    const publicType = gameTypes.find((item) => item.id === body.templateId);
+    if (!selected || !publicType?.enabled) {
+      throw new CarnivalError('GAME_TEMPLATE_NOT_ENABLED', 'Game template is not enabled', 400);
+    }
+    if (!templateForId(selected.id)?.available) {
+      throw new CarnivalError('GAME_TEMPLATE_UNAVAILABLE', 'This game template is not available yet', 409);
+    }
+    const series = selected.id === 'custom' ? exclusiveSeriesForId(body.seriesId) : null;
+    if (selected.id === 'custom' && !series) {
+      throw new CarnivalError('INVALID_GAME_SERIES', 'Unsupported exclusive game series', 400);
+    }
+    if (selected.id !== 'custom' && body.seriesId !== undefined) {
+      throw new CarnivalError('INVALID_GAME_SERIES', 'seriesId is only valid for the custom template', 400);
+    }
+    return {
+      rawState,
+      config,
+      gameTypes,
+      selected,
+      series,
+      prompt: normalizedPrompt,
+      match: carnivalMatchFromState(rawState),
+    };
+  }
+
+  function assertPreviewGameMatchesSelection(game, prepared) {
+    assertPromptGameDefinition(game, { hasUnsafeText: hasUnsafeGameText });
+    if (
+      game.templateId !== prepared.selected.id ||
+      game.seriesId !== prepared.series?.seriesId ||
+      game.mechanics?.seriesId !== prepared.series?.seriesId ||
+      game.mechanics?.templateKey !== prepared.series?.templateKey
+    ) {
+      throw new Error('Prompt game mechanics do not match the selected series');
+    }
+  }
+
+  async function generateGame(prepared, { requirePromptGame = false } = {}) {
+    const { config, match, prompt, selected, series } = prepared;
+    let game = buildCarnivalFallbackGame(match, selected.id, selected.label, {
+      seriesId: series?.seriesId,
+      prompt,
+    });
+    if (config?.apiKey) {
+      const slot = capacityGate.acquire();
+      if (slot.allowed) {
+        try {
+          const candidate = await aiService.generate(config, match, {
+            templateId: selected.id,
+            gameLabel: selected.label,
+            prompt,
+            seriesId: series?.seriesId,
+          });
+          if (requirePromptGame) {
+            assertPreviewGameMatchesSelection(candidate, prepared);
+          }
+          game = candidate;
+        } catch {
+          // Keep the safe local game when the provider or its generated schema fails.
+        } finally {
+          slot.release();
+        }
+      }
+    }
+    if (requirePromptGame) {
+      try {
+        assertPreviewGameMatchesSelection(game, prepared);
+      } catch {
+        throw new CarnivalError('GAME_PREVIEW_UNAVAILABLE', 'A safe prompt game could not be generated', 503);
+      }
+    }
+    return game;
+  }
+
+  async function createGamePreview(token, body) {
+    if (body.templateId !== 'custom') {
+      throw new CarnivalError('GAME_PREVIEW_UNSUPPORTED', 'Game preview is only available for custom games', 400);
+    }
+    const prompt = normalizePlayerPrompt(body.prompt);
+    const prepared = await prepareGameRequest(token, body, prompt);
+    const roomIdAtStart = prepared.rawState.room.id;
+    const roomRevisionAtStart = roomContextRevision(prepared.rawState);
+    const game = await generateGame(prepared, { requirePromptGame: true });
+    const latestState = await service.getState(token);
+    if (
+      latestState?.status !== 'matched' ||
+      latestState.room?.id !== roomIdAtStart ||
+      roomContextRevision(latestState) !== roomRevisionAtStart
+    ) {
+      throw new CarnivalError(
+        'GAME_PREVIEW_STALE',
+        'The room chat changed while this preview was being generated',
+        409,
+      );
+    }
+    const timestamp = currentTimestamp();
+    pruneGamePreviews(timestamp);
+    const previewToken = allocatePreviewToken();
+    const expiresAt = timestamp + GAME_PREVIEW_TTL_MS;
+    gamePreviews.set(previewToken, {
+      ownerTokenHash: tokenKey(token),
+      roomId: roomIdAtStart,
+      roomRevision: roomRevisionAtStart,
+      seriesId: prepared.series.seriesId,
+      promptHash: promptFingerprint(prompt),
+      game: structuredClone(game),
+      expiresAt,
+      consumedBy: null,
+    });
+    return {
+      previewToken,
+      expiresAt: new Date(expiresAt).toISOString(),
+      game: structuredClone(game),
+    };
+  }
+
+  function gameForPreview(token, previewToken, prepared, idempotencyKey) {
+    if (typeof previewToken !== 'string' || !GAME_PREVIEW_TOKEN_PATTERN.test(previewToken)) {
+      throw new CarnivalError('INVALID_GAME_PREVIEW', 'A valid previewToken is required', 400);
+    }
+    const timestamp = currentTimestamp();
+    const preview = gamePreviews.get(previewToken);
+    if (!preview || preview.expiresAt <= timestamp) {
+      if (preview) gamePreviews.delete(previewToken);
+      throw new CarnivalError('GAME_PREVIEW_EXPIRED', 'This game preview is missing or expired', 410);
+    }
+    if (
+      preview.ownerTokenHash !== tokenKey(token) ||
+      preview.roomId !== prepared.rawState.room.id
+    ) {
+      throw new CarnivalError('GAME_PREVIEW_FORBIDDEN', 'This game preview belongs to another participant', 403);
+    }
+    if (
+      prepared.selected.id !== 'custom' ||
+      preview.seriesId !== prepared.series?.seriesId ||
+      preview.promptHash !== promptFingerprint(prepared.prompt)
+    ) {
+      throw new CarnivalError('GAME_PREVIEW_MISMATCH', 'The preview does not match this series and prompt', 409);
+    }
+    if (preview.roomRevision !== roomContextRevision(prepared.rawState)) {
+      throw new CarnivalError('GAME_PREVIEW_STALE', 'The room chat changed after this preview was generated', 409);
+    }
+    const consumer = createHash('sha256').update(idempotencyKey).digest('base64url');
+    if (preview.consumedBy && preview.consumedBy !== consumer) {
+      throw new CarnivalError('GAME_PREVIEW_ALREADY_USED', 'This game preview has already been sent', 409);
+    }
+    preview.consumedBy = consumer;
+    return structuredClone(preview.game);
+  }
+
   async function createInvitation(token, body, idempotencyKey) {
     const normalizedPrompt = normalizePlayerPrompt(body.prompt);
+    const previewVersionHash = body.previewToken === undefined ? null : tokenKey(body.previewToken);
     const requestFingerprint = invitationRequestFingerprint(body, normalizedPrompt);
     const key = `${tokenKey(token)}:${idempotencyKey}`;
     const existing = inFlightInvites.get(key);
@@ -503,6 +736,7 @@ export function createCarnivalHttpHandler({
             templateId: body.templateId,
             seriesId: body.seriesId,
             prompt: normalizedPrompt,
+            previewVersionHash,
           })
         : null;
       if (replay) {
@@ -512,50 +746,21 @@ export function createCarnivalHttpHandler({
           state: publicState(replay.state, gameTypes),
         };
       }
-      const rawState = await service.getState(token);
-      if (!rawState.canInvite) throw new CarnivalError('INVITE_LOCKED', 'Ten text messages are required before inviting a game', 409);
-      const { config, gameTypes } = await gameTypesAndConfig();
-      const selected = config ? configuredGameType(config.gameTypes, body.templateId) : DEFAULT_GAME_TYPES.find((item) => item.id === body.templateId);
-      const publicType = gameTypes.find((item) => item.id === body.templateId);
-      if (!selected || !publicType?.enabled) throw new CarnivalError('GAME_TEMPLATE_NOT_ENABLED', 'Game template is not enabled', 400);
-      if (!templateForId(selected.id)?.available) throw new CarnivalError('GAME_TEMPLATE_UNAVAILABLE', 'This game template is not available yet', 409);
-      const series = selected.id === 'custom' ? exclusiveSeriesForId(body.seriesId) : null;
-      if (selected.id === 'custom' && !series) {
-        throw new CarnivalError('INVALID_GAME_SERIES', 'Unsupported exclusive game series', 400);
-      }
-      if (selected.id !== 'custom' && body.seriesId !== undefined) {
-        throw new CarnivalError('INVALID_GAME_SERIES', 'seriesId is only valid for the custom template', 400);
-      }
-      const prompt = normalizedPrompt;
-      const match = carnivalMatchFromState(rawState);
-      let game = buildCarnivalFallbackGame(match, selected.id, selected.label, { seriesId: series?.seriesId });
-      if (config?.apiKey) {
-        const slot = capacityGate.acquire();
-        if (slot.allowed) {
-          try {
-            game = await aiService.generate(config, match, {
-              templateId: selected.id,
-              gameLabel: selected.label,
-              prompt,
-              seriesId: series?.seriesId,
-            });
-          } catch {
-            // The carnival must stay playable even if the configured provider rejects a request.
-          } finally {
-            slot.release();
-          }
-        }
-      }
+      const prepared = await prepareGameRequest(token, body, normalizedPrompt);
+      const game = body.previewToken !== undefined
+        ? gameForPreview(token, body.previewToken, prepared, idempotencyKey)
+        : await generateGame(prepared);
       const created = await service.createInvite(token, {
-        templateId: selected.id,
-        seriesId: series?.seriesId,
-        prompt,
+        templateId: prepared.selected.id,
+        seriesId: prepared.series?.seriesId,
+        prompt: prepared.prompt,
         game,
         idempotencyKey,
+        previewVersionHash,
       });
       return {
         invite: publicInvite(created.invite, created.state),
-        state: publicState(created.state, gameTypes),
+        state: publicState(created.state, prepared.gameTypes),
       };
     })();
     inFlightInvites.set(key, { requestFingerprint, promise });
@@ -625,6 +830,29 @@ export function createCarnivalHttpHandler({
             maxLength: 1_500,
           }, requestId);
         }
+      } else if (path === '/api/carnival/game-preview') {
+        if (request.method !== 'POST') methodNotAllowed(response, requestId, 'POST');
+        else if (requireMutation(request, response, requestId)) {
+          const rate = takePreviewRate(tokenKey(token));
+          if (!rate.allowed) {
+            sendJson(response, 429, {
+              error: 'Too many game preview requests',
+              code: 'RATE_LIMITED',
+              request_id: requestId,
+            }, requestId, { 'Retry-After': String(rate.retryAfter) });
+          } else {
+            const body = await readJson(request, 8_000);
+            if (
+              !isRecord(body) ||
+              body.templateId !== 'custom' ||
+              typeof body.seriesId !== 'string' ||
+              typeof body.prompt !== 'string'
+            ) {
+              throw new CarnivalError('INVALID_INPUT', 'Invalid carnival game preview request', 400);
+            }
+            sendJson(response, 201, await createGamePreview(token, body), requestId);
+          }
+        }
       } else if (path === '/api/carnival/invites') {
         if (request.method !== 'POST') methodNotAllowed(response, requestId, 'POST');
         else if (requireMutation(request, response, requestId)) {
@@ -637,7 +865,8 @@ export function createCarnivalHttpHandler({
             }
             const body = await readJson(request, 8_000);
             if (!isRecord(body) || typeof body.templateId !== 'string' || typeof body.prompt !== 'string' ||
-              (body.seriesId !== undefined && typeof body.seriesId !== 'string')) {
+              (body.seriesId !== undefined && typeof body.seriesId !== 'string') ||
+              (body.previewToken !== undefined && typeof body.previewToken !== 'string')) {
               throw new CarnivalError('INVALID_INPUT', 'Invalid carnival invitation', 400);
             }
             sendJson(response, 201, await createInvitation(token, body, key), requestId);
