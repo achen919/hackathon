@@ -56,8 +56,6 @@ export default function App() {
   const otherUser = getUser(match, peer);
   const composer = drafts[viewer];
   const matchedCount = results.filter((result) => result.answer === result.guess).length;
-  const visibleMessages = messages.slice(-24);
-  const hiddenMessageCount = Math.max(0, messages.length - visibleMessages.length);
   const recentConversation = messages.slice(-10).map((message) => message.content).join(' ');
   const closureSignals = [
     '到这里',
@@ -305,15 +303,9 @@ export default function App() {
         </header>
 
         <section className="chat-timeline" aria-label="聊天记录" ref={timelineRef}>
-          <div className="timeline-date"><span>认识第 2 天 · 已聊 {messages.length} 条</span></div>
+          <div className="timeline-date"><span>完整聊天记录 · 共 {messages.length} 条</span></div>
 
-          {hiddenMessageCount > 0 && (
-            <div className="earlier-messages">
-              已折叠更早的 {hiddenMessageCount} 条消息，演示从最近对话开始
-            </div>
-          )}
-
-          {visibleMessages.map((message, index) => {
+          {messages.map((message, index) => {
             const sender = getUser(match, message.from);
             const mine = message.from === viewer;
             return (
@@ -324,7 +316,7 @@ export default function App() {
                 {!mine && <Avatar name={sender.nickname} tone={toneFor(message.from)} size="small" />}
                 <div className="message-content">
                   <div className="message-bubble">
-                    {message.type === 'non_text' ? '暂不支持的非文本消息' : message.content}
+                    {message.content || (message.type === 'non_text' ? '非文本消息' : '空消息')}
                   </div>
                   <time>{formatTime(message.sent_at)}</time>
                 </div>

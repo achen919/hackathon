@@ -481,15 +481,6 @@ p {
   font-size: 10px;
 }
 
-.earlier-messages {
-  width: max-content;
-  max-width: 90%;
-  margin: -10px auto 20px;
-  color: #9c9599;
-  font-size: 10px;
-  text-align: center;
-}
-
 .message-row {
   display: flex;
   align-items: flex-start;
