@@ -728,6 +728,68 @@
 .carnival-progress-pair i { height: 7px; overflow: hidden; border-radius: 99px; background: #e8e3df; }
 .carnival-progress-pair b { display: block; height: 100%; border-radius: inherit; background: var(--cg-violet); transition: width 0.25s ease; }
 
+.carnival-exclusive-game {
+  --exclusive-accent: #6253d4;
+  --exclusive-soft: #efedff;
+}
+.carnival-exclusive-game.is-coral { --exclusive-accent: #c95c4e; --exclusive-soft: #fff0eb; }
+.carnival-exclusive-game.is-violet { --exclusive-accent: #6253d4; --exclusive-soft: #efedff; }
+.carnival-exclusive-game.is-mint { --exclusive-accent: #2f8c6c; --exclusive-soft: #eaf8f2; }
+.carnival-exclusive-game.is-gold { --exclusive-accent: #b57c24; --exclusive-soft: #fff5dc; }
+.carnival-exclusive-game.is-blue { --exclusive-accent: #447ec8; --exclusive-soft: #eaf3ff; }
+.carnival-exclusive-game .carnival-game-kicker,
+.carnival-exclusive-game .carnival-game-eyebrow { color: var(--exclusive-accent); }
+.carnival-exclusive-game .carnival-game-primary { background: linear-gradient(135deg, var(--exclusive-accent), color-mix(in srgb, var(--exclusive-accent) 78%, #26222c)); }
+
+.carnival-exclusive-progress { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.carnival-exclusive-progress i { height: 5px; border-radius: 99px; background: #e8e3df; }
+.carnival-exclusive-progress i.is-active { background: var(--exclusive-accent); }
+.carnival-exclusive-round { display: grid; gap: 20px; }
+.carnival-exclusive-source,
+.carnival-exclusive-question-copy { margin: 0 0 7px; color: var(--cg-muted); font-size: 11px; line-height: 1.55; }
+.carnival-exclusive-question-copy { margin: 9px 0 0; }
+.carnival-exclusive-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.carnival-exclusive-options button {
+  display: grid;
+  min-height: 92px;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--cg-line);
+  border-radius: 17px;
+  background: #fff;
+  color: var(--cg-ink);
+  text-align: left;
+  cursor: pointer;
+}
+.carnival-exclusive-options button.is-selected { border-color: color-mix(in srgb, var(--exclusive-accent) 58%, transparent); background: var(--exclusive-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--exclusive-accent) 12%, transparent); }
+.carnival-exclusive-options button > span { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 11px; background: var(--exclusive-soft); color: var(--exclusive-accent); font-size: 12px; font-weight: 900; }
+.carnival-exclusive-options button strong { font-size: 13px; line-height: 1.45; }
+.carnival-exclusive-submit { width: 100%; }
+
+.carnival-exclusive-reveal,
+.carnival-exclusive-complete { display: grid; justify-items: center; gap: 16px; text-align: center; }
+.carnival-exclusive-reveal__burst,
+.carnival-exclusive-complete__spark { display: grid; width: 68px; height: 68px; place-items: center; border-radius: 23px; background: var(--exclusive-soft); color: var(--exclusive-accent); font-size: 29px; font-weight: 900; }
+.carnival-exclusive-reveal__burst.is-matched { box-shadow: 0 0 0 9px color-mix(in srgb, var(--exclusive-accent) 8%, transparent); }
+.carnival-exclusive-compare { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: stretch; gap: 10px; }
+.carnival-exclusive-compare article { display: grid; align-content: center; gap: 7px; min-height: 108px; padding: 14px; border: 1px solid var(--cg-line); border-radius: 17px; background: #fff; }
+.carnival-exclusive-compare article span { color: var(--cg-muted); font-size: 10px; }
+.carnival-exclusive-compare article strong { font-size: 14px; line-height: 1.45; }
+.carnival-exclusive-compare > b { display: grid; place-items: center; color: var(--cg-muted); font-size: 9px; font-weight: 700; }
+.carnival-exclusive-reveal .carnival-discussion-card { width: 100%; text-align: left; }
+.carnival-exclusive-reveal .carnival-discussion-card span { display: block; margin-bottom: 5px; color: var(--exclusive-accent); font-size: 9px; font-weight: 850; }
+.carnival-exclusive-reveal .carnival-discussion-card p { margin: 0; }
+.carnival-exclusive-complete > p:not(.carnival-game-eyebrow) { max-width: 520px; margin: 0; color: var(--cg-muted); font-size: 13px; line-height: 1.7; }
+.carnival-exclusive-result-list { display: grid; width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.carnival-exclusive-result-list article { display: grid; align-content: center; gap: 7px; min-height: 84px; padding: 10px; border-radius: 15px; background: #f3efec; color: var(--cg-muted); font-size: 10px; text-align: left; }
+.carnival-exclusive-result-list article.is-matched { background: var(--exclusive-soft); color: var(--exclusive-accent); }
+.carnival-exclusive-result-list article > span { display: flex; align-items: center; gap: 6px; }
+.carnival-exclusive-result-list article p { margin: 0; color: var(--cg-ink); font-size: 10px; line-height: 1.45; }
+.carnival-exclusive-result-list article p b { color: var(--cg-muted); font-size: 8px; }
+.carnival-exclusive-result-list i { display: grid; width: 19px; height: 19px; place-items: center; border-radius: 50%; background: #fff; font-size: 9px; font-style: normal; font-weight: 850; }
+
 @media (max-width: 620px) {
   .carnival-game-backdrop {
     align-items: flex-end;
@@ -776,6 +838,11 @@
   .carnival-rapid-options { gap: 9px; }
   .carnival-rapid-options button { min-height: 148px; padding: 17px 9px; border-radius: 18px; }
   .carnival-rapid-options > i { width: 36px; height: 36px; border-width: 4px; }
+  .carnival-exclusive-options { grid-template-columns: 1fr; }
+  .carnival-exclusive-options button { min-height: 72px; }
+  .carnival-exclusive-compare { grid-template-columns: 1fr; }
+  .carnival-exclusive-compare > b { min-height: 20px; }
+  .carnival-exclusive-result-list { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 360px) {

@@ -4,6 +4,7 @@ import { createAiGameService } from './ai-game.mjs';
 import { buildCarnivalFallbackGame, carnivalMatchFromState } from './carnival-games.mjs';
 import { CarnivalError, createCarnivalService } from './carnival-service.mjs';
 import { createConfigStore, DEFAULT_GAME_TYPES } from './config-store.mjs';
+import { exclusiveSeriesForId, requireExclusiveSeries } from './exclusive-series.mjs';
 import {
   buildPromptPreview,
   configuredGameType,
@@ -136,14 +137,18 @@ function roleMap(state) {
 function networkGameState(rawInvite, state, serverNowMs) {
   const roles = roleMap(state);
   const game = rawInvite.game;
+  const revision = rawInvite.templateId === 'custom' && Number.isSafeInteger(rawInvite.revision)
+    ? rawInvite.revision
+    : state.revision;
   const revealed = rawInvite.internalStatus === 'revealed' || rawInvite.status === 'revealed' || rawInvite.status === 'completed';
   const base = {
     inviteId: rawInvite.id,
-    revision: state.revision,
+    revision,
     serverNowMs,
     templateId: rawInvite.templateId,
     title: game.title,
     description: game.description,
+    generatedBy: game.generatedBy,
   };
   if (rawInvite.templateId === 'profile-riddle') {
     const answerFor = (personId) => {
@@ -205,6 +210,110 @@ function networkGameState(rawInvite, state, serverNowMs) {
       canSpin: true,
     };
   }
+  if (rawInvite.templateId === 'custom') {
+    const series = requireExclusiveSeries(rawInvite.seriesId);
+    const progress = rawInvite.progress ?? {};
+    const roundIndex = Number.isInteger(progress.roundIndex) ? progress.roundIndex : 0;
+    const question = game.questions[roundIndex] ?? null;
+    const roleForId = (participantId) => roles.get(participantId) ?? null;
+    const publicResult = (result) => {
+      const resultQuestion = game.questions[result.roundIndex] ?? game.questions.find((item) => item.id === result.questionId);
+      return {
+        roundIndex: result.roundIndex,
+        questionId: result.questionId,
+        answer: result.answer,
+        guess: result.guess,
+        protagonistId: roleForId(result.answererId),
+        guesserId: roleForId(result.guesserId),
+        matched: result.answer === result.guess,
+        followUp: result.answer === result.guess
+          ? resultQuestion?.matchedFollowUp
+          : resultQuestion?.differentFollowUp,
+        revealedAt: result.revealedAt,
+      };
+    };
+    const rawResults = Array.isArray(rawInvite.shared?.exclusive?.revealedRounds)
+      ? rawInvite.shared.exclusive.revealedRounds
+      : [];
+    const results = rawResults.map(publicResult);
+    const revealedRound = question
+      ? results.find((result) => result.questionId === question.id) ?? null
+      : results.at(-1) ?? null;
+    const protagonistId = roleForId(progress.answererId);
+    const guesserId = roleForId(progress.guesserId);
+    const selfRole = protagonistId === 'a' ? 'answerer' : guesserId === 'a' ? 'guesser' : 'spectator';
+    const selfSelection = question && selfRole === 'answerer'
+      ? rawInvite.privateState?.answers?.[question.id]
+      : question && selfRole === 'guesser'
+        ? rawInvite.privateState?.guesses?.[question.id]
+        : undefined;
+    const completed = rawInvite.internalStatus === 'revealed' || rawInvite.status === 'completed';
+    const joined = rawInvite.joinedParticipantIds.length >= 2;
+    const phase = completed
+      ? 'completed'
+      : !joined
+        ? 'waiting-peer'
+        : revealedRound
+          ? 'revealed'
+          : selfRole === 'answerer'
+            ? progress.answerSubmitted ? 'waiting-guess' : 'answering'
+            : progress.answerSubmitted ? 'guessing' : 'waiting-answer';
+    return {
+      ...base,
+      seriesId: series.seriesId,
+      series: {
+        seriesId: series.seriesId,
+        templateKey: series.templateKey,
+        title: series.title,
+        shortTitle: series.shortTitle,
+        icon: series.icon,
+        tone: series.tone,
+        eyebrow: series.eyebrow,
+        description: series.description,
+        duration: series.duration,
+        tags: [...series.tags],
+        matchedEyebrow: series.matchedEyebrow,
+        matchedTitle: series.matchedTitle,
+        differentEyebrow: series.differentEyebrow,
+        differentTitle: series.differentTitle,
+        resultUnit: series.resultUnit,
+      },
+      phase,
+      roundIndex,
+      totalRounds: game.questions.length,
+      protagonistId,
+      guesserId,
+      question: question ? {
+        id: question.id,
+        label: question.label,
+        source: question.source,
+        prompt: question.prompt,
+        options: question.options,
+      } : null,
+      questions: game.questions.map((item) => ({
+        id: item.id,
+        label: item.label,
+        source: item.source,
+        prompt: item.prompt,
+        options: item.options,
+        matchedFollowUp: item.matchedFollowUp,
+        differentFollowUp: item.differentFollowUp,
+      })),
+      self: {
+        participantId: 'a',
+        role: selfRole,
+        submitted: Number.isInteger(selfSelection),
+        ...(Number.isInteger(selfSelection) ? { selection: selfSelection } : {}),
+      },
+      peer: {
+        participantId: 'b',
+        role: selfRole === 'answerer' ? 'guesser' : selfRole === 'guesser' ? 'answerer' : 'spectator',
+        submitted: selfRole === 'answerer' ? Boolean(progress.guessSubmitted) : Boolean(progress.answerSubmitted),
+      },
+      revealedRound,
+      results,
+    };
+  }
   const questions = game.questions;
   const selfAnswered = Number(rawInvite.progress?.selfAnswered ?? 0);
   const peerAnswered = Number(rawInvite.progress?.peerAnswered ?? 0);
@@ -254,10 +363,25 @@ function invitationStatus(rawStatus) {
 }
 
 function publicInvite(rawInvite, state, serverNowMs = Date.now()) {
+  const series = rawInvite.seriesId ? exclusiveSeriesForId(rawInvite.seriesId) : null;
+  const revision = rawInvite.templateId === 'custom' && Number.isSafeInteger(rawInvite.revision)
+    ? rawInvite.revision
+    : state.revision;
   return {
     inviteId: rawInvite.id,
     creatorId: rawInvite.creatorId,
     templateId: rawInvite.templateId,
+    seriesId: rawInvite.seriesId ?? null,
+    ...(series ? {
+      series: {
+        seriesId: series.seriesId,
+        templateKey: series.templateKey,
+        title: series.title,
+        shortTitle: series.shortTitle,
+        icon: series.icon,
+        tone: series.tone,
+      },
+    } : {}),
     gameLabel: rawInvite.game.gameType,
     title: rawInvite.game.title,
     promptPreview: rawInvite.game.whyItFits || '根据你们的公开聊天生成',
@@ -268,7 +392,7 @@ function publicInvite(rawInvite, state, serverNowMs = Date.now()) {
       gameId: rawInvite.game.id,
       kind: rawInvite.templateId,
       status: invitationStatus(rawInvite.status),
-      version: state.revision,
+      version: revision,
       definition: networkGameState(rawInvite, state, serverNowMs),
     },
   };
@@ -308,6 +432,12 @@ function publicState(raw, gameTypes) {
 
 function tokenKey(token) {
   return createHash('sha256').update(token).digest('base64url');
+}
+
+function invitationRequestFingerprint(body, normalizedPrompt) {
+  return createHash('sha256')
+    .update(JSON.stringify([body.templateId, body.seriesId ?? null, normalizedPrompt]))
+    .digest('base64url');
 }
 
 export function createCarnivalHttpHandler({
@@ -357,12 +487,23 @@ export function createCarnivalHttpHandler({
   }
 
   async function createInvitation(token, body, idempotencyKey) {
+    const normalizedPrompt = normalizePlayerPrompt(body.prompt);
+    const requestFingerprint = invitationRequestFingerprint(body, normalizedPrompt);
     const key = `${tokenKey(token)}:${idempotencyKey}`;
     const existing = inFlightInvites.get(key);
-    if (existing) return existing;
+    if (existing) {
+      if (existing.requestFingerprint !== requestFingerprint) {
+        throw new CarnivalError('IDEMPOTENCY_CONFLICT', 'Idempotency key was already used for another invitation', 409);
+      }
+      return existing.promise;
+    }
     const promise = (async () => {
       const replay = typeof service.getInviteByIdempotencyKey === 'function'
-        ? await service.getInviteByIdempotencyKey(token, idempotencyKey)
+        ? await service.getInviteByIdempotencyKey(token, idempotencyKey, {
+            templateId: body.templateId,
+            seriesId: body.seriesId,
+            prompt: normalizedPrompt,
+          })
         : null;
       if (replay) {
         const { gameTypes } = await gameTypesAndConfig();
@@ -378,9 +519,16 @@ export function createCarnivalHttpHandler({
       const publicType = gameTypes.find((item) => item.id === body.templateId);
       if (!selected || !publicType?.enabled) throw new CarnivalError('GAME_TEMPLATE_NOT_ENABLED', 'Game template is not enabled', 400);
       if (!templateForId(selected.id)?.available) throw new CarnivalError('GAME_TEMPLATE_UNAVAILABLE', 'This game template is not available yet', 409);
-      const prompt = normalizePlayerPrompt(body.prompt);
+      const series = selected.id === 'custom' ? exclusiveSeriesForId(body.seriesId) : null;
+      if (selected.id === 'custom' && !series) {
+        throw new CarnivalError('INVALID_GAME_SERIES', 'Unsupported exclusive game series', 400);
+      }
+      if (selected.id !== 'custom' && body.seriesId !== undefined) {
+        throw new CarnivalError('INVALID_GAME_SERIES', 'seriesId is only valid for the custom template', 400);
+      }
+      const prompt = normalizedPrompt;
       const match = carnivalMatchFromState(rawState);
-      let game = buildCarnivalFallbackGame(match, selected.id, selected.label);
+      let game = buildCarnivalFallbackGame(match, selected.id, selected.label, { seriesId: series?.seriesId });
       if (config?.apiKey) {
         const slot = capacityGate.acquire();
         if (slot.allowed) {
@@ -389,6 +537,7 @@ export function createCarnivalHttpHandler({
               templateId: selected.id,
               gameLabel: selected.label,
               prompt,
+              seriesId: series?.seriesId,
             });
           } catch {
             // The carnival must stay playable even if the configured provider rejects a request.
@@ -399,6 +548,7 @@ export function createCarnivalHttpHandler({
       }
       const created = await service.createInvite(token, {
         templateId: selected.id,
+        seriesId: series?.seriesId,
         prompt,
         game,
         idempotencyKey,
@@ -408,9 +558,9 @@ export function createCarnivalHttpHandler({
         state: publicState(created.state, gameTypes),
       };
     })();
-    inFlightInvites.set(key, promise);
+    inFlightInvites.set(key, { requestFingerprint, promise });
     promise.finally(() => {
-      if (inFlightInvites.get(key) === promise) inFlightInvites.delete(key);
+      if (inFlightInvites.get(key)?.promise === promise) inFlightInvites.delete(key);
     }).catch(() => {});
     return promise;
   }
@@ -458,9 +608,17 @@ export function createCarnivalHttpHandler({
           const publicType = gameTypes.find((item) => item.id === body.templateId);
           if (!selected || !publicType?.enabled) throw new CarnivalError('GAME_TEMPLATE_NOT_ENABLED', 'Game template is not enabled', 400);
           if (!publicType.available) throw new CarnivalError('GAME_TEMPLATE_UNAVAILABLE', 'This game template is not available yet', 409);
-          const preview = buildPromptPreview(carnivalMatchFromState(rawState), selected);
+          const series = selected.id === 'custom' ? exclusiveSeriesForId(body.seriesId) : null;
+          if (selected.id === 'custom' && !series) {
+            throw new CarnivalError('INVALID_GAME_SERIES', 'Unsupported exclusive game series', 400);
+          }
+          if (selected.id !== 'custom' && body.seriesId !== undefined) {
+            throw new CarnivalError('INVALID_GAME_SERIES', 'seriesId is only valid for the custom template', 400);
+          }
+          const preview = buildPromptPreview(carnivalMatchFromState(rawState), selected, { seriesId: series?.seriesId });
           sendJson(response, 200, {
             templateId: selected.id,
+            seriesId: series?.seriesId ?? null,
             label: selected.label,
             description: publicType.description,
             prompt: preview,
@@ -478,7 +636,8 @@ export function createCarnivalHttpHandler({
               throw new CarnivalError('INVALID_IDEMPOTENCY_KEY', 'A valid Idempotency-Key header is required', 400);
             }
             const body = await readJson(request, 8_000);
-            if (!isRecord(body) || typeof body.templateId !== 'string' || typeof body.prompt !== 'string') {
+            if (!isRecord(body) || typeof body.templateId !== 'string' || typeof body.prompt !== 'string' ||
+              (body.seriesId !== undefined && typeof body.seriesId !== 'string')) {
               throw new CarnivalError('INVALID_INPUT', 'Invalid carnival invitation', 400);
             }
             sendJson(response, 201, await createInvitation(token, body, key), requestId);
@@ -502,6 +661,26 @@ export function createCarnivalHttpHandler({
             else if (body.action === 'keyword-wheel.next-follow-up' || body.action.endsWith('.confirm-reveal')) result = await service.getInvite(token, body.inviteId);
             else if (body.action === 'rapid-choice.answer') result = await service.gameAction(token, body.inviteId, { type: 'rapid-answer', questionId: payload.questionId, answer: payload.answer });
             else if (body.action === 'rapid-choice.timeout') result = await service.gameAction(token, body.inviteId, { type: 'rapid-answer', questionId: payload.questionId, answer: 'timeout' });
+            else if (body.action === 'exclusive.answer') result = await service.gameAction(token, body.inviteId, {
+              type: 'exclusive-answer',
+              questionId: payload.questionId,
+              answer: payload.answer,
+              requestId: payload.requestId,
+              expectedRevision: payload.expectedRevision,
+            });
+            else if (body.action === 'exclusive.guess') result = await service.gameAction(token, body.inviteId, {
+              type: 'exclusive-guess',
+              questionId: payload.questionId,
+              guess: payload.guess,
+              requestId: payload.requestId,
+              expectedRevision: payload.expectedRevision,
+            });
+            else if (body.action === 'exclusive.next') result = await service.gameAction(token, body.inviteId, {
+              type: 'exclusive-next',
+              questionId: payload.questionId,
+              requestId: payload.requestId,
+              expectedRevision: payload.expectedRevision,
+            });
             else throw new CarnivalError('INVALID_ACTION', 'Unsupported carnival game action', 400);
             const rawState = result.state ?? await service.getState(token);
             if (body.action === 'join') {

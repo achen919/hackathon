@@ -1,3 +1,10 @@
+import {
+  buildExclusiveMechanics,
+  buildExclusiveSeriesPrompt,
+  publicExclusiveSeriesCatalog,
+  requireExclusiveSeries,
+} from './exclusive-series.mjs';
+
 export const GAME_TEMPLATE_CATALOG = Object.freeze([
   Object.freeze({
     id: 'profile-riddle',
@@ -20,8 +27,8 @@ export const GAME_TEMPLATE_CATALOG = Object.freeze([
   Object.freeze({
     id: 'custom',
     defaultLabel: '专属小游戏',
-    available: false,
-    description: '为团队中的自定义小游戏实现预留的扩展插槽。',
+    available: true,
+    description: '从五个稳定系列中选择一套包装，再根据公开聊天生成三轮轮流猜答的专属题卡。',
   }),
 ]);
 
@@ -40,6 +47,16 @@ const CONTACT_OR_LINK_PATTERNS = [
   /https?:\/\/|www\./i,
 ];
 
+const SENSITIVE_GAME_TOPIC_PATTERN = new RegExp([
+  '手机号|微信号|联系方式|住址|精确地址|身份证|银行卡',
+  '收入|工资|月薪|年薪|薪资|到手|存款|负债|资产|房产|车产|房贷|车贷|经济状况|消费水平',
+  '疾病|病史|服药|看病|住院|手术|慢性病|身体状况|健康状况|长期不舒服|身体.{0,6}不舒服|过敏|抑郁|焦虑|心理咨询|失眠',
+  '性经历|性偏好|宗教信仰|政治立场|生育计划|彩礼|婚前财产',
+  '婚史|离异|离婚|已婚|未婚|丧偶|前任|单亲|有娃|有孩子',
+  '年龄|身高|体重|职业|公司|单位|学校|学历|户籍|籍贯',
+  '和谁一起住|跟谁一起住|独居|合租|室友|住在哪|住哪里|小区|门牌',
+].join('|'), 'i');
+
 const TEMPLATE_GUIDANCE = Object.freeze({
   'profile-riddle': `严格生成“资料猜谜局”：
 - 固定三轮，双方轮流描述对方。
@@ -54,7 +71,11 @@ const TEMPLATE_GUIDANCE = Object.freeze({
 - 生成 3-5 道题，每题必须且只能有两个短选项，适合五秒内凭直觉选择。
 - 从轻松日常到相处偏好逐步深入，不设置正确答案，不把不同选择解释为不合适。
 - matchedFollowUp / differentFollowUp 都要明确邀请双方聊“为什么我或对方选择 A / B”。`,
-  custom: `这是预留的“专属小游戏”类型。保持通用三轮安全题卡结构，不假设尚未接入的前端机制。`,
+  custom: `严格生成“专属小游戏”：
+- templateId 固定为 custom，并严格遵循服务端指定的 seriesId 和系列内容骨架。
+- 固定三轮，每轮由一方私密作答、另一方猜测，下一轮交换角色。
+- 每轮提供 3-4 个互斥、无优劣的短选项；猜中是同频高光，猜错是新话题，不累计分数。
+- 只抽象公开聊天主题和允许的非敏感信号，不复述原始资料、记忆或敏感原句。`,
 });
 
 function cleanLabel(value) {
@@ -76,6 +97,7 @@ export function publicGameTypes(gameTypes) {
       enabled: value.enabled !== false,
       available: template.available && value.enabled !== false,
       description: template.description,
+      ...(template.id === 'custom' ? { series: publicExclusiveSeriesCatalog() } : {}),
     };
   }).filter(Boolean);
 }
@@ -98,9 +120,12 @@ function relationshipStage(messageCount) {
   return '已经有连续对话，可以在不越界的前提下多问一层原因';
 }
 
-export function buildPromptPreview(match, gameType) {
+export function buildPromptPreview(match, gameType, selection = {}) {
   const template = templateForId(gameType.id);
   if (!template) throw new Error('Unknown game template');
+  if (template.id === 'custom') {
+    return buildExclusiveSeriesPrompt(match, requireExclusiveSeries(selection.seriesId).seriesId);
+  }
   const topics = publicTopics(match);
   const topicLine = topics.length > 0 ? `公开聊天中出现过：${topics.join('、')}` : '公开聊天主题较少，请从轻松日常开始';
   const stage = relationshipStage(match.messages.length);
@@ -124,11 +149,20 @@ export function hasUnsafeContactOrLink(value) {
   return CONTACT_OR_LINK_PATTERNS.some((pattern) => pattern.test(value));
 }
 
-export function templateGuidance(templateId) {
-  return TEMPLATE_GUIDANCE[templateId] ?? TEMPLATE_GUIDANCE.custom;
+export function hasUnsafeGameText(value) {
+  return typeof value === 'string' && (
+    SENSITIVE_GAME_TOPIC_PATTERN.test(value) || hasUnsafeContactOrLink(value)
+  );
 }
 
-export function isTemplateShapeValid(game, templateId) {
+export function templateGuidance(templateId, seriesId) {
+  if (templateId !== 'custom') return TEMPLATE_GUIDANCE[templateId] ?? TEMPLATE_GUIDANCE.custom;
+  if (!seriesId) return TEMPLATE_GUIDANCE.custom;
+  const series = requireExclusiveSeries(seriesId);
+  return `${TEMPLATE_GUIDANCE.custom}\n\n本次系列：${series.title}\n系列 ID：${series.seriesId}\n版本键：${series.templateKey}\n${series.generationBrief}`;
+}
+
+export function isTemplateShapeValid(game, templateId, seriesId) {
   if (!game || !Array.isArray(game.questions)) return false;
   if (game.questions.length < 3 || game.questions.length > 5) return false;
   if (templateId === 'rapid-choice') {
@@ -142,6 +176,12 @@ export function isTemplateShapeValid(game, templateId) {
   if (templateId === 'keyword-wheel') {
     const labels = game.questions.map((question) => question.label?.trim()).filter(Boolean);
     return labels.length === game.questions.length && new Set(labels).size === labels.length;
+  }
+  if (templateId === 'custom') {
+    requireExclusiveSeries(seriesId);
+    return game.questions.length === 3 && game.questions.every(
+      (question) => Array.isArray(question.options) && question.options.length >= 3 && question.options.length <= 4,
+    );
   }
   return true;
 }
@@ -160,7 +200,7 @@ function uniqueStrings(values, limit) {
   return result;
 }
 
-export function buildTemplateMechanics(game, templateId) {
+export function buildTemplateMechanics(game, templateId, seriesId) {
   if (templateId === 'profile-riddle') {
     return {
       kind: 'profile-riddle',
@@ -185,5 +225,6 @@ export function buildTemplateMechanics(game, templateId) {
   if (templateId === 'rapid-choice') {
     return { kind: 'rapid-choice', roundSeconds: 5 };
   }
+  if (templateId === 'custom') return buildExclusiveMechanics(requireExclusiveSeries(seriesId).seriesId);
   return { kind: 'custom' };
 }

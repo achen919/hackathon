@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { CarnivalExclusiveSeriesId } from './carnival-exclusive';
 
 export type CarnivalGender = 'female' | 'male';
 export type CarnivalSessionStatus = 'queued' | 'matched';
@@ -50,6 +51,8 @@ export interface CarnivalInvite {
   inviteId: string;
   creatorId: string;
   templateId: string;
+  /** Identifies the exact sub-series for a custom exclusive game. */
+  seriesId?: CarnivalExclusiveSeriesId;
   gameLabel: string;
   title: string;
   promptPreview: string;
@@ -100,6 +103,7 @@ export interface CarnivalJoinResponse {
 
 export interface CarnivalPromptPreview {
   templateId: string;
+  seriesId?: CarnivalExclusiveSeriesId;
   label: string;
   description: string;
   prompt: string;
@@ -108,6 +112,8 @@ export interface CarnivalPromptPreview {
 
 export interface CarnivalCreateInviteInput {
   templateId: string;
+  /** Required when templateId is custom. */
+  seriesId?: CarnivalExclusiveSeriesId;
   prompt: string;
   /** Sent as an Idempotency-Key header, not included in the JSON body. */
   idempotencyKey: string;
@@ -133,7 +139,12 @@ export interface CarnivalApi {
   join(input: CarnivalJoinInput, signal?: AbortSignal): Promise<CarnivalJoinResponse>;
   getState(token: string, signal?: AbortSignal): Promise<CarnivalState>;
   sendMessage(token: string, content: string, signal?: AbortSignal): Promise<CarnivalState>;
-  getPrompt(token: string, templateId: string, signal?: AbortSignal): Promise<CarnivalPromptPreview>;
+  getPrompt(
+    token: string,
+    templateId: string,
+    signal?: AbortSignal,
+    seriesId?: CarnivalExclusiveSeriesId,
+  ): Promise<CarnivalPromptPreview>;
   createInvite(
     token: string,
     input: CarnivalCreateInviteInput,

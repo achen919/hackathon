@@ -67,7 +67,7 @@ function templateSteps(templateId: GameTemplateId, questionLabels: string[]) {
   if (templateId === 'profile-riddle') return ['选择三个关键词', '交换聊天视角', '一起揭晓印象'];
   if (templateId === 'keyword-wheel') return ['转动关键词转盘', '抽中一条追问', '把话题带回聊天'];
   if (templateId === 'rapid-choice') return questionLabels.length > 0 ? questionLabels : ['五秒凭直觉选择', '交换视角作答', '一起查看答案'];
-  return ['稳定接口已预留', '等待团队模块接入'];
+  return ['进入双人游园会', '从五个系列里选一局', '双方设备同步揭晓'];
 }
 
 export default function App() {
@@ -221,11 +221,19 @@ export default function App() {
   }
 
   function chooseTemplate(templateId: GameTemplateId) {
+    if (templateId === 'custom') {
+      window.location.href = '/carnival';
+      return;
+    }
     setRollingLocked(true);
     selectRollingTemplate(templateId);
   }
 
   async function loadPrompt(templateId: GameTemplateId) {
+    if (templateId === 'custom') {
+      window.location.href = '/carnival';
+      return;
+    }
     const option = visibleGameTypes.find((item) => item.id === templateId) ?? selectedOption;
     const local = buildLocalPromptPreview({ ...match, messages, message_count: messages.length }, option);
     const runVersion = ++promptVersionRef.current;
@@ -259,6 +267,10 @@ export default function App() {
 
   function openPromptStudio(templateId: GameTemplateId = selectedTemplateId) {
     if (!gameEligible) return;
+    if (templateId === 'custom') {
+      window.location.href = '/carnival';
+      return;
+    }
     setGameOpen(false);
     setPromptStudioOpen(true);
     void loadPrompt(templateId);
@@ -277,6 +289,10 @@ export default function App() {
   }
 
   async function generateAndStart() {
+    if (selectedOption.id === 'custom') {
+      window.location.href = '/carnival';
+      return;
+    }
     if (!selectedOption.available || promptText.trim().length < 20 || promptStatus === 'generating') return;
     const fallback = buildFallbackGame({ ...match, messages, message_count: messages.length }, selectedOption.id, selectedOption.label);
     if (aiStatus?.configured === false || !gameContextId) {
@@ -319,6 +335,10 @@ export default function App() {
 
   function startOrResumeGame() {
     if (!gameEligible || gameGeneration === 'loading') return;
+    if (selectedOption.id === 'custom') {
+      window.location.href = '/carnival';
+      return;
+    }
     if (sessionStatus === 'playing') {
       setGameOpen(true);
       return;
@@ -368,13 +388,13 @@ export default function App() {
     'profile-riddle': '双方各选 3 个词 · 一起揭晓',
     'keyword-wheel': '转一次 · 把话题自然聊深',
     'rapid-choice': `${displayGame.questions.length} 题 · 每题 5 秒 · 一起揭晓`,
-    custom: '扩展模板 · 等待团队模块接入',
+    custom: '5 个专属系列 · 游园会双端同步',
   };
   const firstStepNote: Record<GameTemplateId, string> = {
     'profile-riddle': '双方分别选词，揭晓前彼此不可见',
     'keyword-wheel': '转盘从公开话题中随机抽取一个追问',
     'rapid-choice': '双方分别作答，答案不会提前暴露',
-    custom: '稳定扩展 ID 已预留',
+    custom: '进入游园会后选择系列并编辑 Prompt',
   };
   const gameCardStatus = gameGeneration === 'loading'
     ? 'AI 正在按 Prompt 临场出题…'

@@ -1,12 +1,14 @@
 import { createHash, randomBytes, randomInt as cryptoRandomInt, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { hasUnsafeContactOrLink } from './game-templates.mjs';
+import { hasUnsafeContactOrLink, hasUnsafeGameText } from './game-templates.mjs';
+import { exclusiveSeriesForId, requireExclusiveSeries } from './exclusive-series.mjs';
 
 export const CARNIVAL_TEMPLATE_IDS = Object.freeze([
   'profile-riddle',
   'keyword-wheel',
   'rapid-choice',
+  'custom',
 ]);
 
 const STATE_VERSION = 1;
@@ -29,12 +31,14 @@ const TEMPLATE_LABELS = Object.freeze({
   'profile-riddle': '资料猜谜局',
   'keyword-wheel': '关键词深挖',
   'rapid-choice': '极限2选1',
+  custom: '专属小游戏',
 });
 
 const TEMPLATE_PROMPTS = Object.freeze({
   'profile-riddle': '生成三个中性、非敏感的关键词选择组，让双方各选三个词描述对方；答案在双方都提交前必须保密。',
   'keyword-wheel': '生成三到八个来自公开聊天共同点的安全转盘话题，每个话题附一条轻松追问。',
   'rapid-choice': '生成三到五道五秒二选一，选项没有优劣；双方独立完成后，再一起查看答案并讨论为什么选择 A 或 B。',
+  custom: '从稳定专属系列生成三轮轮流猜答；每轮由一方私密作答、另一方猜测，猜测锁定后才揭晓本轮。',
 });
 
 const DEFAULT_LIMITS = Object.freeze({
@@ -120,8 +124,37 @@ function normalizeTemplateId(value) {
   return value;
 }
 
+function normalizeSeriesId(templateId, value) {
+  if (templateId !== 'custom') {
+    if (value !== undefined && value !== null) {
+      fail('INVALID_GAME_SERIES', 'seriesId is only valid for the custom template', 400);
+    }
+    return null;
+  }
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (!exclusiveSeriesForId(normalized)) {
+    fail('INVALID_GAME_SERIES', 'Unsupported exclusive game series', 400);
+  }
+  return normalized;
+}
+
 function hashToken(token) {
   return createHash('sha256').update(token).digest('base64url');
+}
+
+function inviteRequestFingerprint(templateId, seriesId, prompt) {
+  return hashToken(JSON.stringify([templateId, seriesId ?? null, prompt]));
+}
+
+function exclusiveActionRequestFingerprint(input) {
+  const questionId = typeof input?.questionId === 'string' ? input.questionId.trim() : null;
+  if (input?.type === 'exclusive-answer') {
+    return hashToken(JSON.stringify([input.type, questionId, input.answer]));
+  }
+  if (input?.type === 'exclusive-guess') {
+    return hashToken(JSON.stringify([input.type, questionId, input.guess]));
+  }
+  return hashToken(JSON.stringify([input?.type ?? null, questionId]));
 }
 
 function emptyState() {
@@ -201,7 +234,7 @@ function safeJsonClone(value, maxBytes) {
 function hasUnsafeGameContent(value, key = '') {
   if (typeof value === 'string') {
     if (NON_VISIBLE_GAME_KEYS.has(key)) return false;
-    return hasUnsafeContactOrLink(value);
+    return hasUnsafeGameText(value);
   }
   if (Array.isArray(value)) return value.some((item) => hasUnsafeGameContent(item, key));
   if (!isRecord(value)) return false;
@@ -226,7 +259,7 @@ function uniqueStrings(value, name, {
   return normalized;
 }
 
-function validateCarnivalGameDefinition(templateId, value, limits) {
+function validateCarnivalGameDefinition(templateId, seriesId, value, limits) {
   const game = safeJsonClone(value, limits.maxGameBytes);
   if (!isRecord(game)) fail('INVALID_GAME', 'game must be an object', 400);
   if (hasUnsafeGameContent(game)) {
@@ -234,6 +267,9 @@ function validateCarnivalGameDefinition(templateId, value, limits) {
   }
   if (game.templateId !== undefined && game.templateId !== templateId) {
     fail('INVALID_GAME', 'game template id does not match the invite', 400);
+  }
+  if (templateId === 'custom' && game.seriesId !== seriesId) {
+    fail('INVALID_GAME', 'game series id does not match the invite', 400);
   }
   normalizeString(game.title, 'game.title', { min: 2, max: 100 });
 
@@ -280,6 +316,35 @@ function validateCarnivalGameDefinition(templateId, value, limits) {
         maxLength: 100,
       });
     }
+  } else if (templateId === 'custom') {
+    const series = requireExclusiveSeries(seriesId);
+    if (
+      game.mechanics?.kind !== 'exclusive-series' ||
+      game.mechanics?.seriesId !== series.seriesId ||
+      game.mechanics?.templateKey !== series.templateKey
+    ) {
+      fail('INVALID_GAME', 'exclusive-series mechanics do not match the selected series', 400);
+    }
+    if (!Array.isArray(game.questions) || game.questions.length !== 3) {
+      fail('INVALID_GAME', 'exclusive-series must contain exactly three questions', 400);
+    }
+    const ids = new Set();
+    for (const [index, question] of game.questions.entries()) {
+      if (!isRecord(question)) fail('INVALID_GAME', `exclusive question ${index} is invalid`, 400);
+      const id = normalizeId(question.id, `game.questions[${index}].id`);
+      if (ids.has(id)) fail('INVALID_GAME', 'exclusive question ids must be unique', 400);
+      ids.add(id);
+      normalizeString(question.label, `game.questions[${index}].label`, { min: 2, max: 24 });
+      normalizeString(question.source, `game.questions[${index}].source`, { min: 4, max: 100 });
+      normalizeString(question.prompt, `game.questions[${index}].prompt`, { min: 8, max: 140 });
+      uniqueStrings(question.options, `game.questions[${index}].options`, {
+        minItems: 3,
+        maxItems: 4,
+        maxLength: 60,
+      });
+      normalizeString(question.matchedFollowUp, `game.questions[${index}].matchedFollowUp`, { min: 6, max: 140 });
+      normalizeString(question.differentFollowUp, `game.questions[${index}].differentFollowUp`, { min: 6, max: 140 });
+    }
   }
   return game;
 }
@@ -310,7 +375,38 @@ function newInvitePrivateState() {
     rapidCurrentQuestionIndex: null,
     rapidQuestionStartedAt: null,
     rapidQuestionDeadlineAt: null,
+    exclusiveAnswers: {},
+    exclusiveGuesses: {},
   };
+}
+
+function exclusiveSharedState(invite) {
+  if (!isRecord(invite.shared) || !isRecord(invite.shared.exclusive)) {
+    invite.shared = {
+      ...(isRecord(invite.shared) ? invite.shared : {}),
+      exclusive: {
+        starterId: invite.creatorId,
+        roundIndex: 0,
+        revealedRounds: [],
+      },
+    };
+  }
+  return invite.shared.exclusive;
+}
+
+function exclusiveRound(invite, room) {
+  const shared = exclusiveSharedState(invite);
+  const question = invite.game.questions[shared.roundIndex] ?? null;
+  if (!question) return { shared, question: null, answerer: null, guesser: null };
+  const starterIndex = Math.max(0, room.members.findIndex((member) => member.id === shared.starterId));
+  const answerer = room.members[(starterIndex + shared.roundIndex) % room.members.length];
+  const guesser = room.members.find((member) => member.id !== answerer.id) ?? null;
+  return { shared, question, answerer, guesser };
+}
+
+function exclusiveRevealedResult(invite, questionId) {
+  const revealed = invite.shared?.exclusive?.revealedRounds;
+  return Array.isArray(revealed) ? revealed.find((result) => result.questionId === questionId) ?? null : null;
 }
 
 function invitePrivateState(invite, participantId) {
@@ -334,8 +430,12 @@ function startRapidQuestions(privateState, timestamp) {
 }
 
 function publicAction(action, invite, participantId) {
-  const privateAction = action.type === 'profile-submit' || action.type === 'rapid-answer';
-  if (privateAction && invite.status !== 'revealed' && action.actorId !== participantId) {
+  const privateAction = action.type === 'profile-submit' || action.type === 'rapid-answer' ||
+    action.type === 'exclusive-answer' || action.type === 'exclusive-guess';
+  const exclusiveRevealed = action.type.startsWith('exclusive-') && action.payload?.questionId
+    ? Boolean(exclusiveRevealedResult(invite, action.payload.questionId))
+    : false;
+  if (privateAction && invite.status !== 'revealed' && !exclusiveRevealed && action.actorId !== participantId) {
     return {
       id: action.id,
       actorId: action.actorId,
@@ -344,11 +444,19 @@ function publicAction(action, invite, participantId) {
       hidden: true,
     };
   }
-  return clonePublic(action);
+  const result = clonePublic(action);
+  delete result.requestFingerprint;
+  return result;
 }
 
 function buildReveal(invite, room) {
   if (invite.status !== 'revealed') return null;
+  if (invite.templateId === 'custom') {
+    return {
+      revealedAt: invite.revealedAt,
+      rounds: clonePublic(invite.shared?.exclusive?.revealedRounds ?? []),
+    };
+  }
   const answers = {};
   for (const member of room.members) {
     const privateState = invitePrivateStateForView(invite, member.id);
@@ -368,6 +476,11 @@ function publicInviteStatus(status) {
   return 'ready';
 }
 
+function inviteRevision(invite) {
+  return (Array.isArray(invite.joinedParticipantIds) ? invite.joinedParticipantIds.length : 0) +
+    (Array.isArray(invite.actions) ? invite.actions.length : 0);
+}
+
 function scopedInvite(invite, room, participantId) {
   const privateState = invitePrivateStateForView(invite, participantId);
   const peer = peerMember(room, participantId);
@@ -385,6 +498,22 @@ function scopedInvite(invite, room, participantId) {
           peerAnswered: Object.keys(peerPrivate?.rapidAnswers ?? {}).length,
           totalQuestions: invite.game.questions.length,
         }
+      : invite.templateId === 'custom'
+        ? (() => {
+            const round = exclusiveRound(invite, room);
+            const questionId = round.question?.id ?? null;
+            const answererState = round.answerer ? invitePrivateStateForView(invite, round.answerer.id) : null;
+            const guesserState = round.guesser ? invitePrivateStateForView(invite, round.guesser.id) : null;
+            return {
+              roundIndex: round.shared.roundIndex,
+              totalRounds: invite.game.questions.length,
+              questionId,
+              answererId: round.answerer?.id ?? null,
+              guesserId: round.guesser?.id ?? null,
+              answerSubmitted: questionId ? Number.isInteger(answererState?.exclusiveAnswers?.[questionId]) : false,
+              guessSubmitted: questionId ? Number.isInteger(guesserState?.exclusiveGuesses?.[questionId]) : false,
+            };
+          })()
       : null;
   const ownPrivateState = invite.templateId === 'profile-riddle'
     ? {
@@ -402,6 +531,11 @@ function scopedInvite(invite, room, participantId) {
           questionStartedAt: privateState.rapidQuestionStartedAt,
           deadlineAt: privateState.rapidQuestionDeadlineAt,
         }
+      : invite.templateId === 'custom'
+        ? {
+            answers: clonePublic(privateState.exclusiveAnswers),
+            guesses: clonePublic(privateState.exclusiveGuesses),
+          }
       : null;
 
   const definition = clonePublic(invite.game);
@@ -410,8 +544,10 @@ function scopedInvite(invite, room, participantId) {
   return {
     id: invite.id,
     inviteId: invite.id,
+    revision: inviteRevision(invite),
     creatorId: invite.creatorId,
     templateId: invite.templateId,
+    seriesId: invite.seriesId ?? null,
     gameLabel: TEMPLATE_LABELS[invite.templateId],
     title: definition.title,
     prompt: invite.prompt,
@@ -768,6 +904,7 @@ export function createCarnivalService(options = {}) {
 
   async function buildPrompt(token, input) {
     const templateId = normalizeTemplateId(input?.templateId);
+    const seriesId = normalizeSeriesId(templateId, input?.seriesId);
     return transact(() => {
       const participant = participantForToken(token);
       const room = activeRoomFor(participant);
@@ -780,12 +917,17 @@ export function createCarnivalService(options = {}) {
         .join(' ');
       const topics = SAFE_TOPICS.filter((topic) => publicChat.includes(topic)).slice(0, 4);
       const topicLine = topics.length > 0 ? topics.join('、') : '轻松日常和彼此的聊天节奏';
-      const prompt = `请为这两位游园会搭子生成一局「${TEMPLATE_LABELS[templateId]}」。\n\n当前双方已经交换 ${room.textMessageCount} 条文字消息；只围绕公开聊天中的「${topicLine}」展开。\n\n${TEMPLATE_PROMPTS[templateId]}\n\n不要引用联系方式、住址、收入、健康或其他敏感信息，不评价匹配度，所有答案都没有优劣。`;
+      const series = seriesId ? requireExclusiveSeries(seriesId) : null;
+      const seriesLine = series
+        ? `\n\n专属系列：${series.title}（${series.seriesId}）\n${series.generationBrief}`
+        : '';
+      const prompt = `请为这两位游园会搭子生成一局「${TEMPLATE_LABELS[templateId]}」。\n\n当前双方已经交换 ${room.textMessageCount} 条文字消息；只围绕公开聊天中的「${topicLine}」展开。\n\n${TEMPLATE_PROMPTS[templateId]}${seriesLine}\n\n不要引用联系方式、住址、收入、健康或其他敏感信息，不评价匹配度，所有答案都没有优劣。`;
       return {
         changed: false,
         result: () => ({
           revision: state.revision,
           templateId,
+          seriesId,
           label: TEMPLATE_LABELS[templateId],
           description: TEMPLATE_PROMPTS[templateId],
           prompt,
@@ -797,15 +939,17 @@ export function createCarnivalService(options = {}) {
 
   async function createInvite(token, input) {
     const templateId = normalizeTemplateId(input?.templateId);
+    const seriesId = normalizeSeriesId(templateId, input?.seriesId);
     const prompt = normalizeString(input?.prompt, 'prompt', { min: 20, max: 1_500 });
     if (hasUnsafeContactOrLink(prompt)) {
       fail('INVALID_INPUT', 'prompt must not contain contact details or links', 400);
     }
-    const game = validateCarnivalGameDefinition(templateId, input?.game, limits);
+    const game = validateCarnivalGameDefinition(templateId, seriesId, input?.game, limits);
     const idempotencyKey = input?.idempotencyKey === undefined || input?.idempotencyKey === null
       ? null
       : normalizeString(input.idempotencyKey, 'idempotencyKey', { min: 20, max: 120 });
     const idempotencyKeyHash = idempotencyKey === null ? null : hashToken(idempotencyKey);
+    const requestFingerprint = inviteRequestFingerprint(templateId, seriesId, prompt);
     return transact((timestamp) => {
       const participant = participantForToken(token);
       const room = activeRoomFor(participant);
@@ -818,6 +962,9 @@ export function createCarnivalService(options = {}) {
             (item) => item.creatorId === participant.id && item.idempotencyKeyHash === idempotencyKeyHash,
           );
       if (existingInvite) {
+        if (existingInvite.requestFingerprint && existingInvite.requestFingerprint !== requestFingerprint) {
+          fail('IDEMPOTENCY_CONFLICT', 'Idempotency key was already used for another invitation', 409);
+        }
         return {
           changed: false,
           result: () => ({
@@ -834,13 +981,17 @@ export function createCarnivalService(options = {}) {
         id: makeId('invite'),
         creatorId: participant.id,
         templateId,
+        seriesId,
         prompt,
         game,
         idempotencyKeyHash,
+        requestFingerprint,
         status: 'open',
         joinedParticipantIds: [participant.id],
         privateByParticipant: {},
-        shared: null,
+        shared: templateId === 'custom'
+          ? { exclusive: { starterId: participant.id, roundIndex: 0, revealedRounds: [] } }
+          : null,
         actions: [],
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -855,6 +1006,7 @@ export function createCarnivalService(options = {}) {
         senderId: participant.id,
         inviteId: invite.id,
         templateId,
+        seriesId,
         createdAt: timestamp,
       });
       touchRoom(room, timestamp, limits.roomTtlMs);
@@ -870,7 +1022,7 @@ export function createCarnivalService(options = {}) {
     });
   }
 
-  async function getInviteByIdempotencyKey(token, idempotencyKey) {
+  async function getInviteByIdempotencyKey(token, idempotencyKey, input = null) {
     const normalizedKey = normalizeString(idempotencyKey, 'idempotencyKey', { min: 20, max: 120 });
     const idempotencyKeyHash = hashToken(normalizedKey);
     return transact(() => {
@@ -880,6 +1032,15 @@ export function createCarnivalService(options = {}) {
         (item) => item.creatorId === participant.id && item.idempotencyKeyHash === idempotencyKeyHash,
       );
       if (!invite) return { changed: false, result: null };
+      if (input) {
+        const templateId = normalizeTemplateId(input.templateId);
+        const seriesId = normalizeSeriesId(templateId, input.seriesId);
+        const prompt = normalizeString(input.prompt, 'prompt', { min: 20, max: 1_500 });
+        const requestFingerprint = inviteRequestFingerprint(templateId, seriesId, prompt);
+        if (invite.requestFingerprint && invite.requestFingerprint !== requestFingerprint) {
+          fail('IDEMPOTENCY_CONFLICT', 'Idempotency key was already used for another invitation', 409);
+        }
+      }
       return {
         changed: false,
         result: () => ({
@@ -941,7 +1102,15 @@ export function createCarnivalService(options = {}) {
     });
   }
 
-  function appendAction(invite, actorId, type, payload, timestamp) {
+  function appendAction(
+    invite,
+    actorId,
+    type,
+    payload,
+    timestamp,
+    requestId = null,
+    requestFingerprint = null,
+  ) {
     if (invite.actions.length >= limits.maxActionsPerInvite) {
       fail('ACTION_LIMIT', 'Carnival invite action limit has been reached', 429);
     }
@@ -950,6 +1119,8 @@ export function createCarnivalService(options = {}) {
       actorId,
       type,
       payload: clonePublic(payload),
+      ...(requestId ? { requestId } : {}),
+      ...(requestFingerprint ? { requestFingerprint } : {}),
       createdAt: timestamp,
     };
     invite.actions.push(action);
@@ -967,6 +1138,40 @@ export function createCarnivalService(options = {}) {
       const invite = inviteFor(room, inviteId);
       if (!invite.joinedParticipantIds.includes(participant.id) || invite.joinedParticipantIds.length !== room.members.length) {
         fail('INVITE_NOT_JOINED', 'Both participants must join this invite first', 409);
+      }
+      const exclusiveAction = input.type === 'exclusive-answer' || input.type === 'exclusive-guess' || input.type === 'exclusive-next';
+      let exclusiveRequestId = null;
+      let exclusiveRequestFingerprint = null;
+      if (exclusiveAction) {
+        exclusiveRequestId = normalizeString(input.requestId, 'requestId', { min: 8, max: 120 });
+        if (!/^[A-Za-z0-9_-]+$/.test(exclusiveRequestId)) {
+          fail('INVALID_ACTION', 'requestId must be base64url text', 400);
+        }
+        exclusiveRequestFingerprint = exclusiveActionRequestFingerprint(input);
+        const replay = invite.actions.find(
+          (item) => item.actorId === participant.id && item.requestId === exclusiveRequestId,
+        );
+        if (replay) {
+          const replayFingerprint = replay.requestFingerprint ?? exclusiveActionRequestFingerprint({
+            type: replay.type,
+            ...replay.payload,
+          });
+          if (replayFingerprint !== exclusiveRequestFingerprint) {
+            fail('IDEMPOTENCY_CONFLICT', 'requestId was already used for another game action', 409);
+          }
+          return {
+            changed: false,
+            result: () => ({
+              action: publicAction(replay, invite, participant.id),
+              invite: scopedInvite(invite, room, participant.id),
+              state: stateForParticipant(state, participant),
+              reused: true,
+            }),
+          };
+        }
+        if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision !== inviteRevision(invite)) {
+          fail('REVISION_CONFLICT', 'Carnival state changed; refresh before retrying this action', 409);
+        }
       }
       if (invite.status === 'revealed') fail('GAME_COMPLETE', 'Carnival game is already revealed', 409);
       let action;
@@ -1055,6 +1260,112 @@ export function createCarnivalService(options = {}) {
           invite.status = 'revealed';
           invite.revealedAt = timestamp;
         }
+      } else if (input.type === 'exclusive-answer') {
+        if (invite.templateId !== 'custom') fail('INVALID_ACTION', 'Action does not match the game template', 400);
+        const round = exclusiveRound(invite, room);
+        if (!round.question || !round.answerer || !round.guesser) {
+          fail('GAME_COMPLETE', 'Exclusive game has no remaining round', 409);
+        }
+        const questionId = normalizeId(input.questionId, 'questionId');
+        if (questionId !== round.question.id) {
+          fail('INVALID_ACTION_ORDER', 'Exclusive answer does not match the current round', 409);
+        }
+        if (participant.id !== round.answerer.id) {
+          fail('WRONG_GAME_ROLE', 'Only the current answerer can submit this answer', 403);
+        }
+        if (!Number.isInteger(input.answer) || input.answer < 0 || input.answer >= round.question.options.length) {
+          fail('INVALID_ACTION', 'Exclusive answer is outside this question options', 400);
+        }
+        const privateState = invitePrivateState(invite, participant.id);
+        if (Number.isInteger(privateState.exclusiveAnswers[questionId])) {
+          fail('ALREADY_SUBMITTED', 'Exclusive answer was already submitted', 409);
+        }
+        privateState.exclusiveAnswers[questionId] = input.answer;
+        action = appendAction(
+          invite,
+          participant.id,
+          input.type,
+          { questionId, answer: input.answer },
+          timestamp,
+          exclusiveRequestId,
+          exclusiveRequestFingerprint,
+        );
+      } else if (input.type === 'exclusive-guess') {
+        if (invite.templateId !== 'custom') fail('INVALID_ACTION', 'Action does not match the game template', 400);
+        const round = exclusiveRound(invite, room);
+        if (!round.question || !round.answerer || !round.guesser) {
+          fail('GAME_COMPLETE', 'Exclusive game has no remaining round', 409);
+        }
+        const questionId = normalizeId(input.questionId, 'questionId');
+        if (questionId !== round.question.id) {
+          fail('INVALID_ACTION_ORDER', 'Exclusive guess does not match the current round', 409);
+        }
+        if (participant.id !== round.guesser.id) {
+          fail('WRONG_GAME_ROLE', 'Only the current guesser can submit this guess', 403);
+        }
+        if (!Number.isInteger(input.guess) || input.guess < 0 || input.guess >= round.question.options.length) {
+          fail('INVALID_ACTION', 'Exclusive guess is outside this question options', 400);
+        }
+        const answererState = invitePrivateState(invite, round.answerer.id);
+        const answer = answererState.exclusiveAnswers[questionId];
+        if (!Number.isInteger(answer)) {
+          fail('ANSWER_NOT_READY', 'Wait for the answerer before submitting a guess', 409);
+        }
+        const privateState = invitePrivateState(invite, participant.id);
+        if (Number.isInteger(privateState.exclusiveGuesses[questionId])) {
+          fail('ALREADY_SUBMITTED', 'Exclusive guess was already submitted', 409);
+        }
+        privateState.exclusiveGuesses[questionId] = input.guess;
+        action = appendAction(
+          invite,
+          participant.id,
+          input.type,
+          { questionId, guess: input.guess },
+          timestamp,
+          exclusiveRequestId,
+          exclusiveRequestFingerprint,
+        );
+        round.shared.revealedRounds.push({
+          roundIndex: round.shared.roundIndex,
+          questionId,
+          answererId: round.answerer.id,
+          guesserId: round.guesser.id,
+          answer,
+          guess: input.guess,
+          matched: answer === input.guess,
+          revealedAt: timestamp,
+        });
+      } else if (input.type === 'exclusive-next') {
+        if (invite.templateId !== 'custom') fail('INVALID_ACTION', 'Action does not match the game template', 400);
+        const round = exclusiveRound(invite, room);
+        if (!round.question) fail('GAME_COMPLETE', 'Exclusive game has no remaining round', 409);
+        const questionId = normalizeId(input.questionId, 'questionId');
+        if (questionId !== round.question.id) {
+          fail('INVALID_ACTION_ORDER', 'Exclusive next does not match the current round', 409);
+        }
+        if (!exclusiveRevealedResult(invite, questionId)) {
+          fail('ROUND_NOT_REVEALED', 'Both answer and guess are required before the next round', 409);
+        }
+        const finalRound = round.shared.roundIndex >= invite.game.questions.length - 1;
+        if (finalRound) {
+          invite.status = 'revealed';
+          invite.revealedAt = timestamp;
+        } else {
+          round.shared.roundIndex += 1;
+        }
+        action = appendAction(
+          invite,
+          participant.id,
+          input.type,
+          {
+            questionId,
+            nextQuestionId: finalRound ? null : invite.game.questions[round.shared.roundIndex].id,
+            completed: finalRound,
+          },
+          timestamp,
+          exclusiveRequestId,
+          exclusiveRequestFingerprint,
+        );
       } else {
         fail('INVALID_ACTION', 'Unsupported carnival game action', 400);
       }

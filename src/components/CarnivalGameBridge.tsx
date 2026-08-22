@@ -8,6 +8,13 @@ import {
   type CarnivalInvitePublicState,
   type CarnivalStableTemplateId,
 } from './CarnivalGameDialog';
+import {
+  CarnivalExclusiveGameDialog,
+  type CarnivalExclusiveAction,
+  type CarnivalExclusiveInvitePublicState,
+  type CarnivalExclusivePublicState,
+} from './CarnivalExclusiveGameDialog';
+import { exclusiveSeriesById } from '../carnival-exclusive';
 
 const TEMPLATE_IDS = new Set<CarnivalStableTemplateId>([
   'profile-riddle',
@@ -56,6 +63,58 @@ function inviteState(context: CarnivalNetworkGameContext): CarnivalInvitePublicS
   };
 }
 
+function exclusiveInviteState(context: CarnivalNetworkGameContext): CarnivalExclusiveInvitePublicState | null {
+  const invitation = context.invitation;
+  if (invitation.templateId !== 'custom') return null;
+  const definition = invitation.game?.definition;
+  const definitionSeriesId = definition && typeof definition === 'object' && 'seriesId' in definition
+    ? (definition as { seriesId?: unknown }).seriesId
+    : undefined;
+  const series = exclusiveSeriesById(invitation.seriesId ?? definitionSeriesId);
+  if (!series) return null;
+  const status = invitation.status === 'completed'
+    ? 'completed'
+    : invitation.status === 'expired'
+      ? 'expired'
+      : invitation.status === 'failed'
+        ? 'cancelled'
+        : invitation.joinedParticipantIds.length >= 2 || invitation.status === 'playing'
+          ? 'active'
+          : 'waiting';
+  return {
+    inviteId: invitation.inviteId,
+    revision: invitation.game?.version ?? 0,
+    status,
+    templateId: 'custom',
+    seriesId: series.id,
+    createdBy: invitation.creatorId === context.self.participantId ? 'a' : 'b',
+    participants: {
+      a: {
+        nickname: context.self.nickname,
+        joined: invitation.joinedParticipantIds.includes(context.self.participantId),
+        online: true,
+      },
+      b: {
+        nickname: context.partner.nickname,
+        joined: invitation.joinedParticipantIds.includes(context.partner.participantId),
+        online: true,
+      },
+    },
+  };
+}
+
+function isExclusiveGameState(
+  value: unknown,
+  inviteId: string,
+  seriesId: string,
+): value is CarnivalExclusivePublicState {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<CarnivalExclusivePublicState>;
+  return candidate.inviteId === inviteId && candidate.templateId === 'custom' &&
+    candidate.seriesId === seriesId && typeof candidate.revision === 'number' &&
+    typeof candidate.serverNowMs === 'number';
+}
+
 export function CarnivalGameBridge({
   context,
   onUseChatPrompt,
@@ -67,19 +126,26 @@ export function CarnivalGameBridge({
   const [actionError, setActionError] = useState<string | null>(null);
   const joiningRef = useRef(false);
   const invite = useMemo(() => inviteState(context), [context]);
+  const exclusiveInvite = useMemo(() => exclusiveInviteState(context), [context]);
   const gameState = invite && isGameState(
     context.invitation.game?.definition,
     context.inviteId,
     context.invitation.templateId,
   ) ? context.invitation.game.definition : null;
-  const needsJoin = Boolean(invite && (
-    !invite.participants.a.joined ||
-    (invite.templateId === 'rapid-choice' && invite.status === 'active' && gameState &&
+  const exclusiveGameState = exclusiveInvite && isExclusiveGameState(
+    context.invitation.game?.definition,
+    context.inviteId,
+    exclusiveInvite.seriesId,
+  ) ? context.invitation.game?.definition : null;
+  const supportedInvite = invite ?? exclusiveInvite;
+  const needsJoin = Boolean(supportedInvite && (
+    !supportedInvite.participants.a.joined ||
+    (invite && invite.templateId === 'rapid-choice' && invite.status === 'active' && gameState &&
       gameState.templateId === 'rapid-choice' && !gameState.self.deadlineAtMs && !gameState.self.completed)
   ));
 
   useEffect(() => {
-    if (!invite || !needsJoin || joiningRef.current) return;
+    if (!supportedInvite || !needsJoin || joiningRef.current) return;
     joiningRef.current = true;
     setActionError(null);
     void context.sendAction('join').catch(() => {
@@ -87,9 +153,9 @@ export function CarnivalGameBridge({
     }).finally(() => {
       joiningRef.current = false;
     });
-  }, [context, invite, needsJoin]);
+  }, [context, needsJoin, supportedInvite]);
 
-  if (!invite) {
+  if (!supportedInvite) {
     return (
       <div className="carnival-game-backdrop" role="presentation">
         <section className="carnival-game-dialog" role="dialog" aria-modal="true" aria-label="游戏暂不可用">
@@ -104,7 +170,7 @@ export function CarnivalGameBridge({
     );
   }
 
-  async function sendAction(inviteId: string, action: CarnivalGameAction) {
+  async function sendAction(inviteId: string, action: CarnivalGameAction | CarnivalExclusiveAction) {
     setActionPending(true);
     setActionError(null);
     const { type, requestId, expectedRevision, ...payload } = action;
@@ -117,6 +183,24 @@ export function CarnivalGameBridge({
       setActionPending(false);
     }
   }
+
+  if (exclusiveInvite) {
+    return (
+      <CarnivalExclusiveGameDialog
+        open
+        participant="a"
+        invite={exclusiveInvite}
+        gameState={exclusiveGameState}
+        actionPending={actionPending || joiningRef.current}
+        actionError={actionError}
+        onAction={sendAction}
+        onClose={context.close}
+        onUseChatPrompt={onUseChatPrompt}
+      />
+    );
+  }
+
+  if (!invite) return null;
 
   return (
     <CarnivalGameDialog

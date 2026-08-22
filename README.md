@@ -1,6 +1,6 @@
 # 良配破冰游戏聊天原型
 
-一个可运行的 React/Vite 黑客松原型：系统从一对匹配用户的公开聊天与非敏感资料信号生成专属双人破冰游戏，通过“分别操作 → 保密交接 → 一起揭晓 → 产生后续话题”缓解刚认识时的尴尬停顿。
+一个可运行的 React/Vite 黑客松原型：系统根据一对匹配用户的公开聊天与当前场景允许的安全上下文生成专属双人破冰游戏，通过“分别操作 → 保密交接 → 一起揭晓 → 产生后续话题”缓解刚认识时的尴尬停顿。
 
 在线演示：[https://hackathon.shcyr.com](https://hackathon.shcyr.com)
 
@@ -54,7 +54,11 @@ LIANGPEI_TOKEN=你的比赛令牌 npm run start:api
 
 ## AI 专属游戏与管理后台
 
-前台点击“一起玩”后，只会向同域后端提交一次性的案例上下文 ID 与本人确认过的 Prompt。后端只保留最近 60 条公开聊天，并从双方资料与偏好中提炼 allowlist 内的非敏感兴趣/相处信号；原始资料、记忆、昵称和性别不会发送给模型。随后使用管理后台保存的 OpenAI-compatible 配置调用：
+默认 Demo 点击“一起玩”后，只会向同域后端提交一次性的案例上下文 ID 与本人确认过的 Prompt。后端保留最近 60 条公开聊天，并可从 Demo 接口返回的 `profile`、`memories_self`、`memories_ideal` 与择偶偏好中提炼 allowlist 内的非敏感兴趣/相处信号；原始私密文本、昵称和性别不会发送给模型。
+
+游园会的真实用户注册只收集昵称和性别，没有 Demo 的资料与记忆字段。因此游园会「专属小游戏」只使用当前房间中清洗、截断后的最近公开聊天片段与安全话题信号；昵称和性别仅用于匹配与界面展示，不作为题目推断依据。
+
+两个场景都使用管理后台保存的 OpenAI-compatible 配置调用：
 
 ```text
 POST {API_BASE_URL}/v1/chat/completions
@@ -65,7 +69,7 @@ POST {API_BASE_URL}/v1/chat/completions
 管理后台支持：
 
 - API Base URL、API Key 和模型；
-- 4 个稳定模板 ID、可编辑滚动展示词及每模板生成要求；
+- 4 个稳定模板 ID、可编辑滚动展示词及每模板生成要求；`custom` 模板内另有 5 个稳定专属系列 ID；
 - 可编辑的游戏设计系统提示词；
 - 使用当前 Key 检测可用模型；
 - 显式清除 Key，并让前台自动回退本地题卡。
@@ -86,7 +90,7 @@ node /opt/hackathon-chat/deploy/bootstrap-production.mjs
 
 1. 聊天时间线和接口字段映射；
 2. 稳定样例与真实随机案例切换；
-3. 双方资料卡并列预览，完整展示 `profile`、`memories_self` 和 `memories_ideal`；
+3. 演示案例的双方资料卡并列预览，完整展示 `profile`、`memories_self` 和 `memories_ideal`；原始文本不直接进入模型，后端仅可提炼 allowlist 内的非敏感信号；
 4. A/B 双视角切换，消息归属、发送者、头像与会话对象同步变化；
 5. 两个身份分别保存未发送草稿，避免切换后误发对方的内容；
 6. 完整展示接口返回的全部聊天记录，包括非文本类型携带的原始内容；
@@ -95,7 +99,7 @@ node /opt/hackathon-chat/deploy/bootstrap-production.mjs
 9. “资料猜谜局”支持双方各选三个词并拼成一句印象，保密交接后共同揭晓；
 10. “关键词深挖”支持话题转盘、追问切换与回填聊天；
 11. “极限2选1”支持 3–5 题、每题 5 秒、双方私密作答与共同揭晓；
-12. “专属小游戏”保留稳定扩展插槽，等待团队模块接入；
+12. “专属小游戏”使用 `templateId: custom`，内置 5 个稳定 `seriesId`，并复用游园会的独立 `inviteId` 与真实双端保密揭晓流程；
 13. 未到对应身份时显示隐私门，不暴露未揭晓选择；
 14. 游戏中途关闭弹窗会保留进度，五秒题在关闭期间暂停；
 15. 检测明确结束信号，避免在不合适的时机继续推游戏；
@@ -113,9 +117,12 @@ node /opt/hackathon-chat/deploy/bootstrap-production.mjs
 
 - 不显示匹配度或输赢；猜错被定义为“发现新线索”。
 - 本地题卡只使用双方已经在聊天中公开提到的安全话题。
-- AI 只接收公开聊天与从 `profile`、`memories_self`、`memories_ideal` 提炼出的非敏感信号，不接收原始私密文本。
+- 默认 Demo 的 AI 接收公开聊天，以及从 `profile`、`memories_self`、`memories_ideal` 和择偶偏好中提炼的 allowlist 非敏感信号，不接收这些字段的原始私密文本。
+- 游园会专属小游戏只接收当前房间中清洗、截断后的最近公开聊天片段与安全话题信号，不使用昵称或性别推断内容。
 - 不自动发送消息，不替用户表白或做关系判断。
 - 双端玩法把答案保存在服务端，并按当前参与者投影状态；双方完成前不会返回对方具体选择。
+
+专属小游戏的稳定 `seriesId`、Prompt、`inviteId`、双端 `answer / guess` 和 AI 失败回退契约见 [docs/exclusive-games.md](docs/exclusive-games.md)。
 
 ## 验证
 

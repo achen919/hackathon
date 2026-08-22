@@ -15,6 +15,14 @@ import {
   isAbortError,
   isCarnivalUnauthorized,
 } from './carnival-api';
+import {
+  buildCarnivalExclusivePrompt,
+  CARNIVAL_EXCLUSIVE_SERIES,
+  exclusiveSeriesById,
+  recommendCarnivalExclusiveSeries,
+  summarizeCarnivalTopics,
+  type CarnivalExclusiveSeriesId,
+} from './carnival-exclusive';
 import type {
   CarnivalCreateInviteInput,
   CarnivalGameActionResponse,
@@ -56,9 +64,9 @@ const DEFAULT_GAME_TYPES: CarnivalGameType[] = [
   {
     templateId: 'custom',
     label: '专属小游戏',
-    description: '为团队后续玩法保留的联网扩展位。',
+    description: '从聊天中挑选最适合你们的五种三轮双人玩法。',
     enabled: true,
-    available: false,
+    available: true,
   },
 ];
 
@@ -109,15 +117,26 @@ function formatClock(value: string) {
   return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
 }
 
-function localPrompt(option: CarnivalGameType) {
+function localPrompt(
+  option: CarnivalGameType,
+  messages: CarnivalTextMessage[] = [],
+  seriesId?: CarnivalExclusiveSeriesId,
+) {
+  if (option.templateId === 'custom' && seriesId) {
+    return buildCarnivalExclusivePrompt(seriesId, messages);
+  }
   const mechanic = option.templateId === 'profile-riddle'
     ? '双方分别选三个中性关键词组成一句印象，完成后再一起揭晓。'
     : option.templateId === 'keyword-wheel'
       ? '从公开聊天主题生成转盘，每个关键词配一条低压力追问。'
       : option.templateId === 'rapid-choice'
         ? '生成 3–5 道五秒二选一，双方完成后再一起查看答案。'
-        : '根据双方已公开的资料与聊天，生成一个轻量、可跳过的双人破冰玩法。';
+        : '根据双方公开聊天，生成一个轻量、可跳过的双人破冰玩法。';
   return `请为我们生成一局「${option.label}」。\n\n${mechanic}\n\n题面简短、轻松，不输出关系结论或私密资料，双方都可以选择不回答。`;
+}
+
+function inviteGameLabel(invitation: CarnivalInvite) {
+  return exclusiveSeriesById(invitation.seriesId)?.shortTitle ?? invitation.gameLabel;
 }
 
 function genderLabel(gender: CarnivalGender) {
@@ -264,6 +283,7 @@ export default function CarnivalPage({
 
   const [studioOpen, setStudioOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState('profile-riddle');
+  const [selectedSeriesId, setSelectedSeriesId] = useState<CarnivalExclusiveSeriesId | null>(null);
   const [prompt, setPrompt] = useState('');
   const [promptMaxLength, setPromptMaxLength] = useState(1_500);
   const [promptStatus, setPromptStatus] = useState<'idle' | 'loading' | 'editing'>('idle');
@@ -325,6 +345,7 @@ export default function CarnivalPage({
     setRestoreError(null);
     setSyncError(null);
     setStudioOpen(false);
+    setSelectedSeriesId(null);
     setActiveInviteId(null);
     setOpeningInviteId(null);
     setOpenInviteError(null);
@@ -409,18 +430,42 @@ export default function CarnivalPage({
   const partner = room?.participants.find((participant) => participant.participantId !== self?.participantId);
   const gameTypes = useMemo(() => {
     const configured = carnivalState?.gameTypes.filter((option) => option.enabled) ?? [];
-    return configured.length > 0 ? configured : DEFAULT_GAME_TYPES;
+    const visible = configured.length > 0 ? configured : DEFAULT_GAME_TYPES;
+    return visible.map((option) => option.templateId === 'custom'
+      ? {
+          ...option,
+          available: true,
+          description: option.description || '从聊天中挑选最适合你们的五种三轮双人玩法。',
+        }
+      : option);
   }, [carnivalState?.gameTypes]);
   const hasAvailableGame = gameTypes.some((option) => option.available);
   const selectedGameType = gameTypes.find((option) => option.templateId === selectedTemplateId)
     ?? gameTypes.find((option) => option.available)
     ?? gameTypes[0];
+  const selectedSeries = exclusiveSeriesById(selectedSeriesId);
   const messageCount = room?.textMessageCount ?? 0;
   const inviteThreshold = room?.inviteThreshold ?? 10;
   const gameUnlocked = Boolean(room && (
     carnivalState?.canInvite || room.canInvite || messageCount >= inviteThreshold
   ));
   const progressValue = Math.min(messageCount, inviteThreshold);
+  const exclusiveTopics = useMemo(
+    () => summarizeCarnivalTopics(room?.messages ?? []),
+    [room?.messages],
+  );
+  const exclusiveRecommendation = useMemo(
+    () => recommendCarnivalExclusiveSeries(room?.messages ?? []),
+    [room?.messages],
+  );
+  const exclusiveSeriesOptions = useMemo(() => {
+    const recommended = CARNIVAL_EXCLUSIVE_SERIES.find(
+      (series) => series.id === exclusiveRecommendation.seriesId,
+    );
+    return recommended
+      ? [recommended, ...CARNIVAL_EXCLUSIVE_SERIES.filter((series) => series.id !== recommended.id)]
+      : [...CARNIVAL_EXCLUSIVE_SERIES];
+  }, [exclusiveRecommendation.seriesId]);
 
   const timeline = useMemo<TimelineEntry[]>(() => {
     if (!room) return [];
@@ -574,18 +619,23 @@ export default function CarnivalPage({
     }
   }
 
-  const loadPrompt = useCallback(async (option: CarnivalGameType) => {
+  const loadPrompt = useCallback(async (
+    option: CarnivalGameType,
+    seriesId?: CarnivalExclusiveSeriesId,
+  ) => {
     if (!token) return;
+    if (option.templateId === 'custom' && !seriesId) return;
     promptControllerRef.current?.abort();
     const controller = makeController();
     promptControllerRef.current = controller;
     const version = ++promptVersionRef.current;
     setSelectedTemplateId(option.templateId);
+    setSelectedSeriesId(option.templateId === 'custom' ? seriesId ?? null : null);
     setPromptStatus('loading');
     setPromptError(null);
     setPrompt('');
     try {
-      const preview = await api.getPrompt(token, option.templateId, controller.signal);
+      const preview = await api.getPrompt(token, option.templateId, controller.signal, seriesId);
       if (controller.signal.aborted || version !== promptVersionRef.current || !mountedRef.current) return;
       setPrompt(preview.prompt);
       setPromptMaxLength(preview.maxLength);
@@ -596,7 +646,7 @@ export default function CarnivalPage({
         clearLocalSession('登录状态已失效，请重新加入游园会。');
         return;
       }
-      setPrompt(localPrompt(option));
+      setPrompt(localPrompt(option, room?.messages ?? [], seriesId));
       setPromptMaxLength(1_500);
       setPromptStatus('editing');
       setPromptError(`${carnivalErrorMessage(error)} 已放入本地安全简报，可重试或直接修改。`);
@@ -604,7 +654,29 @@ export default function CarnivalPage({
       releaseController(controller);
       if (promptControllerRef.current === controller) promptControllerRef.current = null;
     }
-  }, [api, clearLocalSession, makeController, releaseController, token]);
+  }, [api, clearLocalSession, makeController, releaseController, room?.messages, token]);
+
+  function selectGameType(option: CarnivalGameType) {
+    if (!option.available) return;
+    if (option.templateId === 'custom') {
+      promptVersionRef.current += 1;
+      promptControllerRef.current?.abort();
+      promptControllerRef.current = null;
+      setSelectedTemplateId(option.templateId);
+      setSelectedSeriesId(null);
+      setPrompt('');
+      setPromptStatus('idle');
+      setPromptError(null);
+      return;
+    }
+    void loadPrompt(option);
+  }
+
+  function selectExclusiveSeries(seriesId: CarnivalExclusiveSeriesId) {
+    const custom = gameTypes.find((option) => option.templateId === 'custom');
+    if (!custom?.available) return;
+    void loadPrompt(custom, seriesId);
+  }
 
   function openStudio() {
     if (!gameUnlocked || inviteSendingRef.current || !hasAvailableGame) return;
@@ -612,6 +684,7 @@ export default function CarnivalPage({
     if (!firstAvailable) return;
     setStudioOpen(true);
     setInviteError(null);
+    setSelectedSeriesId(null);
     void loadPrompt(firstAvailable);
   }
 
@@ -649,12 +722,18 @@ export default function CarnivalPage({
   }, [api, applyState, clearLocalSession, makeController, releaseController, token]);
 
   function createInvite() {
-    if (!selectedGameType || !selectedGameType.available || prompt.trim().length < 20) return;
+    if (
+      !selectedGameType ||
+      !selectedGameType.available ||
+      prompt.trim().length < 20 ||
+      (selectedGameType.templateId === 'custom' && !selectedSeriesId)
+    ) return;
     void submitInvite({
       templateId: selectedGameType.templateId,
+      ...(selectedSeriesId ? { seriesId: selectedSeriesId } : {}),
       prompt: prompt.trim(),
       idempotencyKey: requestId(),
-      label: selectedGameType.label,
+      label: exclusiveSeriesById(selectedSeriesId)?.shortTitle ?? selectedGameType.label,
     });
   }
 
@@ -908,13 +987,14 @@ export default function CarnivalPage({
             const mine = entry.invite.creatorId === self.participantId;
             const creator = mine ? self : partner;
             const opening = openingInviteId === entry.invite.inviteId;
+            const cardGameLabel = inviteGameLabel(entry.invite);
             return (
               <article className={`carnival-invite ${mine ? 'is-mine' : ''}`} key={`invite-${entry.invite.inviteId}`}>
                 <div className="carnival-invite__topline">
                   <span>{creator.nickname} 发起</span>
                   <em className={`is-${entry.invite.status}`}>{inviteStatus(entry.invite.status, mine)}</em>
                 </div>
-                <div className="carnival-invite__ticket" aria-hidden="true"><span>GAME</span><strong>{entry.invite.gameLabel}</strong></div>
+                <div className="carnival-invite__ticket" aria-hidden="true"><span>{entry.invite.seriesId ? 'EXCLUSIVE' : 'GAME'}</span><strong>{cardGameLabel}</strong></div>
                 <h2>{entry.invite.title}</h2>
                 {entry.invite.promptPreview && <p>{entry.invite.promptPreview}</p>}
                 <button
@@ -922,7 +1002,7 @@ export default function CarnivalPage({
                   data-invite-id={entry.invite.inviteId}
                   onClick={() => void openInvitation(entry.invite)}
                   disabled={Boolean(openingInviteId)}
-                  aria-label={`打开 ${creator.nickname} 发起的 ${entry.invite.gameLabel}，邀请 ${entry.invite.inviteId}`}
+                  aria-label={`打开 ${creator.nickname} 发起的 ${cardGameLabel}，邀请 ${entry.invite.inviteId}`}
                 >
                   {opening ? '正在打开…' : mine ? '打开我发起的这一局' : '打开对方发起的这一局'} <span aria-hidden="true">→</span>
                 </button>
@@ -990,7 +1070,7 @@ export default function CarnivalPage({
               className={selectedGameType?.templateId === option.templateId ? 'is-selected' : ''}
               aria-pressed={selectedGameType?.templateId === option.templateId}
               disabled={!option.available}
-              onClick={() => void loadPrompt(option)}
+              onClick={() => selectGameType(option)}
             >
               <span aria-hidden="true">{option.templateId === 'profile-riddle' ? '🔎' : option.templateId === 'keyword-wheel' ? '🎡' : option.templateId === 'rapid-choice' ? '🃏' : '✨'}</span>
               <strong>{option.label}</strong>
@@ -998,14 +1078,56 @@ export default function CarnivalPage({
             </button>
           ))}
         </div>
+
+        {selectedGameType?.templateId === 'custom' && (
+          <section className="carnival-exclusive-picker" aria-labelledby="carnival-exclusive-picker-title">
+            <div className="carnival-exclusive-picker__intro">
+              <div>
+                <span>专属小游戏 · 从聊天里现做</span>
+                <h3 id="carnival-exclusive-picker-title">这段对话，适合玩哪一局？</h3>
+              </div>
+              <p>
+                已读取 <strong>{room.messages.length}</strong> 条公开聊天
+                {exclusiveTopics.length > 0 ? ` · 发现 ${exclusiveTopics.join('、')}` : ' · 从安全日常题开始'}
+              </p>
+            </div>
+            <p className="carnival-exclusive-picker__reason">推荐理由：{exclusiveRecommendation.reason}</p>
+            <div className="carnival-exclusive-series" role="radiogroup" aria-label="选择专属小游戏系列">
+              {exclusiveSeriesOptions.map((series) => (
+                <button
+                  key={series.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={selectedSeriesId === series.id}
+                  className={`is-${series.tone} ${selectedSeriesId === series.id ? 'is-selected' : ''}`}
+                  onClick={() => selectExclusiveSeries(series.id)}
+                >
+                  <span className="carnival-exclusive-series__icon" aria-hidden="true">{series.icon}</span>
+                  <span className="carnival-exclusive-series__copy">
+                    <span>{series.eyebrow}{series.id === exclusiveRecommendation.seriesId && <em>推荐</em>}</span>
+                    <strong>{series.title}</strong>
+                    <small>{series.description}</small>
+                    <span className="carnival-exclusive-series__foot"><i>{series.duration}</i><b>选这局 →</b></span>
+                  </span>
+                </button>
+              ))}
+            </div>
+            <p className="carnival-exclusive-picker__safety"><span aria-hidden="true">☂</span>只围绕双方公开聊过的内容组局；不做匹配度考试，不生成敏感推断。</p>
+          </section>
+        )}
+
         <label className="carnival-prompt-field">
-          <span>本局 Prompt <em>可以在发出前修改</em></span>
+          <span>{selectedSeries ? `「${selectedSeries.shortTitle}」Prompt` : '本局 Prompt'} <em>可以在发出前修改</em></span>
           <textarea
             value={prompt}
             maxLength={promptMaxLength}
             rows={9}
-            disabled={promptStatus === 'loading'}
-            placeholder={promptStatus === 'loading' ? '正在根据你们的聊天生成…' : '写下希望这局更关注什么'}
+            disabled={promptStatus === 'loading' || (selectedGameType?.templateId === 'custom' && !selectedSeries)}
+            placeholder={promptStatus === 'loading'
+              ? '正在根据你们的聊天生成…'
+              : selectedGameType?.templateId === 'custom' && !selectedSeries
+                ? '请先从上方选择一种专属系列'
+                : '写下希望这局更关注什么'}
             onChange={(event) => { setPrompt(event.target.value); setPromptStatus('editing'); setPromptError(null); }}
             data-autofocus
           />
@@ -1015,7 +1137,9 @@ export default function CarnivalPage({
         {promptError && (
           <div className="carnival-studio-error" role="alert">
             <span>{promptError}</span>
-            {selectedGameType && <button type="button" onClick={() => void loadPrompt(selectedGameType)}>重试生成</button>}
+            {selectedGameType && (
+              <button type="button" onClick={() => void loadPrompt(selectedGameType, selectedSeries?.id)}>重试生成</button>
+            )}
           </div>
         )}
         <footer className="carnival-game-studio__actions">
@@ -1023,7 +1147,12 @@ export default function CarnivalPage({
           <button
             className="carnival-primary"
             type="button"
-            disabled={promptStatus === 'loading' || prompt.trim().length < 20 || !selectedGameType?.available}
+            disabled={
+              promptStatus === 'loading' ||
+              prompt.trim().length < 20 ||
+              !selectedGameType?.available ||
+              (selectedGameType.templateId === 'custom' && !selectedSeries)
+            }
             onClick={createInvite}
           >
             生成邀请卡片 <span aria-hidden="true">→</span>

@@ -27,6 +27,9 @@ export const DEFAULT_GAME_TYPES = [
   { id: 'custom', label: '专属小游戏', enabled: true, generationPrompt: templateGuidance('custom') },
 ];
 
+const LEGACY_RESERVED_CUSTOM_PROMPT =
+  '这是预留的“专属小游戏”类型。保持通用三轮安全题卡结构，不假设尚未接入的前端机制。';
+
 export const DEFAULT_AI_CONFIG = Object.freeze({
   apiBaseUrl: 'https://api.openai-next.com',
   apiKey: '',
@@ -96,15 +99,18 @@ function normalizeGameTypes(value) {
     if (item.enabled !== undefined && typeof item.enabled !== 'boolean') {
       throw new Error(`gameTypes[${index}].enabled must be a boolean`);
     }
+    const configuredPrompt = normalizeString(
+      item.generationPrompt ?? templateGuidance(template.id),
+      `gameTypes[${index}].generationPrompt`,
+      { min: 20, max: 4_000 },
+    );
     return {
       id: template.id,
       label: normalizeString(item.label, `gameTypes[${index}].label`, { max: 60 }),
       enabled: item.enabled !== false,
-      generationPrompt: normalizeString(
-        item.generationPrompt ?? templateGuidance(template.id),
-        `gameTypes[${index}].generationPrompt`,
-        { min: 20, max: 4_000 },
-      ),
+      generationPrompt: template.id === 'custom' && configuredPrompt === LEGACY_RESERVED_CUSTOM_PROMPT
+        ? templateGuidance('custom')
+        : configuredPrompt,
     };
   });
   if (new Set(normalized.map((item) => item.id)).size !== normalized.length) {

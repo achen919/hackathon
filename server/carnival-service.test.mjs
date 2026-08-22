@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { createCarnivalService } from './carnival-service.mjs';
+import { buildExclusiveFallbackGame } from './exclusive-series.mjs';
 
 const PROMPT = '请根据双方公开聊天中的共同兴趣，生成一局轻松、安全、没有标准答案的双人破冰小游戏。';
 
@@ -48,6 +49,17 @@ function rapidGame(questionCount = 3) {
       options: [`选项 A${index + 1}`, `选项 B${index + 1}`],
     })),
   };
+}
+
+function exclusiveGame(seriesId = 'courtside') {
+  return buildExclusiveFallbackGame({
+    match_id: 'service-exclusive-match',
+    user_a: { profile: '', memories_self: [], memories_ideal: [] },
+    user_b: { profile: '', memories_self: [], memories_ideal: [] },
+    messages: [
+      { from: 'a', type: 'text', content: '周末一起聊电影和摄影。', sent_at: '2026-08-22T00:00:00Z' },
+    ],
+  }, seriesId);
 }
 
 async function withStateDir(run, options = {}) {
@@ -291,6 +303,243 @@ test('auto-starts five-second rapid rounds, times out late choices, and hides pe
     assert.equal(completed.invite.reveal.answers[players.maleId].answers.q1, 'timeout');
     assert.equal(completed.invite.reveal.answers[players.femaleId].answers.q3, 1);
   }, { now: () => timestamp });
+});
+
+test('runs custom series as a private alternating three-round server state machine', async () => {
+  await withStateDir(async (_stateDir, service) => {
+    const players = await pair(service);
+    await unlock(service, players);
+    const game = exclusiveGame('courtside');
+    const created = await service.createInvite(players.maleToken, {
+      templateId: 'custom',
+      seriesId: 'courtside',
+      prompt: PROMPT,
+      game,
+      idempotencyKey: 'exclusive-courtside-key-001',
+    });
+    const inviteId = created.invite.inviteId;
+    let joined = await service.joinInvite(players.femaleToken, inviteId);
+    assert.equal(joined.invite.seriesId, 'courtside');
+    assert.equal(joined.invite.progress.answererId, players.maleId);
+    assert.equal(joined.invite.progress.guesserId, players.femaleId);
+
+    await assert.rejects(
+      () => service.gameAction(players.femaleToken, inviteId, {
+        type: 'exclusive-guess', questionId: game.questions[0].id, guess: 1,
+        requestId: 'guess-too-early-001', expectedRevision: joined.invite.revision,
+      }),
+      hasCode('ANSWER_NOT_READY'),
+    );
+    await assert.rejects(
+      () => service.gameAction(players.femaleToken, inviteId, {
+        type: 'exclusive-answer', questionId: game.questions[0].id, answer: 1,
+        requestId: 'wrong-answer-role-01', expectedRevision: joined.invite.revision,
+      }),
+      hasCode('WRONG_GAME_ROLE'),
+    );
+
+    for (let roundIndex = 0; roundIndex < game.questions.length; roundIndex += 1) {
+      const question = game.questions[roundIndex];
+      const answererToken = roundIndex % 2 === 0 ? players.maleToken : players.femaleToken;
+      const guesserToken = roundIndex % 2 === 0 ? players.femaleToken : players.maleToken;
+      const answererId = roundIndex % 2 === 0 ? players.maleId : players.femaleId;
+      const guesserId = roundIndex % 2 === 0 ? players.femaleId : players.maleId;
+      const beforeAnswer = (await service.getInvite(answererToken, inviteId)).invite;
+      const answerRequest = `exclusive-answer-round-${roundIndex}`;
+      const answered = await service.gameAction(answererToken, inviteId, {
+        type: 'exclusive-answer',
+        questionId: question.id,
+        answer: roundIndex % question.options.length,
+        requestId: answerRequest,
+        expectedRevision: beforeAnswer.revision,
+      });
+      const replay = await service.gameAction(answererToken, inviteId, {
+        type: 'exclusive-answer',
+        questionId: question.id,
+        answer: roundIndex % question.options.length,
+        requestId: answerRequest,
+        expectedRevision: beforeAnswer.revision,
+      });
+      assert.equal(replay.reused, true);
+      assert.equal(replay.action.id, answered.action.id);
+
+      const guesserView = (await service.getInvite(guesserToken, inviteId)).invite;
+      assert.equal(guesserView.progress.answerSubmitted, true);
+      assert.equal(guesserView.privateState.answers[question.id], undefined);
+      assert.equal(guesserView.reveal, null);
+      const hiddenAnswer = guesserView.actions.find(
+        (action) => action.type === 'exclusive-answer' && action.payload?.questionId === question.id ||
+          action.type === 'exclusive-answer' && action.hidden,
+      );
+      assert.equal(hiddenAnswer.hidden, true);
+      assert.equal('payload' in hiddenAnswer, false);
+
+      const beforeGuess = (await service.getInvite(guesserToken, inviteId)).invite;
+      const guessed = await service.gameAction(guesserToken, inviteId, {
+        type: 'exclusive-guess',
+        questionId: question.id,
+        guess: (roundIndex + 1) % question.options.length,
+        requestId: `exclusive-guess-round-${roundIndex}`,
+        expectedRevision: beforeGuess.revision,
+      });
+      const result = guessed.invite.shared.exclusive.revealedRounds[roundIndex];
+      assert.equal(result.questionId, question.id);
+      assert.equal(result.answererId, answererId);
+      assert.equal(result.guesserId, guesserId);
+      assert.equal(Number.isInteger(result.answer), true);
+      assert.equal(Number.isInteger(result.guess), true);
+
+      const beforeNext = (await service.getInvite(answererToken, inviteId)).invite;
+      const advanced = await service.gameAction(answererToken, inviteId, {
+        type: 'exclusive-next',
+        questionId: question.id,
+        requestId: `exclusive-next-round-${roundIndex}`,
+        expectedRevision: beforeNext.revision,
+      });
+      if (roundIndex < game.questions.length - 1) {
+        assert.equal(advanced.invite.progress.roundIndex, roundIndex + 1);
+        assert.equal(advanced.invite.progress.answererId, guesserId);
+      } else {
+        assert.equal(advanced.invite.status, 'completed');
+        assert.equal(advanced.invite.reveal.rounds.length, 3);
+      }
+    }
+  });
+});
+
+test('custom actions use an invite-local revision that is unaffected by writes in another room', async () => {
+  await withStateDir(async (_stateDir, service) => {
+    const players = await pair(service, ['主房间男生', '主房间女生']);
+    await unlock(service, players);
+    const game = exclusiveGame('courtside');
+    const created = await service.createInvite(players.maleToken, {
+      templateId: 'custom',
+      seriesId: 'courtside',
+      prompt: PROMPT,
+      game,
+      idempotencyKey: 'invite-local-revision-key-001',
+    });
+    const inviteId = created.invite.inviteId;
+    const joined = await service.joinInvite(players.femaleToken, inviteId);
+    const inviteRevision = joined.invite.revision;
+    const globalRevision = joined.state.revision;
+
+    const otherRoom = await pair(service, ['另一个房间男生', '另一个房间女生']);
+    await service.sendMessage(otherRoom.maleToken, { content: '另一个房间发生了一次完全无关的写操作。' });
+    const afterOtherWrite = await service.getState(players.maleToken);
+    assert.equal(afterOtherWrite.revision > globalRevision, true);
+    assert.equal(
+      afterOtherWrite.invites.find((invite) => invite.inviteId === inviteId).revision,
+      inviteRevision,
+    );
+
+    const answered = await service.gameAction(players.maleToken, inviteId, {
+      type: 'exclusive-answer',
+      questionId: game.questions[0].id,
+      answer: 1,
+      requestId: 'other-room-write-answer-001',
+      expectedRevision: inviteRevision,
+    });
+    assert.equal(answered.invite.progress.answerSubmitted, true);
+    assert.equal(answered.invite.revision, inviteRevision + 1);
+  });
+});
+
+test('custom action request ids reject reuse with a different action or payload', async () => {
+  await withStateDir(async (_stateDir, service) => {
+    const players = await pair(service);
+    await unlock(service, players);
+    const game = exclusiveGame('contrast-lab');
+    const created = await service.createInvite(players.maleToken, {
+      templateId: 'custom',
+      seriesId: 'contrast-lab',
+      prompt: PROMPT,
+      game,
+      idempotencyKey: 'action-fingerprint-invite-key-01',
+    });
+    const inviteId = created.invite.inviteId;
+    const joined = await service.joinInvite(players.femaleToken, inviteId);
+    const questionId = game.questions[0].id;
+    const requestId = 'same-action-request-id-001';
+    const answered = await service.gameAction(players.maleToken, inviteId, {
+      type: 'exclusive-answer',
+      questionId,
+      answer: 0,
+      requestId,
+      expectedRevision: joined.invite.revision,
+    });
+
+    await assert.rejects(
+      () => service.gameAction(players.maleToken, inviteId, {
+        type: 'exclusive-answer',
+        questionId,
+        answer: 1,
+        requestId,
+        expectedRevision: answered.invite.revision,
+      }),
+      hasCode('IDEMPOTENCY_CONFLICT'),
+    );
+    await assert.rejects(
+      () => service.gameAction(players.maleToken, inviteId, {
+        type: 'exclusive-next',
+        questionId,
+        requestId,
+        expectedRevision: answered.invite.revision,
+      }),
+      hasCode('IDEMPOTENCY_CONFLICT'),
+    );
+
+    const unchanged = (await service.getInvite(players.maleToken, inviteId)).invite;
+    assert.equal(unchanged.actions.length, 1);
+    assert.equal(unchanged.revision, answered.invite.revision);
+  });
+});
+
+test('restores unrevealed custom answers without leaking them and keeps simultaneous series invites isolated', async () => {
+  await withStateDir(async (stateDir, service) => {
+    const players = await pair(service);
+    await unlock(service, players);
+    const [courtside, trailer] = await Promise.all([
+      service.createInvite(players.maleToken, {
+        templateId: 'custom', seriesId: 'courtside', prompt: PROMPT,
+        game: exclusiveGame('courtside'), idempotencyKey: 'multi-courtside-key-0001',
+      }),
+      service.createInvite(players.femaleToken, {
+        templateId: 'custom', seriesId: 'future-trailer', prompt: PROMPT,
+        game: exclusiveGame('future-trailer'), idempotencyKey: 'multi-trailer-key-000001',
+      }),
+    ]);
+    assert.notEqual(courtside.invite.inviteId, trailer.invite.inviteId);
+    await service.joinInvite(players.femaleToken, courtside.invite.inviteId);
+    await service.joinInvite(players.maleToken, trailer.invite.inviteId);
+    const fresh = (await service.getInvite(players.maleToken, courtside.invite.inviteId)).invite;
+    const questionId = courtside.invite.game.definition.questions[0].id;
+    await service.gameAction(players.maleToken, courtside.invite.inviteId, {
+      type: 'exclusive-answer', questionId, answer: 2,
+      requestId: 'persist-answer-custom-01', expectedRevision: fresh.revision,
+    });
+
+    const restored = createCarnivalService({ stateDir });
+    const femaleView = await restored.getState(players.femaleToken);
+    const restoredCourt = femaleView.invites.find((invite) => invite.inviteId === courtside.invite.inviteId);
+    const restoredTrailer = femaleView.invites.find((invite) => invite.inviteId === trailer.invite.inviteId);
+    assert.equal(restoredCourt.progress.answerSubmitted, true);
+    assert.equal(restoredCourt.privateState.answers[questionId], undefined);
+    assert.equal(JSON.stringify(restoredCourt).includes('"answer":2'), false);
+    assert.equal(restoredTrailer.seriesId, 'future-trailer');
+    assert.equal(restoredTrailer.progress.answerSubmitted, false);
+    assert.equal(restoredTrailer.actions.length, 0);
+
+    const beforeGuess = (await restored.getInvite(players.femaleToken, courtside.invite.inviteId)).invite;
+    const revealed = await restored.gameAction(players.femaleToken, courtside.invite.inviteId, {
+      type: 'exclusive-guess', questionId, guess: 1,
+      requestId: 'persist-guess-custom-01', expectedRevision: beforeGuess.revision,
+    });
+    assert.equal(revealed.invite.shared.exclusive.revealedRounds[0].answer, 2);
+    const untouched = (await restored.getInvite(players.femaleToken, trailer.invite.inviteId)).invite;
+    assert.equal(untouched.actions.length, 0);
+    assert.equal(untouched.progress.roundIndex, 0);
+  });
 });
 
 test('restores rooms and private progress from disk while persisting only token hashes', async () => {

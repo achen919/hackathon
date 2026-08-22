@@ -327,13 +327,15 @@ test('prompt endpoint uses a stable template id and exposes only safe public-cha
   );
 });
 
-test('custom template is reserved and generation returns 409 without calling AI', async () => {
+test('custom template requires a stable series id and forwards it to AI', async () => {
   let providerCalls = 0;
+  let receivedSelection;
   const aiService = {
-    cacheKey: () => 'custom-must-not-be-cached',
-    generate: async () => {
+    cacheKey: (_config, _match, selection) => `custom-${selection.seriesId}`,
+    generate: async (_config, _match, selection) => {
       providerCalls += 1;
-      return generatedGame(validMatch.match_id, 'custom');
+      receivedSelection = selection;
+      return { ...generatedGame(validMatch.match_id, 'custom'), seriesId: selection.seriesId };
     },
     listModels: async () => [],
   };
@@ -350,14 +352,23 @@ test('custom template is reserved and generation returns 409 without calling AI'
     async (baseUrl) => {
       const matchResponse = await fetch(`${baseUrl}/api/match`);
       const contextId = matchResponse.headers.get('x-game-context-id');
-      const response = await fetch(`${baseUrl}/api/games/generate`, {
+      const missing = await fetch(`${baseUrl}/api/games/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Origin: baseUrl },
         body: JSON.stringify({ contextId, templateId: 'custom' }),
       });
-      assert.equal(response.status, 409);
-      assert.equal((await response.json()).code, 'GAME_TEMPLATE_UNAVAILABLE');
-      assert.equal(providerCalls, 0);
+      assert.equal(missing.status, 400);
+      assert.equal((await missing.json()).code, 'INVALID_GAME_SERIES');
+
+      const response = await fetch(`${baseUrl}/api/games/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: baseUrl },
+        body: JSON.stringify({ contextId, templateId: 'custom', seriesId: 'courtside' }),
+      });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).game.seriesId, 'courtside');
+      assert.equal(providerCalls, 1);
+      assert.equal(receivedSelection.seriesId, 'courtside');
     },
   );
 });
