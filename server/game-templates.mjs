@@ -4,6 +4,7 @@ import {
   publicExclusiveSeriesCatalog,
   requireExclusiveSeries,
 } from './exclusive-series.mjs';
+import { PROMPT_GAME_ENGINE, isPromptGamePayload } from './prompt-game.mjs';
 
 export const GAME_TEMPLATE_CATALOG = Object.freeze([
   Object.freeze({
@@ -28,7 +29,7 @@ export const GAME_TEMPLATE_CATALOG = Object.freeze([
     id: 'custom',
     defaultLabel: '专属小游戏',
     available: true,
-    description: '从五个稳定系列中选择一套包装，再根据公开聊天生成三轮轮流猜答的专属题卡。',
+    description: '从稳定系列或 AI 游戏工坊出发，让 Prompt 在四种安全交互组件中组合三轮专属双人游戏。',
   }),
 ]);
 
@@ -74,7 +75,10 @@ const TEMPLATE_GUIDANCE = Object.freeze({
   custom: `严格生成“专属小游戏”：
 - templateId 固定为 custom，并严格遵循服务端指定的 seriesId 和系列内容骨架。
 - 固定三轮，每轮由一方私密作答、另一方猜测，下一轮交换角色。
-- 每轮提供 3-4 个互斥、无优劣的短选项；猜中是同频高光，猜错是新话题，不累计分数。
+- 声明式引擎固定为 ${PROMPT_GAME_ENGINE}；每轮从 card-grid、swipe-deck、mood-dial、orbit-pick 中选择一个交互和匹配 variant。
+- swipe-deck 恰好 2 个选项；mood-dial / orbit-pick 为 3-4 个选项；card-grid 为 2-4 个选项。所有选项互斥且无优劣。
+- 只允许 schema 中列出的 presentation token 和 ending 文案，不得输出 HTML、CSS、JavaScript、URL、资源路径、自定义组件、事件处理器或动作规则。
+- 猜中是同频高光，猜错是新话题，不累计分数。
 - 只抽象公开聊天主题和允许的非敏感信号，不复述原始资料、记忆或敏感原句。`,
 });
 
@@ -179,9 +183,7 @@ export function isTemplateShapeValid(game, templateId, seriesId) {
   }
   if (templateId === 'custom') {
     requireExclusiveSeries(seriesId);
-    return game.questions.length === 3 && game.questions.every(
-      (question) => Array.isArray(question.options) && question.options.length >= 3 && question.options.length <= 4,
-    );
+    return isPromptGamePayload(game, { hasUnsafeText: hasUnsafeGameText });
   }
   return true;
 }

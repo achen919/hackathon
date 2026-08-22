@@ -67,7 +67,7 @@ function templateSteps(templateId: GameTemplateId, questionLabels: string[]) {
   if (templateId === 'profile-riddle') return ['选择三个关键词', '交换聊天视角', '一起揭晓印象'];
   if (templateId === 'keyword-wheel') return ['转动关键词转盘', '抽中一条追问', '把话题带回聊天'];
   if (templateId === 'rapid-choice') return questionLabels.length > 0 ? questionLabels : ['五秒凭直觉选择', '交换视角作答', '一起查看答案'];
-  return ['进入双人游园会', '从五个系列里选一局', '双方设备同步揭晓'];
+  return ['进入双人游园会', '从六种专属玩法里选一局', '双方设备同步揭晓'];
 }
 
 export default function App() {
@@ -388,7 +388,7 @@ export default function App() {
     'profile-riddle': '双方各选 3 个词 · 一起揭晓',
     'keyword-wheel': '转一次 · 把话题自然聊深',
     'rapid-choice': `${displayGame.questions.length} 题 · 每题 5 秒 · 一起揭晓`,
-    custom: '5 个专属系列 · 游园会双端同步',
+    custom: 'AI 工坊 + 5 个系列 · 游园会双端同步',
   };
   const firstStepNote: Record<GameTemplateId, string> = {
     'profile-riddle': '双方分别选词，揭晓前彼此不可见',

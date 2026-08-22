@@ -62,6 +62,23 @@ function exclusiveGame(seriesId = 'courtside') {
   }, seriesId);
 }
 
+function legacyExclusiveGame(seriesId = 'courtside') {
+  const current = exclusiveGame(seriesId);
+  const { engine: _engine, presentation: _presentation, ending: _ending, ...legacy } = current;
+  const { engine: _mechanicsEngine, ...legacyMechanics } = current.mechanics;
+  return {
+    ...legacy,
+    schemaVersion: 2,
+    questions: current.questions.map(({ interaction: _interaction, ...question }) => ({
+      ...question,
+      options: question.options.length >= 3
+        ? question.options
+        : [...question.options, '换一个轻松方式'],
+    })),
+    mechanics: legacyMechanics,
+  };
+}
+
 async function withStateDir(run, options = {}) {
   const stateDir = await mkdtemp(join(tmpdir(), 'carnival-service-'));
   try {
@@ -177,6 +194,37 @@ test('serializes concurrent independent invites and deduplicates mobile retries 
     assert.equal(retried.state.messageCount, 10);
     assert.equal(retried.state.messages.filter((item) => item.type === 'invite').length, 2);
     assert.equal(retried.state.room.messages.length, 10);
+  });
+});
+
+test('binds preview-backed invitation idempotency to a hashed preview version', async () => {
+  await withStateDir(async (stateDir, service) => {
+    const players = await pair(service);
+    await unlock(service, players);
+    const previewVersionHash = 'a'.repeat(43);
+    const request = {
+      templateId: 'custom',
+      seriesId: 'courtside',
+      prompt: PROMPT,
+      game: exclusiveGame('courtside'),
+      idempotencyKey: 'preview-version-service-key-01',
+      previewVersionHash,
+    };
+    const created = await service.createInvite(players.maleToken, request);
+    const replayed = await service.createInvite(players.maleToken, request);
+    assert.equal(replayed.reused, true);
+    assert.equal(replayed.invite.inviteId, created.invite.inviteId);
+
+    await assert.rejects(
+      () => service.createInvite(players.maleToken, {
+        ...request,
+        previewVersionHash: 'b'.repeat(43),
+      }),
+      hasCode('IDEMPOTENCY_CONFLICT'),
+    );
+    assert.equal((await service.getState(players.maleToken)).invites.length, 1);
+    const persisted = await readFile(join(stateDir, 'carnival-state.json'), 'utf8');
+    assert.equal(persisted.includes(previewVersionHash), false);
   });
 });
 
@@ -310,6 +358,8 @@ test('runs custom series as a private alternating three-round server state machi
     const players = await pair(service);
     await unlock(service, players);
     const game = exclusiveGame('courtside');
+    assert.equal(game.schemaVersion, 3);
+    assert.equal(game.engine, 'exclusive-choice-v1');
     const created = await service.createInvite(players.maleToken, {
       templateId: 'custom',
       seriesId: 'courtside',
@@ -322,6 +372,9 @@ test('runs custom series as a private alternating three-round server state machi
     assert.equal(joined.invite.seriesId, 'courtside');
     assert.equal(joined.invite.progress.answererId, players.maleId);
     assert.equal(joined.invite.progress.guesserId, players.femaleId);
+    assert.equal(joined.invite.game.definition.presentation.scene, 'court');
+    assert.equal(joined.invite.game.definition.questions[0].interaction.kind, 'card-grid');
+    assert.equal(typeof joined.invite.game.definition.ending.chatPrompt, 'string');
 
     await assert.rejects(
       () => service.gameAction(players.femaleToken, inviteId, {
@@ -404,6 +457,55 @@ test('runs custom series as a private alternating three-round server state machi
         assert.equal(advanced.invite.reveal.rounds.length, 3);
       }
     }
+  });
+});
+
+test('accepts persisted v2 custom games and strictly rejects forged v3 runtime fields', async () => {
+  await withStateDir(async (stateDir, service) => {
+    const players = await pair(service);
+    await unlock(service, players);
+    const legacyGame = legacyExclusiveGame('future-trailer');
+    const legacy = await service.createInvite(players.maleToken, {
+      templateId: 'custom',
+      seriesId: 'future-trailer',
+      prompt: PROMPT,
+      game: legacyGame,
+      idempotencyKey: 'legacy-custom-v2-restore-key',
+    });
+    assert.equal(legacy.invite.game.definition.schemaVersion, 2);
+    assert.equal(legacy.invite.game.definition.engine, undefined);
+
+    const restored = createCarnivalService({ stateDir });
+    const restoredInvite = (await restored.getInvite(players.femaleToken, legacy.invite.inviteId)).invite;
+    assert.equal(restoredInvite.game.definition.schemaVersion, 2);
+    assert.equal(restoredInvite.game.definition.questions[0].interaction, undefined);
+
+    const valid = exclusiveGame('courtside');
+    const forgedGames = [
+      { ...valid, engine: 'javascript-v1' },
+      { ...valid, presentation: { ...valid.presentation, scene: 'https://evil.example' } },
+      { ...valid, ending: { ...valid.ending, chatPrompt: '<script>alert(1)</script>' } },
+      {
+        ...valid,
+        questions: valid.questions.map((question, index) => index === 0
+          ? { ...question, interaction: { kind: 'card-grid', variant: 'stack' } }
+          : question),
+      },
+    ];
+    for (const [index, game] of forgedGames.entries()) {
+      await assert.rejects(
+        () => restored.createInvite(players.maleToken, {
+          templateId: 'custom',
+          seriesId: 'courtside',
+          prompt: PROMPT,
+          game,
+          idempotencyKey: `forged-v3-runtime-key-${index}`.padEnd(24, 'x'),
+        }),
+        hasCode('INVALID_GAME'),
+      );
+    }
+    const state = await restored.getState(players.maleToken);
+    assert.equal(state.invites.length, 1);
   });
 });
 

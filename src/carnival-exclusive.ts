@@ -1,6 +1,7 @@
 import type { CarnivalTextMessage } from './carnival-types';
 
 export type CarnivalExclusiveSeriesId =
+  | 'prompt-arcade'
   | 'courtside'
   | 'chat-archaeology'
   | 'weekend-studio'
@@ -34,6 +35,24 @@ export interface CarnivalExclusiveRecommendation {
 }
 
 export const CARNIVAL_EXCLUSIVE_SERIES: readonly CarnivalExclusiveSeries[] = Object.freeze([
+  {
+    id: 'prompt-arcade',
+    templateKey: 'exclusive_game_prompt_arcade_v1',
+    title: 'AI 游戏工坊 · 说一句就开局',
+    shortTitle: 'AI 游戏工坊',
+    icon: '◇',
+    tone: 'blue',
+    eyebrow: 'Prompt 现场生成',
+    description: '写下想玩的主题和感觉，AI 会从安全交互组件中组合一局有专属画面与触感的双人游戏。',
+    duration: '3 关 · 约 3 分钟',
+    tags: ['Prompt 生成', '玩法混搭', '双端同步'],
+    generationBrief: '根据可编辑 Prompt 在 card-grid、swipe-deck、mood-dial、orbit-pick 四种安全交互中选择并组合；只能输出声明式 JSON，不得输出或请求执行 HTML、CSS、JavaScript、URL 或自定义事件规则。',
+    matchedEyebrow: '你们触发了同一种反馈',
+    matchedTitle: '这一关默契同步',
+    differentEyebrow: '游戏解锁一条新分支',
+    differentTitle: '两个选择都让剧情继续',
+    resultUnit: '个专属互动关卡',
+  },
   {
     id: 'courtside',
     templateKey: 'exclusive_game_courtside_v1',
@@ -182,7 +201,7 @@ export function buildCarnivalExclusivePrompt(
     `请为我们生成一局「${series.title}」专属双人小游戏。`,
     `双方已经公开交换 ${messages.length} 条文字消息；可以使用的公开主题：${topicLine}。`,
     `系列模板：${series.generationBrief}`,
-    '固定生成 3 轮；每轮包含一个问题、4 个互斥短选项、同频追问和差异追问。',
+    '固定生成 3 轮；每轮包含一个问题、2–4 个互斥短选项、同频追问和差异追问；滑动牌组固定 2 项，转盘与星轨使用 3–4 项。',
     '双方轮流私密作答和猜测；未到共同揭晓阶段，不得向另一方返回答案。',
     '只使用公开聊天线索，不输出匹配度、输赢或人格结论，不替用户自动发送后续消息。',
   ].join('\n\n');

@@ -548,6 +548,133 @@
 .carnival-studio-status { margin: 12px 18px 0; color: var(--carnival-violet-deep); font-size: 10px; }
 .carnival-studio-error { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 18px 0; padding: 10px 11px; border-radius: 13px; background: #fff0ed; color: #a83f35; font-size: 9px; line-height: 1.45; }
 .carnival-studio-error button { min-height: 34px; flex: 0 0 auto; padding: 0 9px; border: 0; border-radius: 10px; background: #fff; color: inherit; font-weight: 850; cursor: pointer; }
+.carnival-prompt-game-building {
+  display: grid;
+  gap: 14px;
+  margin: 15px 18px 0;
+  padding: 15px;
+  overflow: hidden;
+  border: 1px solid rgba(102, 87, 216, 0.16);
+  border-radius: 20px;
+  background: linear-gradient(145deg, #252039, #3b335c);
+  color: #fff;
+}
+.carnival-prompt-game-building > header { display: flex; align-items: center; gap: 11px; }
+.carnival-prompt-game-building > header > span { display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center; border-radius: 13px; background: rgba(255,255,255,0.12); color: #d9d2ff; font-size: 17px; animation: carnival-preview-spark 1.2s ease-in-out infinite; }
+.carnival-prompt-game-building > header div { display: grid; gap: 2px; }
+.carnival-prompt-game-building > header strong { font-size: 12px; }
+.carnival-prompt-game-building > header small { color: rgba(255,255,255,0.65); font-size: 8px; line-height: 1.45; }
+.carnival-prompt-game-building ol { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin: 0; padding: 0; list-style: none; }
+.carnival-prompt-game-building li { display: grid; min-width: 0; grid-template-columns: 24px minmax(0, 1fr); align-items: center; gap: 7px; padding: 9px 8px; border: 1px solid rgba(255,255,255,0.09); border-radius: 12px; color: rgba(255,255,255,0.43); }
+.carnival-prompt-game-building li > i { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 8px; background: rgba(255,255,255,0.07); font-size: 8px; font-style: normal; font-weight: 900; }
+.carnival-prompt-game-building li > span { display: grid; min-width: 0; gap: 2px; }
+.carnival-prompt-game-building li strong { font-size: 8px; }
+.carnival-prompt-game-building li small { overflow: hidden; font-size: 6px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.carnival-prompt-game-building li.is-current { border-color: rgba(218,209,255,0.46); background: rgba(121,102,227,0.2); color: #fff; }
+.carnival-prompt-game-building li.is-current > i { background: #7768da; animation: carnival-preview-step 900ms ease-in-out infinite; }
+.carnival-prompt-game-building li.is-complete { color: #c9f4df; }
+.carnival-prompt-game-building li.is-complete > i { background: rgba(77,190,137,0.22); color: #aef0cf; }
+
+.carnival-prompt-game-preview {
+  --cg-ink: #28252d;
+  --cg-muted: #655f6b;
+  --cg-line: #e8e2dd;
+  --cg-paper: #fffdfb;
+  --exclusive-accent: #6253d4;
+  --exclusive-soft: #efedff;
+  position: relative;
+  display: grid;
+  gap: 14px;
+  margin: 15px 18px 0;
+  padding: 15px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--exclusive-accent) 23%, transparent);
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 18px 46px color-mix(in srgb, var(--exclusive-accent) 10%, transparent);
+  color: var(--cg-ink);
+}
+.carnival-prompt-game-preview.is-coral { --exclusive-accent: #c95c4e; --exclusive-soft: #fff0eb; }
+.carnival-prompt-game-preview.is-violet { --exclusive-accent: #6253d4; --exclusive-soft: #efedff; }
+.carnival-prompt-game-preview.is-mint { --exclusive-accent: #2f8c6c; --exclusive-soft: #eaf8f2; }
+.carnival-prompt-game-preview.is-gold { --exclusive-accent: #b57c24; --exclusive-soft: #fff5dc; }
+.carnival-prompt-game-preview.is-blue { --exclusive-accent: #447ec8; --exclusive-soft: #eaf3ff; }
+.carnival-prompt-game-preview > header { position: relative; z-index: 2; display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.carnival-prompt-game-preview > header > div { display: grid; gap: 2px; }
+.carnival-prompt-game-preview > header span { display: flex; align-items: center; gap: 6px; color: var(--exclusive-accent); font-size: 8px; font-weight: 900; letter-spacing: 0.11em; }
+.carnival-prompt-game-preview > header span i { width: 7px; height: 7px; border-radius: 50%; background: #2aa66e; box-shadow: 0 0 0 4px rgba(42,166,110,0.12); }
+.carnival-prompt-game-preview > header small { color: var(--cg-muted); font-size: 7px; }
+.carnival-prompt-game-preview > header b { padding: 5px 8px; border-radius: 99px; background: var(--exclusive-soft); color: var(--exclusive-accent); font-size: 7px; }
+.carnival-prompt-game-preview > header > .carnival-prompt-game-preview__badges { display: flex; max-width: 55%; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.carnival-prompt-game-preview__rounds { position: relative; z-index: 2; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.carnival-prompt-game-preview__rounds button {
+  display: grid;
+  min-width: 0;
+  min-height: 48px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border: 1px solid var(--cg-line);
+  border-radius: 13px;
+  background: #fff;
+  color: var(--cg-muted);
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+}
+.carnival-prompt-game-preview__rounds button i { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 8px; background: #f1eeeb; font-size: 8px; font-style: normal; }
+.carnival-prompt-game-preview__rounds button.is-played { border-color: color-mix(in srgb, var(--exclusive-accent) 24%, var(--cg-line)); color: var(--exclusive-accent); }
+.carnival-prompt-game-preview__rounds button.is-played i { background: var(--exclusive-soft); }
+.carnival-prompt-game-preview__rounds button.is-current { border-color: color-mix(in srgb, var(--exclusive-accent) 58%, transparent); background: var(--exclusive-soft); color: var(--exclusive-accent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--exclusive-accent) 10%, transparent); }
+.carnival-prompt-game-preview__rounds button.is-current i { background: var(--exclusive-accent); color: #fff; }
+.carnival-prompt-game-preview__scene { position: relative; z-index: 1; height: 82px; overflow: hidden; border-radius: 18px; background: linear-gradient(145deg, var(--exclusive-soft), #fff); }
+.carnival-prompt-game-preview__scene i { position: absolute; display: block; border: 2px solid color-mix(in srgb, var(--exclusive-accent) 32%, transparent); }
+.carnival-prompt-game-preview__scene i:nth-child(1) { width: 82px; height: 82px; top: 17px; left: 12%; border-radius: 50%; }
+.carnival-prompt-game-preview__scene i:nth-child(2) { width: 118px; height: 38px; top: 18px; left: 42%; border-radius: 99px; transform: rotate(-8deg); }
+.carnival-prompt-game-preview__scene i:nth-child(3) { width: 24px; height: 24px; right: 12%; bottom: 12px; border-radius: 8px; background: color-mix(in srgb, var(--exclusive-accent) 10%, transparent); transform: rotate(16deg); }
+.carnival-prompt-game-preview.scene-court .carnival-prompt-game-preview__scene { background: linear-gradient(160deg, #fff2ec, #fde4d9); }
+.carnival-prompt-game-preview.scene-court .carnival-prompt-game-preview__scene::after { position: absolute; inset: 50% 0 0; border-top: 2px solid rgba(184,83,64,0.22); content: ''; }
+.carnival-prompt-game-preview.scene-archive .carnival-prompt-game-preview__scene { background: repeating-linear-gradient(0deg, #f2efff 0 18px, #e8e3fa 19px 20px); }
+.carnival-prompt-game-preview.scene-cinema .carnival-prompt-game-preview__scene { background: linear-gradient(135deg, #253735, #4d756d); }
+.carnival-prompt-game-preview.scene-lab .carnival-prompt-game-preview__scene { background: linear-gradient(135deg, #fff4d9, #f8e3aa); }
+.carnival-prompt-game-preview.scene-cosmos .carnival-prompt-game-preview__scene { background: radial-gradient(circle at 32% 42%, #7366c8, transparent 18%), linear-gradient(145deg, #201c35, #3c345f); }
+.carnival-prompt-game-preview__copy { position: relative; z-index: 2; display: grid; gap: 5px; }
+.carnival-prompt-game-preview__copy p { margin: 0; color: var(--exclusive-accent); font-size: 8px; font-weight: 850; letter-spacing: 0.08em; }
+.carnival-prompt-game-preview__copy h3 { margin: 0; font-size: 20px; letter-spacing: -0.04em; }
+.carnival-prompt-game-preview__copy > span { color: var(--cg-muted); font-size: 11px; line-height: 1.55; }
+.carnival-prompt-game-preview .carnival-exclusive-choice { position: relative; z-index: 2; }
+.carnival-prompt-game-preview__actions { position: relative; z-index: 2; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.carnival-prompt-game-preview__actions button,
+.carnival-prompt-game-preview__ending > button { min-height: 46px; padding: 0 13px; border: 1px solid var(--cg-line); border-radius: 13px; background: #fff; color: var(--exclusive-accent); font-size: 9px; font-weight: 850; cursor: pointer; }
+.carnival-prompt-game-preview__actions button:last-child,
+.carnival-prompt-game-preview__ending > button { border-color: transparent; background: var(--exclusive-accent); color: #fff; }
+.carnival-prompt-game-preview__ending { position: relative; z-index: 2; display: grid; justify-items: center; gap: 9px; padding: 20px 14px; overflow: hidden; border-radius: 20px; background: linear-gradient(145deg, var(--exclusive-soft), #fff); text-align: center; }
+.carnival-prompt-game-preview__ending > span { display: grid; width: 54px; height: 54px; place-items: center; border-radius: 18px; background: #fff; color: var(--exclusive-accent); box-shadow: 0 12px 34px color-mix(in srgb, var(--exclusive-accent) 18%, transparent); font-size: 23px; }
+.carnival-prompt-game-preview__ending > p { margin: 0; color: var(--exclusive-accent); font-size: 8px; font-weight: 900; letter-spacing: 0.08em; }
+.carnival-prompt-game-preview__ending > h3 { margin: 0; font-size: 20px; line-height: 1.3; }
+.carnival-prompt-game-preview__ending > strong { max-width: 440px; color: var(--cg-muted); font-size: 10px; font-weight: 650; line-height: 1.6; }
+.carnival-prompt-game-preview__ending ol { display: grid; width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin: 3px 0 5px; padding: 0; list-style: none; }
+.carnival-prompt-game-preview__ending li { display: grid; min-width: 0; min-height: 62px; align-content: center; justify-items: center; gap: 5px; padding: 8px; border: 1px solid color-mix(in srgb, var(--exclusive-accent) 14%, var(--cg-line)); border-radius: 13px; background: rgba(255,255,255,0.78); font-size: 8px; font-weight: 800; line-height: 1.35; }
+.carnival-prompt-game-preview__ending li i { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 7px; background: var(--exclusive-soft); color: var(--exclusive-accent); font-size: 7px; font-style: normal; }
+.carnival-prompt-game-preview__ending.effect-stars > span { box-shadow: 0 0 34px color-mix(in srgb, var(--exclusive-accent) 38%, transparent); }
+.carnival-prompt-game-preview__ending.effect-spotlight { background: radial-gradient(circle at 50% 20%, #fff, var(--exclusive-soft) 48%, #fff); }
+.carnival-prompt-game-preview__ending.effect-ripple > span { animation: carnival-preview-ending-ripple 1.6s ease-out infinite; }
+.carnival-prompt-game-preview__ending.effect-confetti::before { color: var(--exclusive-accent); content: '✦  ·  ◆  ·  ✦'; font-size: 14px; letter-spacing: 0.35em; }
+.carnival-prompt-game-preview__ending.effect-cards > span { transform: rotate(-5deg); }
+.carnival-prompt-game-preview button:focus-visible { outline: 3px solid color-mix(in srgb, var(--exclusive-accent) 30%, transparent); outline-offset: 3px; }
+.carnival-prompt-game-preview button:disabled { cursor: not-allowed; opacity: 0.52; }
+.carnival-prompt-game-preview.is-expired { border-style: dashed; box-shadow: none; }
+.carnival-prompt-game-preview.is-expired::after { position: absolute; z-index: 5; top: 92px; right: 15px; padding: 5px 8px; border-radius: 99px; background: rgba(40,37,45,0.86); color: #fff; content: '预览已过期'; font-size: 7px; font-weight: 850; }
+.carnival-prompt-game-preview > footer { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 9px; padding-top: 11px; border-top: 1px solid var(--cg-line); }
+.carnival-prompt-game-preview > footer span { color: var(--exclusive-accent); font-size: 9px; font-weight: 800; }
+.carnival-prompt-game-preview > footer small { color: var(--cg-muted); font-size: 7px; text-align: right; }
+.carnival-prompt-game-preview.motion-float .carnival-prompt-game-preview__scene i { animation: carnival-preview-float 2.4s ease-in-out infinite alternate; }
+.carnival-prompt-game-preview.motion-slide .carnival-prompt-game-preview__scene i { animation: carnival-preview-slide 2.6s ease-in-out infinite alternate; }
+.carnival-prompt-game-preview.motion-orbit .carnival-prompt-game-preview__scene i:first-child { animation: carnival-preview-orbit 6s linear infinite; }
+.carnival-prompt-game-preview.motion-pulse .carnival-prompt-game-preview__scene { animation: carnival-preview-pulse 1.8s ease-in-out infinite; }
 .carnival-game-studio__actions { position: sticky; bottom: 0; display: grid; grid-template-columns: auto 1fr; gap: 9px; margin-top: 16px; padding: 12px 18px 0; background: linear-gradient(transparent, var(--carnival-paper) 15%); }
 
 .carnival-network-game { padding-bottom: calc(18px + env(safe-area-inset-bottom)); }
@@ -566,6 +693,13 @@
 @keyframes carnival-spin { to { transform: rotate(360deg); } }
 @keyframes carnival-dot { 0%, 100% { opacity: 0.25; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-3px); } }
 @keyframes carnival-pulse { 50% { transform: translateY(-3px); box-shadow: 0 13px 28px rgba(80, 67, 189, 0.12); } }
+@keyframes carnival-preview-spark { 50% { transform: rotate(12deg) scale(1.08); } }
+@keyframes carnival-preview-step { 50% { box-shadow: 0 0 0 6px rgba(119,104,218,0.16); } }
+@keyframes carnival-preview-float { to { translate: 0 -7px; } }
+@keyframes carnival-preview-slide { to { translate: 18px 0; } }
+@keyframes carnival-preview-orbit { to { rotate: 360deg; } }
+@keyframes carnival-preview-pulse { 50% { filter: saturate(1.2); transform: scale(0.99); } }
+@keyframes carnival-preview-ending-ripple { 50% { box-shadow: 0 0 0 16px color-mix(in srgb, var(--exclusive-accent) 0%, transparent); } }
 
 @media (min-width: 781px) {
   .carnival-chat-page { padding: 22px; }
@@ -592,6 +726,19 @@
   .carnival-exclusive-series { grid-template-columns: 1fr; }
   .carnival-exclusive-series > button:first-child { grid-column: auto; }
   .carnival-exclusive-series > button { min-height: 112px; }
+  .carnival-prompt-game-building,
+  .carnival-prompt-game-preview { margin-right: 12px; margin-left: 12px; }
+  .carnival-prompt-game-building ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .carnival-prompt-game-preview { padding: 13px; border-radius: 20px; }
+  .carnival-prompt-game-preview > header { align-items: stretch; }
+  .carnival-prompt-game-preview > header > .carnival-prompt-game-preview__badges { max-width: 48%; align-content: flex-start; }
+  .carnival-prompt-game-preview__rounds button { min-height: 50px; grid-template-columns: 1fr; justify-items: center; padding: 6px 4px; text-align: center; }
+  .carnival-prompt-game-preview__rounds button i { width: 22px; height: 22px; }
+  .carnival-prompt-game-preview__ending { padding: 18px 10px; }
+  .carnival-prompt-game-preview__ending ol { grid-template-columns: 1fr; }
+  .carnival-prompt-game-preview__ending li { min-height: 48px; grid-template-columns: 22px minmax(0, 1fr); align-items: center; justify-items: start; text-align: left; }
+  .carnival-prompt-game-preview > footer { display: grid; }
+  .carnival-prompt-game-preview > footer small { text-align: left; }
 }
 
 @media (max-width: 350px) {
@@ -602,6 +749,9 @@
   .carnival-gate progress { flex: 1; width: auto; }
   .carnival-game-types { grid-template-columns: 1fr; }
   .carnival-composer__send { min-width: 52px; padding: 0 9px; }
+  .carnival-prompt-game-preview__rounds { gap: 4px; }
+  .carnival-prompt-game-preview__rounds button { min-height: 48px; font-size: 7px; }
+  .carnival-prompt-game-preview__actions { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {
