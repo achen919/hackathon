@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { createConfigStore, createMemoryConfigStore, publicConfig } from './config-store.mjs';
+import { templateGuidance } from './game-templates.mjs';
 
 function gameType(id, label) {
   return {
@@ -140,14 +141,39 @@ test('legacy free-form game type strings migrate to all four stable templates', 
   ]);
 });
 
-test('configuration keeps at least one playable built-in template enabled', async () => {
+test('configuration treats the custom exclusive template as playable', async () => {
   const store = createMemoryConfigStore();
   const current = await store.get();
-  await assert.rejects(
-    () => store.update({
-      ...current,
-      gameTypes: [gameType('custom', '专属小游戏')],
-    }),
-    /at least one playable template enabled/,
-  );
+  const updated = await store.update({
+    ...current,
+    gameTypes: [gameType('custom', '专属小游戏')],
+  });
+  assert.deepEqual(updated.gameTypes.map((item) => item.id), ['custom']);
+});
+
+test('migrates only the exact legacy reserved custom prompt and preserves user guidance', async () => {
+  const legacyReservedPrompt =
+    '这是预留的“专属小游戏”类型。保持通用三轮安全题卡结构，不假设尚未接入的前端机制。';
+  const userCustomPrompt =
+    '请保留这段用户自定义的专属小游戏提示词，三轮都围绕公开聊天里的共同兴趣展开，并保持轻松。';
+
+  const migrated = await createMemoryConfigStore({
+    gameTypes: [{
+      id: 'custom',
+      label: '专属小游戏',
+      enabled: true,
+      generationPrompt: legacyReservedPrompt,
+    }],
+  }).get();
+  assert.equal(migrated.gameTypes[0].generationPrompt, templateGuidance('custom'));
+
+  const preserved = await createMemoryConfigStore({
+    gameTypes: [{
+      id: 'custom',
+      label: '专属小游戏',
+      enabled: true,
+      generationPrompt: userCustomPrompt,
+    }],
+  }).get();
+  assert.equal(preserved.gameTypes[0].generationPrompt, userCustomPrompt);
 });

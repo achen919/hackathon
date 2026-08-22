@@ -239,6 +239,217 @@ test('rapid-choice fallback is accepted and a completed idempotent retry does no
   }, { configStore, aiService });
 });
 
+test('custom HTTP flow preserves series and invite ids while keeping answers private until each guess', async () => {
+  let aiCalls = 0;
+  const configStore = createMemoryConfigStore({ apiKey: 'test-only-provider-key' });
+  const aiService = {
+    async generate(_config, match, selection) {
+      aiCalls += 1;
+      return buildCarnivalFallbackGame(match, selection.templateId, selection.gameLabel, {
+        seriesId: selection.seriesId,
+      });
+    },
+  };
+  await withCarnival(async (baseUrl) => {
+    const users = await pairedUsers(baseUrl);
+    await unlock(baseUrl, users);
+    const state = await jsonRequest(baseUrl, '/api/carnival/state', { token: users.a.token });
+    const customType = state.payload.gameTypes.find((item) => item.templateId === 'custom');
+    assert.equal(customType.available, true);
+    assert.deepEqual(customType.series.map((item) => item.seriesId), [
+      'courtside', 'chat-archaeology', 'weekend-studio', 'contrast-lab', 'future-trailer',
+    ]);
+
+    const invalid = await jsonRequest(baseUrl, '/api/carnival/prompt', {
+      method: 'POST', token: users.a.token,
+      body: { templateId: 'custom', seriesId: 'missing' },
+    });
+    assert.equal(invalid.response.status, 400);
+    assert.equal(invalid.payload.code, 'INVALID_GAME_SERIES');
+
+    const preview = await jsonRequest(baseUrl, '/api/carnival/prompt', {
+      method: 'POST', token: users.a.token,
+      body: { templateId: 'custom', seriesId: 'courtside' },
+    });
+    assert.equal(preview.response.status, 200);
+    assert.equal(preview.payload.templateId, 'custom');
+    assert.equal(preview.payload.seriesId, 'courtside');
+    assert.match(preview.payload.prompt, /courtside/);
+
+    const inviteRequest = {
+      method: 'POST', token: users.a.token,
+      headers: { 'Idempotency-Key': 'exclusive-http-idempotency-01' },
+      body: { templateId: 'custom', seriesId: 'courtside', prompt: preview.payload.prompt },
+    };
+    const created = await jsonRequest(baseUrl, '/api/carnival/invites', inviteRequest);
+    const replay = await jsonRequest(baseUrl, '/api/carnival/invites', inviteRequest);
+    assert.equal(created.response.status, 201);
+    assert.equal(replay.response.status, 201);
+    assert.equal(created.payload.invite.inviteId, replay.payload.invite.inviteId);
+    assert.equal(created.payload.invite.templateId, 'custom');
+    assert.equal(created.payload.invite.seriesId, 'courtside');
+    assert.equal(created.payload.invite.game.definition.series.templateKey, 'exclusive_game_courtside_v1');
+    assert.equal(aiCalls, 1);
+    const inviteId = created.payload.invite.inviteId;
+
+    const joined = await jsonRequest(baseUrl, '/api/carnival/games/action', {
+      method: 'POST', token: users.b.token,
+      body: { inviteId, action: 'join' },
+    });
+    assert.equal(joined.response.status, 200);
+
+    for (let roundIndex = 0; roundIndex < 3; roundIndex += 1) {
+      const answerer = roundIndex % 2 === 0 ? users.a : users.b;
+      const guesser = roundIndex % 2 === 0 ? users.b : users.a;
+      const answererView = await jsonRequest(baseUrl, '/api/carnival/state', { token: answerer.token });
+      const answererInvite = answererView.payload.room.invites.find((item) => item.inviteId === inviteId);
+      const definition = answererInvite.game.definition;
+      const questionId = definition.question.id;
+      assert.equal(definition.roundIndex, roundIndex);
+      assert.equal(definition.protagonistId, 'a');
+      assert.equal(definition.self.role, 'answerer');
+
+      const answered = await jsonRequest(baseUrl, '/api/carnival/games/action', {
+        method: 'POST', token: answerer.token,
+        body: {
+          inviteId,
+          action: 'exclusive.answer',
+          payload: {
+            questionId,
+            answer: roundIndex,
+            requestId: `http-answer-round-${roundIndex}`,
+            expectedRevision: definition.revision,
+          },
+        },
+      });
+      assert.equal(answered.response.status, 200);
+
+      const guesserView = await jsonRequest(baseUrl, '/api/carnival/state', { token: guesser.token });
+      const guesserInvite = guesserView.payload.room.invites.find((item) => item.inviteId === inviteId);
+      assert.equal(guesserInvite.game.definition.phase, 'guessing');
+      assert.equal(guesserInvite.game.definition.protagonistId, 'b');
+      assert.equal(guesserInvite.game.definition.guesserId, 'a');
+      assert.equal(guesserInvite.game.definition.revealedRound, null);
+      assert.equal(JSON.stringify(guesserInvite).includes(`"answer":${roundIndex}`), false);
+
+      const guessed = await jsonRequest(baseUrl, '/api/carnival/games/action', {
+        method: 'POST', token: guesser.token,
+        body: {
+          inviteId,
+          action: 'exclusive.guess',
+          payload: {
+            questionId,
+            guess: (roundIndex + 1) % 3,
+            requestId: `http-guess-round-${roundIndex}`,
+            expectedRevision: guesserInvite.game.definition.revision,
+          },
+        },
+      });
+      assert.equal(guessed.response.status, 200);
+      assert.equal(guessed.payload.invite.game.definition.revealedRound.questionId, questionId);
+      assert.equal(guessed.payload.invite.game.definition.revealedRound.answer, roundIndex);
+
+      const next = await jsonRequest(baseUrl, '/api/carnival/games/action', {
+        method: 'POST', token: answerer.token,
+        body: {
+          inviteId,
+          action: 'exclusive.next',
+          payload: {
+            questionId,
+            requestId: `http-next-round-${roundIndex}`,
+            expectedRevision: guessed.payload.invite.game.definition.revision,
+          },
+        },
+      });
+      assert.equal(next.response.status, 200);
+      if (roundIndex < 2) {
+        assert.equal(next.payload.invite.game.definition.roundIndex, roundIndex + 1);
+      } else {
+        assert.equal(next.payload.invite.status, 'completed');
+        assert.equal(next.payload.invite.game.definition.phase, 'completed');
+        assert.equal(next.payload.invite.game.definition.results.length, 3);
+      }
+    }
+  }, { configStore, aiService });
+});
+
+test('custom invitation falls back to the same series when AI generation fails', async () => {
+  const configStore = createMemoryConfigStore({ apiKey: 'test-only-provider-key' });
+  const aiService = { async generate() { throw new Error('provider unavailable'); } };
+  await withCarnival(async (baseUrl) => {
+    const users = await pairedUsers(baseUrl);
+    await unlock(baseUrl, users);
+    const preview = await jsonRequest(baseUrl, '/api/carnival/prompt', {
+      method: 'POST', token: users.a.token,
+      body: { templateId: 'custom', seriesId: 'future-trailer' },
+    });
+    const created = await jsonRequest(baseUrl, '/api/carnival/invites', {
+      method: 'POST', token: users.a.token,
+      headers: { 'Idempotency-Key': 'exclusive-fallback-same-series' },
+      body: { templateId: 'custom', seriesId: 'future-trailer', prompt: preview.payload.prompt },
+    });
+    assert.equal(created.response.status, 201);
+    assert.equal(created.payload.invite.seriesId, 'future-trailer');
+    assert.equal(created.payload.invite.game.definition.seriesId, 'future-trailer');
+    assert.equal(created.payload.invite.game.definition.generatedBy, 'fallback');
+  }, { configStore, aiService });
+});
+
+test('custom invitation idempotency rejects changed series or prompt without another AI call', async () => {
+  let aiCalls = 0;
+  const configStore = createMemoryConfigStore({ apiKey: 'test-only-provider-key' });
+  const aiService = {
+    async generate(_config, match, selection) {
+      aiCalls += 1;
+      return buildCarnivalFallbackGame(match, selection.templateId, selection.gameLabel, {
+        seriesId: selection.seriesId,
+      });
+    },
+  };
+  await withCarnival(async (baseUrl) => {
+    const users = await pairedUsers(baseUrl);
+    await unlock(baseUrl, users);
+    const preview = await jsonRequest(baseUrl, '/api/carnival/prompt', {
+      method: 'POST', token: users.a.token,
+      body: { templateId: 'custom', seriesId: 'courtside' },
+    });
+    const idempotencyKey = 'exclusive-conflict-http-key-01';
+    const first = await jsonRequest(baseUrl, '/api/carnival/invites', {
+      method: 'POST', token: users.a.token,
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: { templateId: 'custom', seriesId: 'courtside', prompt: preview.payload.prompt },
+    });
+    assert.equal(first.response.status, 201);
+    assert.equal(aiCalls, 1);
+
+    const changedSeries = await jsonRequest(baseUrl, '/api/carnival/invites', {
+      method: 'POST', token: users.a.token,
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: { templateId: 'custom', seriesId: 'future-trailer', prompt: preview.payload.prompt },
+    });
+    assert.equal(changedSeries.response.status, 409);
+    assert.equal(changedSeries.payload.code, 'IDEMPOTENCY_CONFLICT');
+    assert.equal(aiCalls, 1);
+
+    const changedPrompt = await jsonRequest(baseUrl, '/api/carnival/invites', {
+      method: 'POST', token: users.a.token,
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: {
+        templateId: 'custom',
+        seriesId: 'courtside',
+        prompt: `${preview.payload.prompt}\n请把题面表达得更轻松一些。`,
+      },
+    });
+    assert.equal(changedPrompt.response.status, 409);
+    assert.equal(changedPrompt.payload.code, 'IDEMPOTENCY_CONFLICT');
+    assert.equal(aiCalls, 1);
+
+    const state = await jsonRequest(baseUrl, '/api/carnival/state', { token: users.a.token });
+    assert.equal(state.payload.room.invites.length, 1);
+    assert.equal(state.payload.room.invites[0].inviteId, first.payload.invite.inviteId);
+  }, { configStore, aiService });
+});
+
 test('carnival mutations reject cross-origin requests and invalid bearer tokens', async () => {
   await withCarnival(async (baseUrl) => {
     const crossOrigin = await fetch(`${baseUrl}/api/carnival/join`, {

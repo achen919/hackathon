@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { buildExclusiveFallbackGame } from './exclusive-series.mjs';
 
 const PUBLIC_TOPICS = [
   '博物馆', '逛展', '徒步', '爬山', '露营', '骑行', '跑步', '健身', '做饭', '摄影',
@@ -121,7 +122,10 @@ export function carnivalMatchFromState(state) {
   };
 }
 
-export function buildCarnivalFallbackGame(match, templateId, label) {
+export function buildCarnivalFallbackGame(match, templateId, label, selection = {}) {
+  if (templateId === 'custom') {
+    return buildExclusiveFallbackGame(match, selection.seriesId, label || '专属小游戏');
+  }
   const topic = publicTopic(match.messages);
   const questions = templateId === 'keyword-wheel'
     ? wheelQuestions(topic)

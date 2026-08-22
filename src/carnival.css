@@ -488,6 +488,58 @@
 .carnival-game-types strong { overflow: hidden; width: 100%; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .carnival-game-types small { color: var(--carnival-muted); font-size: 9px; line-height: 1.45; }
 
+.carnival-exclusive-picker {
+  display: grid;
+  gap: 12px;
+  margin: 15px 18px 0;
+  padding: 14px;
+  border: 1px solid rgba(102, 87, 216, 0.14);
+  border-radius: 20px;
+  background: linear-gradient(145deg, #fbf9ff, #fffaf7);
+}
+.carnival-exclusive-picker__intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.carnival-exclusive-picker__intro > div { display: grid; gap: 3px; }
+.carnival-exclusive-picker__intro span { color: var(--carnival-violet-deep); font-size: 8px; font-weight: 850; letter-spacing: 0.1em; }
+.carnival-exclusive-picker__intro h3 { margin: 0; font-size: 17px; letter-spacing: -0.035em; }
+.carnival-exclusive-picker__intro p { max-width: 230px; margin: 0; color: var(--carnival-muted); font-size: 8px; line-height: 1.5; text-align: right; }
+.carnival-exclusive-picker__intro p strong { color: var(--carnival-violet-deep); font-size: 11px; }
+.carnival-exclusive-picker__reason { margin: -3px 0 0; color: #655f69; font-size: 10px; line-height: 1.55; }
+.carnival-exclusive-series { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.carnival-exclusive-series > button {
+  --exclusive-accent: #6657d8;
+  --exclusive-soft: #efedff;
+  display: flex;
+  min-width: 0;
+  min-height: 118px;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(102, 87, 216, 0.12);
+  border-radius: 16px;
+  background: #fff;
+  color: var(--carnival-ink);
+  text-align: left;
+  cursor: pointer;
+}
+.carnival-exclusive-series > button:first-child { grid-column: 1 / -1; }
+.carnival-exclusive-series > button.is-selected { border-color: color-mix(in srgb, var(--exclusive-accent) 58%, transparent); background: var(--exclusive-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--exclusive-accent) 10%, transparent); }
+.carnival-exclusive-series > button.is-coral { --exclusive-accent: #d65f4f; --exclusive-soft: #fff0eb; }
+.carnival-exclusive-series > button.is-violet { --exclusive-accent: #6657d8; --exclusive-soft: #efedff; }
+.carnival-exclusive-series > button.is-mint { --exclusive-accent: #2f8c6c; --exclusive-soft: #eaf8f2; }
+.carnival-exclusive-series > button.is-gold { --exclusive-accent: #b57c24; --exclusive-soft: #fff5dc; }
+.carnival-exclusive-series > button.is-blue { --exclusive-accent: #447ec8; --exclusive-soft: #eaf3ff; }
+.carnival-exclusive-series__icon { display: grid; width: 36px; height: 36px; flex: 0 0 auto; place-items: center; border-radius: 12px; background: var(--exclusive-soft); color: var(--exclusive-accent); font-size: 17px; font-weight: 900; }
+.carnival-exclusive-series__copy { display: grid; min-width: 0; flex: 1; gap: 4px; }
+.carnival-exclusive-series__copy > span:first-child { color: var(--exclusive-accent); font-size: 8px; font-weight: 850; letter-spacing: 0.06em; }
+.carnival-exclusive-series__copy em { margin-left: 5px; padding: 2px 5px; border-radius: 99px; background: var(--exclusive-accent); color: #fff; font-size: 7px; font-style: normal; }
+.carnival-exclusive-series__copy > strong { font-size: 11px; line-height: 1.35; }
+.carnival-exclusive-series__copy > small { color: var(--carnival-muted); font-size: 8px; line-height: 1.45; }
+.carnival-exclusive-series__foot { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-top: auto; }
+.carnival-exclusive-series__foot i { color: var(--carnival-muted); font-size: 7px; font-style: normal; }
+.carnival-exclusive-series__foot b { color: var(--exclusive-accent); font-size: 8px; }
+.carnival-exclusive-picker__safety { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: #687a74; font-size: 8px; line-height: 1.5; }
+
 .carnival-prompt-field { display: grid; gap: 8px; padding: 17px 18px 0; }
 .carnival-prompt-field > span { font-size: 11px; font-weight: 850; }
 .carnival-prompt-field em { color: var(--carnival-muted); font-size: 9px; font-style: normal; font-weight: 500; }
@@ -534,6 +586,12 @@
   .carnival-pending-invite__actions { grid-column: 1 / -1; width: 100%; }
   .carnival-unlock-message > button { min-height: 42px; }
   .carnival-pending-invite__actions button { min-height: 42px; flex: 1; }
+  .carnival-exclusive-picker { margin-right: 12px; margin-left: 12px; padding: 11px; }
+  .carnival-exclusive-picker__intro { display: grid; }
+  .carnival-exclusive-picker__intro p { max-width: none; text-align: left; }
+  .carnival-exclusive-series { grid-template-columns: 1fr; }
+  .carnival-exclusive-series > button:first-child { grid-column: auto; }
+  .carnival-exclusive-series > button { min-height: 112px; }
 }
 
 @media (max-width: 350px) {

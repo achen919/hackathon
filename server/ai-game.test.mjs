@@ -82,6 +82,46 @@ test('validates output and keeps renamed labels on the stable profile-riddle mec
   assert.equal(isGeneratedGamePayload(validPayload), true);
 });
 
+test('custom AI generation pins series id, guidance, shape, mechanics, and cache identity', async () => {
+  let requestBody;
+  const fetchImpl = async (_url, init) => {
+    requestBody = JSON.parse(init.body);
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(validPayload) } }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  const customConfig = {
+    ...config,
+    gameTypes: [gameType('custom', '专属小游戏')],
+  };
+  const service = createAiGameService({ fetchImpl });
+  const game = await service.generate(customConfig, match, {
+    templateId: 'custom',
+    seriesId: 'chat-archaeology',
+    prompt: '请围绕公开聊天中已经出现的话题，生成三轮安全的聊天考古小游戏。',
+  });
+  const serializedMessages = JSON.stringify(requestBody.messages);
+  assert.match(serializedMessages, /chat-archaeology/);
+  assert.match(serializedMessages, /exclusive_game_chat_archaeology_v1/);
+  assert.equal(game.templateId, 'custom');
+  assert.equal(game.seriesId, 'chat-archaeology');
+  assert.equal(game.mechanics.kind, 'exclusive-series');
+  assert.equal(game.mechanics.templateKey, 'exclusive_game_chat_archaeology_v1');
+  assert.equal(isTemplateShapeValid(validPayload, 'custom', 'chat-archaeology'), true);
+  assert.equal(isTemplateShapeValid({
+    ...validPayload,
+    questions: validPayload.questions.map((question) => ({ ...question, options: question.options.slice(0, 2) })),
+  }, 'custom', 'chat-archaeology'), false);
+  assert.throws(
+    () => isTemplateShapeValid(validPayload, 'custom', 'missing'),
+    /Unsupported exclusive game series/,
+  );
+  const firstKey = service.cacheKey(customConfig, match, { templateId: 'custom', seriesId: 'courtside' });
+  const secondKey = service.cacheKey(customConfig, match, { templateId: 'custom', seriesId: 'future-trailer' });
+  assert.notEqual(firstKey, secondKey);
+});
+
 test('falls back to JSON mode only when structured output is explicitly unsupported', async () => {
   let calls = 0;
   const fetchImpl = async (_url, init) => {
@@ -129,6 +169,38 @@ test('rejects malformed generated games before they reach the browser', () => {
       index === 0 ? { ...question, prompt: '你愿意交换微信号和联系方式吗？' } : question,
     ),
   }), false);
+});
+
+test('rejects sensitive financial, health, and living-arrangement questions at validation and generation', async () => {
+  const sensitiveQuestions = [
+    '你会怎么安排每月到手的钱，为什么？',
+    '长期不舒服时，你通常更愿意怎么处理？',
+    '你现在更习惯和谁一起住，为什么？',
+  ];
+
+  for (const prompt of sensitiveQuestions) {
+    const unsafePayload = {
+      ...validPayload,
+      questions: validPayload.questions.map((question, index) => (
+        index === 0 ? { ...question, prompt } : question
+      )),
+    };
+    assert.equal(isGeneratedGamePayload(unsafePayload), false, prompt);
+
+    const fetchImpl = async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify(unsafePayload) } }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+    await assert.rejects(
+      () => createAiGameService({ fetchImpl }).generate(config, match, {
+        templateId: 'profile-riddle',
+      }),
+      /AI game did not match the required schema/,
+      prompt,
+    );
+  }
 });
 
 test('AI context keeps safe profile signals without sending raw private profiles or memories', () => {

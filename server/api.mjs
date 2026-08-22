@@ -10,6 +10,7 @@ import {
   publicGameTypes,
   templateForId,
 } from './game-templates.mjs';
+import { requireExclusiveSeries } from './exclusive-series.mjs';
 
 export const DEFAULT_UPSTREAM_URL =
   'https://intellimatch.cn/api/v7/hackathon/match?format=json';
@@ -352,6 +353,7 @@ export function createApiHandler({
       body.contextId.length > 100 ||
       (body.fresh !== undefined && typeof body.fresh !== 'boolean') ||
       (body.templateId !== undefined && (typeof body.templateId !== 'string' || body.templateId.length > 40)) ||
+      (body.seriesId !== undefined && (typeof body.seriesId !== 'string' || body.seriesId.length > 40)) ||
       (body.prompt !== undefined && typeof body.prompt !== 'string')
     ) {
       sendJson(response, 400, { error: 'Invalid game generation request', request_id: requestId }, requestId);
@@ -383,10 +385,18 @@ export function createApiHandler({
       sendJson(response, 409, { error: 'This game template is not available yet', code: 'GAME_TEMPLATE_UNAVAILABLE', request_id: requestId }, requestId);
       return;
     }
+    let series = null;
+    try {
+      if (template.id === 'custom') series = requireExclusiveSeries(body.seriesId);
+      else if (body.seriesId !== undefined) throw Object.assign(new Error('seriesId is only valid for the custom template'), { status: 400 });
+    } catch (error) {
+      sendJson(response, 400, { error: error.message, code: error.code ?? 'INVALID_GAME_SERIES', request_id: requestId }, requestId);
+      return;
+    }
     let prompt;
     try {
       prompt = body.prompt === undefined
-        ? buildPromptPreview(match, configuredType)
+        ? buildPromptPreview(match, configuredType, { seriesId: series?.seriesId })
         : normalizePlayerPrompt(body.prompt);
     } catch (error) {
       sendJson(response, error.status ?? 400, { error: error.message, code: 'INVALID_GAME_PROMPT', request_id: requestId }, requestId);
@@ -400,6 +410,7 @@ export function createApiHandler({
       templateId: configuredType.id,
       gameLabel: configuredType.label,
       prompt,
+      seriesId: series?.seriesId,
     };
     pruneCache(gameCache);
     const key = aiService.cacheKey(config, match, selection);
@@ -485,7 +496,8 @@ export function createApiHandler({
       typeof body.contextId !== 'string' ||
       body.contextId.length > 100 ||
       typeof body.templateId !== 'string' ||
-      body.templateId.length > 40
+      body.templateId.length > 40 ||
+      (body.seriesId !== undefined && (typeof body.seriesId !== 'string' || body.seriesId.length > 40))
     ) {
       sendJson(response, 400, { error: 'Invalid prompt request', request_id: requestId }, requestId);
       return;
@@ -503,16 +515,26 @@ export function createApiHandler({
         return;
       }
       const template = templateForId(configuredType.id);
+      const series = template?.id === 'custom' ? requireExclusiveSeries(body.seriesId) : null;
+      if (template?.id !== 'custom' && body.seriesId !== undefined) {
+        sendJson(response, 400, { error: 'seriesId is only valid for the custom template', code: 'INVALID_GAME_SERIES', request_id: requestId }, requestId);
+        return;
+      }
       sendJson(response, 200, {
         templateId: configuredType.id,
+        seriesId: series?.seriesId ?? null,
         label: configuredType.label,
         available: Boolean(template?.available),
         description: template?.description ?? '',
-        prompt: buildPromptPreview(context.match, configuredType),
+        prompt: buildPromptPreview(context.match, configuredType, { seriesId: series?.seriesId }),
         maxLength: 1_500,
       }, requestId);
-    } catch {
-      sendJson(response, 503, { error: 'Game configuration is unavailable', code: 'AI_CONFIG_UNAVAILABLE', request_id: requestId }, requestId);
+    } catch (error) {
+      if (error?.status === 400) {
+        sendJson(response, 400, { error: error.message, code: error.code ?? 'INVALID_GAME_SERIES', request_id: requestId }, requestId);
+      } else {
+        sendJson(response, 503, { error: 'Game configuration is unavailable', code: 'AI_CONFIG_UNAVAILABLE', request_id: requestId }, requestId);
+      }
     }
   }
 

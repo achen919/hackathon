@@ -18,6 +18,7 @@ import type {
   CarnivalState,
   CarnivalTextMessage,
 } from './carnival-types';
+import { exclusiveSeriesById, type CarnivalExclusiveSeriesId } from './carnival-exclusive';
 
 type JsonObject = Record<string, unknown>;
 
@@ -106,6 +107,10 @@ function invite(value: unknown): CarnivalInviteView {
     inviteId,
     creatorId,
     templateId,
+    seriesId: exclusiveSeriesById(value.seriesId)?.id
+      ?? (isObject(value.game) && isObject(value.game.definition)
+        ? exclusiveSeriesById(value.game.definition.seriesId)?.id
+        : undefined),
     gameLabel: text(value.gameLabel, text(value.label, '双人小游戏')),
     title: text(value.title, '来玩这一局'),
     promptPreview: text(value.promptPreview, text(value.prompt)).slice(0, 240),
@@ -182,6 +187,7 @@ function promptPreview(value: unknown): CarnivalPromptPreview {
   const maxLength = Math.min(10_000, Math.max(20, number(source.maxLength, 1_500)));
   return {
     templateId,
+    seriesId: exclusiveSeriesById(source.seriesId)?.id ?? undefined,
     label: text(source.label, '双人小游戏'),
     description: text(source.description),
     prompt: prompt.slice(0, maxLength),
@@ -267,11 +273,16 @@ export function createCarnivalApi({
       return normalizeCarnivalState(payload);
     },
 
-    async getPrompt(token: string, templateId: string, signal?: AbortSignal) {
+    async getPrompt(
+      token: string,
+      templateId: string,
+      signal?: AbortSignal,
+      seriesId?: CarnivalExclusiveSeriesId,
+    ) {
       return promptPreview(await requestJson(fetcher, `${path}/prompt`, {
         method: 'POST', signal,
         headers: { ...bearer(token), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ templateId }),
+        body: JSON.stringify({ templateId, ...(seriesId ? { seriesId } : {}) }),
       }));
     },
 
@@ -287,7 +298,11 @@ export function createCarnivalApi({
           'Content-Type': 'application/json',
           'Idempotency-Key': input.idempotencyKey,
         },
-        body: JSON.stringify({ templateId: input.templateId, prompt: input.prompt }),
+        body: JSON.stringify({
+          templateId: input.templateId,
+          ...(input.seriesId ? { seriesId: input.seriesId } : {}),
+          prompt: input.prompt,
+        }),
       });
       if (!isObject(payload)) throw new CarnivalApiError('邀请响应格式错误。', 0, 'CARNIVAL_BAD_RESPONSE');
       return { invite: invite(payload.invite), state: normalizeCarnivalState(payload.state) };

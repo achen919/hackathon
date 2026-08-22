@@ -383,7 +383,7 @@ export default function AdminPage() {
                     onChange={(event) => setGameTypes((current) => current.map((entry, entryIndex) => entryIndex === index ? { ...entry, generationPrompt: event.target.value } : entry))}
                   />
                 </label>
-                {item.id === 'custom' && <small className="admin-template-card__waiting">专属小游戏交互由团队另一模块接入；这里先保留稳定 ID、关键词和 Prompt。</small>}
+                {item.id === 'custom' && <small className="admin-template-card__waiting">专属小游戏已在游园会接入五个双端系列；这里配置入口名称和通用生成要求，用户发起前仍可编辑本局 Prompt。</small>}
               </article>
             ))}
           </div>
