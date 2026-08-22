@@ -1,25 +1,30 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import {
+  GAME_TEMPLATE_CATALOG,
+  templateForId,
+  templateGuidance,
+} from './game-templates.mjs';
 
-export const DEFAULT_SYSTEM_PROMPT = `你是良配的双人破冰游戏设计师。请基于双方资料、择偶偏好与完整聊天上下文，设计一局只属于这两个人的轻量双人游戏。
+export const DEFAULT_SYSTEM_PROMPT = `你是良配的双人破冰游戏设计师。请基于公开聊天与服务端提炼的非敏感资料信号，设计一局只属于这两个人的轻量双人游戏。
 
 设计目标：降低初次聊天压力、增加双方自我披露与互相理解，并自然产生下一轮聊天话题。
 
 硬性边界：
 1. 不评判匹配度，不预测感情结果，不使用 PUA、激将、嫉妒、稀缺感或性别刻板印象。
-2. memories_self、memories_ideal 和个人资料只用于理解边界与选择适合的主题；不得在题目、来源说明或跟进文案中直接泄露一方未在聊天中公开的事实。
+2. 输入只包含服务端允许的非敏感资料信号；不得猜测、补全或披露原始个人资料、择偶记忆与未公开事实。
 3. 若聊天出现拒绝、结束或明显不适，选择低压力、尊重边界的游戏，不推动见面、交换联系方式或亲密升级。
 4. 每题必须角色中性，能由任意一方先作答；选项无优劣，避免敏感财务、健康、性、宗教与政治问题。
-5. 游戏固定三轮：先轻松共同点，再日常偏好，最后给出一个可选、低压力的小行动。
+5. 严格遵循本次选中的游戏模板；游戏保持 3-5 轮，并从轻松共同点逐步进入日常偏好。
 6. source 只能概括公开聊天线索，不得声称读心或暴露私密资料。
 7. matchedFollowUp 与 differentFollowUp 都应自然、简短、可由本人修改后发送。`;
 
 export const DEFAULT_GAME_TYPES = [
-  '默契猜猜：一方私密选择，另一方猜答案',
-  '二选一地图：沿共同兴趣探索彼此偏好',
-  '情景接力：用轻量生活场景交换看法',
-  '共同任务：完成一个低压力的小行动',
+  { id: 'profile-riddle', label: '资料猜谜局', enabled: true, generationPrompt: templateGuidance('profile-riddle') },
+  { id: 'keyword-wheel', label: '关键词深挖', enabled: true, generationPrompt: templateGuidance('keyword-wheel') },
+  { id: 'rapid-choice', label: '极限2选1', enabled: true, generationPrompt: templateGuidance('rapid-choice') },
+  { id: 'custom', label: '专属小游戏', enabled: true, generationPrompt: templateGuidance('custom') },
 ];
 
 export const DEFAULT_AI_CONFIG = Object.freeze({
@@ -76,16 +81,43 @@ function assertPublicHttpsUrl(value, allowedOrigins = []) {
 }
 
 function normalizeGameTypes(value) {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 12) {
-    throw new Error('gameTypes must contain between 1 and 12 items');
+  if (Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === 'string')) {
+    // v1 stored arbitrary display strings without stable mechanics. Migrate the entire
+    // legacy list to the four fixed template ids instead of guessing behavior from labels.
+    return DEFAULT_GAME_TYPES.map((item) => ({ ...item }));
   }
-  const normalized = value.map((item, index) =>
-    normalizeString(item, `gameTypes[${index}]`, { max: 160 }),
-  );
-  if (new Set(normalized).size !== normalized.length) {
-    throw new Error('gameTypes must not contain duplicates');
+  if (!Array.isArray(value) || value.length < 1 || value.length > GAME_TEMPLATE_CATALOG.length) {
+    throw new Error(`gameTypes must contain between 1 and ${GAME_TEMPLATE_CATALOG.length} items`);
+  }
+  const normalized = value.map((item, index) => {
+    if (!isRecord(item)) throw new Error(`gameTypes[${index}] must be an object`);
+    const template = templateForId(item.id);
+    if (!template) throw new Error(`gameTypes[${index}].id is not supported`);
+    if (item.enabled !== undefined && typeof item.enabled !== 'boolean') {
+      throw new Error(`gameTypes[${index}].enabled must be a boolean`);
+    }
+    return {
+      id: template.id,
+      label: normalizeString(item.label, `gameTypes[${index}].label`, { max: 60 }),
+      enabled: item.enabled !== false,
+      generationPrompt: normalizeString(
+        item.generationPrompt ?? templateGuidance(template.id),
+        `gameTypes[${index}].generationPrompt`,
+        { min: 20, max: 4_000 },
+      ),
+    };
+  });
+  if (new Set(normalized.map((item) => item.id)).size !== normalized.length) {
+    throw new Error('gameTypes must not contain duplicate template ids');
+  }
+  if (!normalized.some((item) => item.enabled && templateForId(item.id)?.available)) {
+    throw new Error('gameTypes must keep at least one playable template enabled');
   }
   return normalized;
+}
+
+function cloneGameTypes(value) {
+  return value.map((item) => ({ ...item }));
 }
 
 export function normalizeConfigInput(value, current = DEFAULT_AI_CONFIG, { allowedOrigins = [] } = {}) {
@@ -112,7 +144,7 @@ export function publicConfig(config) {
     apiKeyConfigured: Boolean(config.apiKey),
     model: config.model,
     systemPrompt: config.systemPrompt,
-    gameTypes: [...config.gameTypes],
+    gameTypes: cloneGameTypes(config.gameTypes),
     updatedAt: config.updatedAt,
   };
 }
@@ -194,19 +226,23 @@ export function createConfigStore({
   const allowedOriginList = Array.isArray(allowedOrigins)
     ? allowedOrigins
     : String(allowedOrigins).split(',').map((item) => item.trim()).filter(Boolean);
-  let cache = initialConfig ? { ...DEFAULT_AI_CONFIG, ...initialConfig } : null;
+  let cache = initialConfig ? {
+    ...DEFAULT_AI_CONFIG,
+    ...initialConfig,
+    gameTypes: normalizeGameTypes(initialConfig.gameTypes ?? DEFAULT_GAME_TYPES),
+  } : null;
   let writeChain = Promise.resolve();
 
   async function readFromDisk() {
-    if (cache) return { ...cache, gameTypes: [...cache.gameTypes] };
+    if (cache) return { ...cache, gameTypes: cloneGameTypes(cache.gameTypes) };
     try {
       const raw = await readFile(path, 'utf8');
       cache = loadedConfig(JSON.parse(raw), key, allowedOriginList);
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error;
-      cache = { ...DEFAULT_AI_CONFIG, gameTypes: [...DEFAULT_GAME_TYPES] };
+      cache = { ...DEFAULT_AI_CONFIG, gameTypes: cloneGameTypes(DEFAULT_GAME_TYPES) };
     }
-    return { ...cache, gameTypes: [...cache.gameTypes] };
+    return { ...cache, gameTypes: cloneGameTypes(cache.gameTypes) };
   }
 
   async function update(value) {
@@ -224,7 +260,7 @@ export function createConfigStore({
       await rename(temporaryPath, path);
       await chmod(path, 0o600);
       cache = next;
-      return { ...next, gameTypes: [...next.gameTypes] };
+      return { ...next, gameTypes: cloneGameTypes(next.gameTypes) };
     });
     writeChain = operation.catch(() => {});
     return operation;
@@ -237,15 +273,15 @@ export function createMemoryConfigStore(initialConfig = {}) {
   let config = {
     ...DEFAULT_AI_CONFIG,
     ...initialConfig,
-    gameTypes: [...(initialConfig.gameTypes ?? DEFAULT_GAME_TYPES)],
+    gameTypes: normalizeGameTypes(initialConfig.gameTypes ?? DEFAULT_GAME_TYPES),
   };
   return {
     async get() {
-      return { ...config, gameTypes: [...config.gameTypes] };
+      return { ...config, gameTypes: cloneGameTypes(config.gameTypes) };
     },
     async update(value) {
       config = normalizeConfigInput(value, config);
-      return { ...config, gameTypes: [...config.gameTypes] };
+      return { ...config, gameTypes: cloneGameTypes(config.gameTypes) };
     },
   };
 }

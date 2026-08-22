@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import './admin.css';
 
 interface AdminSession {
@@ -11,8 +11,15 @@ interface AdminConfig {
   apiKeyConfigured: boolean;
   model: string;
   systemPrompt: string;
-  gameTypes: string[];
+  gameTypes: AdminGameType[];
   updatedAt: string | null;
+}
+
+interface AdminGameType {
+  id: 'profile-riddle' | 'keyword-wheel' | 'rapid-choice' | 'custom';
+  label: string;
+  enabled: boolean;
+  generationPrompt: string;
 }
 
 interface ApiErrorBody {
@@ -50,23 +57,18 @@ export default function AdminPage() {
   const [apiBaseUrl, setApiBaseUrl] = useState('');
   const [model, setModel] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
-  const [gameTypesText, setGameTypesText] = useState('');
+  const [gameTypes, setGameTypes] = useState<AdminGameType[]>([]);
   const [models, setModels] = useState<string[]>([]);
   const [busy, setBusy] = useState<'login' | 'save' | 'models' | 'logout' | null>(null);
   const [notice, setNotice] = useState<{ tone: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
-
-  const gameTypes = useMemo(
-    () => gameTypesText.split('\n').map((item) => item.trim()).filter(Boolean),
-    [gameTypesText],
-  );
 
   function applyConfig(next: AdminConfig) {
     setConfig(next);
     setApiBaseUrl(next.apiBaseUrl);
     setModel(next.model);
     setSystemPrompt(next.systemPrompt);
-    setGameTypesText(next.gameTypes.join('\n'));
+    setGameTypes(next.gameTypes.map((item) => ({ ...item })));
   }
 
   async function loadConfig() {
@@ -140,7 +142,7 @@ export default function AdminPage() {
 
   async function saveConfig(options: { clearApiKey?: boolean } = {}) {
     if (!session?.csrfToken) return;
-    if (gameTypes.length < 1) {
+    if (!gameTypes.some((item) => item.enabled)) {
       setNotice({ tone: 'error', text: '至少保留一种候选游戏类型。' });
       return;
     }
@@ -292,7 +294,7 @@ export default function AdminPage() {
         <div>
           <p className="eyebrow">AI GAME STUDIO</p>
           <h1>让每一对匹配，都有不重样的破冰局</h1>
-          <p>模型会理解双方个人资料、择偶偏好与完整聊天，再从你允许的玩法里选择最适合的一种。固定安全规则不会被自定义提示词覆盖。</p>
+          <p>模型会理解最近公开聊天与服务端提炼的非敏感资料信号，再按你选择的固定玩法生成专属题面。固定安全规则不会被自定义提示词覆盖。</p>
         </div>
         <div className="admin-status-card">
           <span className={config.apiKeyConfigured ? 'is-online' : 'is-offline'} />
@@ -348,14 +350,42 @@ export default function AdminPage() {
         </section>
 
         <section className="admin-panel admin-panel--types">
-          <div className="admin-panel__heading"><div><span>02</span><h2>候选游戏类型</h2></div><small>{gameTypes.length}/12</small></div>
-          <label className="admin-field admin-field--grow">
-            <span>每行一种玩法</span>
-            <textarea value={gameTypesText} onChange={(event) => setGameTypesText(event.target.value)} rows={8} />
-            <small>AI 会结合本次聊天阶段，从这些类型里挑选或安全组合，而不是机械随机。</small>
-          </label>
-          <div className="admin-type-preview">
-            {gameTypes.map((item, index) => <span key={`${item}-${index}`}>{item.split('：')[0]}</span>)}
+          <div className="admin-panel__heading"><div><span>02</span><h2>滚动关键词与模板</h2></div><small>{gameTypes.filter((item) => item.enabled).length}/{gameTypes.length}</small></div>
+          <p className="admin-panel__intro">模板 ID 和交互机制固定，滚动展示词与该模板的生成要求可以随时修改。</p>
+          <div className="admin-template-list">
+            {gameTypes.map((item, index) => (
+              <article className={`admin-template-card ${item.enabled ? 'is-enabled' : ''}`} key={item.id}>
+                <header>
+                  <div><code>{item.id}</code><strong>{item.label}</strong></div>
+                  <label className="admin-template-toggle">
+                    <input
+                      type="checkbox"
+                      checked={item.enabled}
+                      onChange={(event) => setGameTypes((current) => current.map((entry, entryIndex) => entryIndex === index ? { ...entry, enabled: event.target.checked } : entry))}
+                    />
+                    <span>{item.enabled ? '展示' : '隐藏'}</span>
+                  </label>
+                </header>
+                <label className="admin-field">
+                  <span>聊天页滚动关键词</span>
+                  <input
+                    value={item.label}
+                    maxLength={60}
+                    onChange={(event) => setGameTypes((current) => current.map((entry, entryIndex) => entryIndex === index ? { ...entry, label: event.target.value } : entry))}
+                  />
+                </label>
+                <label className="admin-field">
+                  <span>该模板生成要求</span>
+                  <textarea
+                    value={item.generationPrompt}
+                    rows={5}
+                    maxLength={4_000}
+                    onChange={(event) => setGameTypes((current) => current.map((entry, entryIndex) => entryIndex === index ? { ...entry, generationPrompt: event.target.value } : entry))}
+                  />
+                </label>
+                {item.id === 'custom' && <small className="admin-template-card__waiting">专属小游戏交互由团队另一模块接入；这里先保留稳定 ID、关键词和 Prompt。</small>}
+              </article>
+            ))}
           </div>
         </section>
 
@@ -371,9 +401,9 @@ export default function AdminPage() {
         <aside className="admin-panel admin-panel--flow">
           <div className="admin-panel__heading"><div><span>04</span><h2>生成链路</h2></div></div>
           <ol className="admin-flow-list">
-            <li><span>1</span><div><strong>理解两个人</strong><small>个人简介、完整资料、择偶偏好与聊天上下文</small></div></li>
-            <li><span>2</span><div><strong>选择专属类型</strong><small>从候选玩法中匹配当前关系阶段</small></div></li>
-            <li><span>3</span><div><strong>生成三轮题卡</strong><small>轻松开场 → 日常偏好 → 低压力行动</small></div></li>
+            <li><span>1</span><div><strong>理解两个人</strong><small>最近公开聊天与非敏感资料信号，不发送原始私密资料</small></div></li>
+            <li><span>2</span><div><strong>锁定玩法模板</strong><small>稳定 ID 对应下拉、转盘或五秒二选一</small></div></li>
+            <li><span>3</span><div><strong>用户确认 Prompt</strong><small>先生成安全简报，允许本人修改后再开始</small></div></li>
             <li><span>4</span><div><strong>本地安全校验</strong><small>不合格输出不会进入前台，自动回退题库</small></div></li>
           </ol>
           <a className="admin-demo-link" href="/">去聊天页生成一局 <span>→</span></a>

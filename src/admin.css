@@ -70,6 +70,7 @@
 .admin-panel__heading span { display: grid; width: 29px; height: 29px; place-items: center; border-radius: 10px; background: #efedff; color: #5e51cf; font-size: 9px; font-weight: 800; }
 .admin-panel__heading h2 { margin: 0; font-size: 18px; letter-spacing: -.035em; }
 .admin-panel__heading small { color: #9a9299; font-size: 9px; }
+.admin-panel__intro { margin: -10px 0 18px; color: #817982; font-size: 10px; line-height: 1.65; }
 
 .admin-field { display: grid; gap: 8px; margin-top: 17px; }
 .admin-field:first-of-type { margin-top: 0; }
@@ -89,6 +90,19 @@
 .admin-security-strip span { padding: 7px 9px; border-radius: 999px; background: #edf7f3; color: #54766b; font-size: 8px; font-weight: 700; }
 .admin-type-preview { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 15px; }
 .admin-type-preview span { padding: 7px 9px; border-radius: 999px; background: linear-gradient(135deg, #efedff, #fff0eb); color: #716975; font-size: 9px; }
+
+.admin-template-list { display: grid; gap: 12px; }
+.admin-template-card { padding: 15px; border: 1px solid #e5ded9; border-radius: 17px; background: #faf8f6; opacity: .72; }
+.admin-template-card.is-enabled { border-color: rgba(117,103,232,.2); background: linear-gradient(145deg, #fff, #f8f6ff); opacity: 1; }
+.admin-template-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.admin-template-card > header > div { display: grid; min-width: 0; gap: 4px; }
+.admin-template-card code { color: #928a92; font-size: 8px; overflow-wrap: anywhere; }
+.admin-template-card strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.admin-template-card .admin-field { margin-top: 13px; }
+.admin-template-card .admin-field textarea { min-height: 118px; font-size: 11px; }
+.admin-template-toggle { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; color: #777078; font-size: 9px; cursor: pointer; }
+.admin-template-toggle input { width: 16px; height: 16px; accent-color: #7567e8; }
+.admin-template-card__waiting { display: block; margin-top: 12px; padding: 9px 10px; border-radius: 10px; background: #f0edf4; color: #817884; font-size: 8px; line-height: 1.55; }
 
 .admin-flow-list { display: grid; gap: 18px; margin: 0; padding: 0; list-style: none; }
 .admin-flow-list li { display: flex; gap: 12px; }

@@ -1,4 +1,5 @@
 export type ParticipantId = 'a' | 'b';
+export type GameTemplateId = 'profile-riddle' | 'keyword-wheel' | 'rapid-choice' | 'custom';
 
 export interface MatchUser {
   nickname: string;
@@ -35,9 +36,10 @@ export interface GameQuestion {
 }
 
 export interface GameDefinition {
-  schemaVersion: 1;
+  schemaVersion: 2;
   id: string;
   matchId: string;
+  templateId: GameTemplateId;
   gameType: string;
   title: string;
   eyebrow: string;
@@ -46,6 +48,21 @@ export interface GameDefinition {
   estimatedMinutes: number;
   topics: string[];
   questions: GameQuestion[];
+  mechanics:
+    | {
+        kind: 'profile-riddle';
+        keywordOptions: string[];
+        sentencePattern: string;
+      }
+    | {
+        kind: 'keyword-wheel';
+        segments: Array<{ id: string; keyword: string; prompt: string; followUp: string }>;
+      }
+    | {
+        kind: 'rapid-choice';
+        roundSeconds: 5;
+      }
+    | { kind: 'custom' };
   generatedBy: 'fallback' | 'ai';
   generatedAt: string;
 }
@@ -53,6 +70,25 @@ export interface GameDefinition {
 export interface AiGameStatus {
   configured: boolean;
   model: string | null;
+  gameTypes: GameTypeOption[];
+}
+
+export interface GameTypeOption {
+  id: GameTemplateId;
+  label: string;
+  templateId: GameTemplateId;
+  enabled: boolean;
+  available: boolean;
+  description: string;
+}
+
+export interface GamePromptPreview {
+  templateId: GameTemplateId;
+  label: string;
+  available: boolean;
+  description: string;
+  prompt: string;
+  maxLength: number;
 }
 
 export interface AiGameResponse {

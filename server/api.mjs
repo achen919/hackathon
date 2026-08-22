@@ -2,6 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { clearSessionCookie, createAdminSessions, sessionCookie, verifyAdminPassword } from './admin-auth.mjs';
 import { compactMatchForAi, createAiGameService } from './ai-game.mjs';
 import { createConfigStore, publicConfig } from './config-store.mjs';
+import {
+  buildPromptPreview,
+  configuredGameType,
+  normalizePlayerPrompt,
+  publicGameTypes,
+  templateForId,
+} from './game-templates.mjs';
 
 export const DEFAULT_UPSTREAM_URL =
   'https://intellimatch.cn/api/v7/hackathon/match?format=json';
@@ -222,6 +229,7 @@ export function createApiHandler({
   const takeMatchRate = createRateLimiter(safeRateLimit, 60_000);
   const takeLoginRate = createRateLimiter(5, 15 * 60_000);
   const takeGlobalLoginRate = createRateLimiter(40, 15 * 60_000);
+  const takePromptRate = createRateLimiter(30, 10 * 60_000);
   const takeAiRate = createRateLimiter(Number.isFinite(aiRateLimit) ? Math.max(1, aiRateLimit) : 8, 10 * 60_000);
   const takeGlobalAiRate = createRateLimiter(Number.isFinite(aiHourlyLimit) ? Math.max(1, aiHourlyLimit) : 20, 60 * 60_000);
   const maxConcurrency = Number.isFinite(aiMaxConcurrency) ? Math.max(1, aiMaxConcurrency) : 2;
@@ -330,7 +338,7 @@ export function createApiHandler({
     }
     let body;
     try {
-      body = await readJsonBody(request, 2_000);
+      body = await readJsonBody(request, 8_000);
     } catch (error) {
       sendJson(response, error.status ?? 400, { error: error.message, request_id: requestId }, requestId);
       return;
@@ -339,7 +347,9 @@ export function createApiHandler({
       !isRecord(body) ||
       typeof body.contextId !== 'string' ||
       body.contextId.length > 100 ||
-      (body.fresh !== undefined && typeof body.fresh !== 'boolean')
+      (body.fresh !== undefined && typeof body.fresh !== 'boolean') ||
+      (body.templateId !== undefined && (typeof body.templateId !== 'string' || body.templateId.length > 40)) ||
+      (body.prompt !== undefined && typeof body.prompt !== 'string')
     ) {
       sendJson(response, 400, { error: 'Invalid game generation request', request_id: requestId }, requestId);
       return;
@@ -357,12 +367,39 @@ export function createApiHandler({
       sendJson(response, 503, { error: 'AI configuration is unavailable', code: 'AI_CONFIG_UNAVAILABLE', request_id: requestId }, requestId);
       return;
     }
+    const configuredType = configuredGameType(
+      config.gameTypes,
+      body.templateId ?? config.gameTypes.find((item) => item.enabled !== false)?.id,
+    );
+    if (!configuredType) {
+      sendJson(response, 400, { error: 'Game template is not enabled', code: 'GAME_TEMPLATE_NOT_ENABLED', request_id: requestId }, requestId);
+      return;
+    }
+    const template = templateForId(configuredType.id);
+    if (!template?.available) {
+      sendJson(response, 409, { error: 'This game template is not available yet', code: 'GAME_TEMPLATE_UNAVAILABLE', request_id: requestId }, requestId);
+      return;
+    }
+    let prompt;
+    try {
+      prompt = body.prompt === undefined
+        ? buildPromptPreview(match, configuredType)
+        : normalizePlayerPrompt(body.prompt);
+    } catch (error) {
+      sendJson(response, error.status ?? 400, { error: error.message, code: 'INVALID_GAME_PROMPT', request_id: requestId }, requestId);
+      return;
+    }
     if (!config.apiKey) {
       sendJson(response, 503, { error: 'AI game service is not configured', code: 'AI_NOT_CONFIGURED', request_id: requestId }, requestId);
       return;
     }
+    const selection = {
+      templateId: configuredType.id,
+      gameLabel: configuredType.label,
+      prompt,
+    };
     pruneCache(gameCache);
-    const key = aiService.cacheKey(config, match);
+    const key = aiService.cacheKey(config, match, selection);
     const cached = gameCache.get(key);
     if (!body.fresh && cached?.expiresAt > Date.now()) {
       sendJson(response, 200, { game: cached.game, cached: true }, requestId);
@@ -393,7 +430,7 @@ export function createApiHandler({
       }
       if (body.fresh) context.freshGenerations += 1;
       activeGenerations += 1;
-      promise = aiService.generate(config, match);
+      promise = aiService.generate(config, match, selection);
       inFlight.set(key, promise);
       promise.finally(() => {
         activeGenerations -= 1;
@@ -420,6 +457,66 @@ export function createApiHandler({
         { error: timedOut ? 'AI game generation timed out' : 'Unable to generate a valid AI game', code, request_id: requestId },
         requestId,
       );
+    }
+  }
+
+  async function handlePrompt(request, response, requestId) {
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, requestId, 'POST');
+      return;
+    }
+    if (!sameOrigin(request, publicOrigin) || !hasJsonContentType(request)) {
+      sendJson(response, 403, { error: 'Same-origin JSON request required', request_id: requestId }, requestId);
+      return;
+    }
+    const rate = takePromptRate(clientAddress(request, trustProxy));
+    if (!rate.allowed) {
+      sendJson(response, 429, { error: 'Too many prompt requests', request_id: requestId }, requestId, {
+        ...rateHeaders(rate),
+        'Retry-After': String(rate.retryAfterSeconds),
+      });
+      return;
+    }
+    let body;
+    try {
+      body = await readJsonBody(request, 2_000);
+    } catch (error) {
+      sendJson(response, error.status ?? 400, { error: error.message, request_id: requestId }, requestId);
+      return;
+    }
+    if (
+      !isRecord(body) ||
+      typeof body.contextId !== 'string' ||
+      body.contextId.length > 100 ||
+      typeof body.templateId !== 'string' ||
+      body.templateId.length > 40
+    ) {
+      sendJson(response, 400, { error: 'Invalid prompt request', request_id: requestId }, requestId);
+      return;
+    }
+    const context = getMatchContext(body.contextId);
+    if (!context) {
+      sendJson(response, 410, { error: 'Match context expired; load a new case', code: 'MATCH_CONTEXT_EXPIRED', request_id: requestId }, requestId);
+      return;
+    }
+    try {
+      const config = await configStore.get();
+      const configuredType = configuredGameType(config.gameTypes, body.templateId);
+      if (!configuredType) {
+        sendJson(response, 400, { error: 'Game template is not enabled', code: 'GAME_TEMPLATE_NOT_ENABLED', request_id: requestId }, requestId);
+        return;
+      }
+      const template = templateForId(configuredType.id);
+      sendJson(response, 200, {
+        templateId: configuredType.id,
+        label: configuredType.label,
+        available: Boolean(template?.available),
+        description: template?.description ?? '',
+        prompt: buildPromptPreview(context.match, configuredType),
+        maxLength: 1_500,
+      }, requestId);
+    } catch {
+      sendJson(response, 503, { error: 'Game configuration is unavailable', code: 'AI_CONFIG_UNAVAILABLE', request_id: requestId }, requestId);
     }
   }
 
@@ -498,7 +595,7 @@ export function createApiHandler({
       return;
     }
     try {
-      const body = await readJsonBody(request, 25_000);
+      const body = await readJsonBody(request, 128_000);
       const config = await configStore.update(body);
       gameCache.clear();
       sendJson(response, 200, publicConfig(config), requestId);
@@ -535,6 +632,7 @@ export function createApiHandler({
       '/api/health',
       '/api/match',
       '/api/games/status',
+      '/api/games/prompt',
       '/api/games/generate',
       '/api/admin/session',
       '/api/admin/config',
@@ -568,12 +666,17 @@ export function createApiHandler({
       else {
         try {
           const config = await configStore.get();
-          sendJson(response, 200, { configured: Boolean(config.apiKey), model: config.apiKey ? config.model : null }, requestId);
+          sendJson(response, 200, {
+            configured: Boolean(config.apiKey),
+            model: config.apiKey ? config.model : null,
+            gameTypes: publicGameTypes(config.gameTypes),
+          }, requestId);
         } catch {
-          sendJson(response, 200, { configured: false, model: null }, requestId);
+          sendJson(response, 200, { configured: false, model: null, gameTypes: [] }, requestId);
         }
       }
-    } else if (path === '/api/games/generate') await handleGenerate(request, response, requestId);
+    } else if (path === '/api/games/prompt') await handlePrompt(request, response, requestId);
+    else if (path === '/api/games/generate') await handleGenerate(request, response, requestId);
     else if (path === '/api/admin/session') await handleAdminSession(request, response, requestId);
     else if (path === '/api/admin/config') await handleAdminConfig(request, response, requestId);
     else if (path === '/api/admin/models') await handleAdminModels(request, response, requestId);

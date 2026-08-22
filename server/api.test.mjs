@@ -26,6 +26,44 @@ const validMatch = {
   messages: [],
 };
 
+const GAME_LABELS = {
+  'profile-riddle': '资料猜谜局',
+  'keyword-wheel': '关键词深挖',
+  'rapid-choice': '极限2选1',
+  custom: '专属小游戏',
+};
+
+function gameType(id, label = GAME_LABELS[id]) {
+  return {
+    id,
+    label,
+    enabled: true,
+    generationPrompt: `这是 ${label} 的安全测试模板，请严格遵循固定玩法并避免泄露任何私密资料。`,
+  };
+}
+
+function generatedGame(matchId, templateId = 'profile-riddle', label = GAME_LABELS[templateId]) {
+  return {
+    schemaVersion: 2,
+    id: `game-${matchId}-${templateId}`,
+    matchId,
+    gameType: label,
+    templateId,
+    mechanics: templateId === 'rapid-choice'
+      ? { kind: 'rapid-choice', roundSeconds: 5 }
+      : { kind: templateId },
+    title: '专属破冰小局',
+    eyebrow: 'AI 专属',
+    description: '根据双方聊天生成的三轮轻量选择游戏。',
+    whyItFits: '公开聊天里有自然共同点，适合从轻松选择继续。',
+    estimatedMinutes: 3,
+    topics: ['周末', '日常'],
+    questions: [],
+    generatedBy: 'ai',
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 async function withServer(handler, run) {
   const server = createServer(async (request, response) => {
     if (!(await handler(request, response))) {
@@ -137,7 +175,7 @@ test('admin session protects config and never returns the provider key', async (
           apiKey: providerKey,
           model: 'test-model',
           systemPrompt: '请生成尊重双方边界并且不会泄露私密信息的三轮破冰游戏。'.repeat(4),
-          gameTypes: ['默契猜猜'],
+          gameTypes: [gameType('profile-riddle')],
         }),
       });
       const rawUpdate = await update.text();
@@ -169,7 +207,7 @@ test('admin mutations require both same origin and CSRF token', async () => {
         apiBaseUrl: 'https://api.example.com',
         model: 'test-model',
         systemPrompt: '安全提示词'.repeat(30),
-        gameTypes: ['默契猜猜'],
+        gameTypes: [gameType('profile-riddle')],
       };
       assert.equal((await fetch(`${baseUrl}/api/admin/config`, {
         method: 'PUT',
@@ -187,24 +225,14 @@ test('admin mutations require both same origin and CSRF token', async () => {
 
 test('AI game endpoint accepts only same-origin server-issued contexts and returns validated service output', async () => {
   const configStore = createMemoryConfigStore({ apiKey: 'fake-key', updatedAt: 'test' });
-  const game = {
-    schemaVersion: 1,
-    id: 'game-id',
-    matchId: validMatch.match_id,
-    gameType: '默契猜猜',
-    title: '专属破冰小局',
-    eyebrow: 'AI 专属',
-    description: '根据双方聊天生成的三轮轻量选择游戏。',
-    whyItFits: '公开聊天里有自然共同点，适合从轻松选择继续。',
-    estimatedMinutes: 3,
-    topics: ['周末', '日常'],
-    questions: [],
-    generatedBy: 'ai',
-    generatedAt: new Date().toISOString(),
-  };
+  const game = generatedGame(validMatch.match_id);
+  let receivedSelection;
   const aiService = {
     cacheKey: () => 'test-cache-key',
-    generate: async () => game,
+    generate: async (_config, _match, selection) => {
+      receivedSelection = selection;
+      return game;
+    },
     listModels: async () => [],
   };
   await withServer(
@@ -222,16 +250,207 @@ test('AI game endpoint accepts only same-origin server-issued contexts and retur
       assert.equal((await fetch(`${baseUrl}/api/games/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contextId }),
+        body: JSON.stringify({ contextId, templateId: 'profile-riddle' }),
       })).status, 403);
 
       const response = await fetch(`${baseUrl}/api/games/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Origin: baseUrl },
-        body: JSON.stringify({ contextId }),
+        body: JSON.stringify({ contextId, templateId: 'profile-riddle' }),
       });
       assert.equal(response.status, 200);
       assert.deepEqual((await response.json()).game, game);
+      assert.equal(receivedSelection.templateId, 'profile-riddle');
+      assert.equal(receivedSelection.gameLabel, '资料猜谜局');
+      assert.equal(typeof receivedSelection.prompt, 'string');
+    },
+  );
+});
+
+test('prompt endpoint uses a stable template id and exposes only safe public-chat context', async () => {
+  const privateMatch = {
+    ...validMatch,
+    message_count: 1,
+    user_a: {
+      ...validMatch.user_a,
+      nickname: '昵称私密标记A77',
+      profile: '# 私密资料标记PROFILE-A-7788',
+      memories_self: ['未公开回忆MEMORY-A-9911'],
+    },
+    user_b: {
+      ...validMatch.user_b,
+      nickname: '昵称私密标记B66',
+      profile: '# 私密资料标记PROFILE-B-6633',
+      memories_ideal: ['未公开偏好IDEAL-B-4422'],
+    },
+    messages: [{
+      from: 'a',
+      type: 'text',
+      content: '周末可以聊聊摄影和咖啡',
+      sent_at: '2026-08-22 10:00',
+    }],
+  };
+  const renamedLabel = '我们眼中的彼此';
+  const configStore = createMemoryConfigStore({
+    gameTypes: [gameType('profile-riddle', renamedLabel)],
+  });
+
+  await withServer(
+    createApiHandler({
+      token: 'secret',
+      configStore,
+      fetchImpl: async () => new Response(JSON.stringify(privateMatch), { status: 200 }),
+    }),
+    async (baseUrl) => {
+      const matchResponse = await fetch(`${baseUrl}/api/match`);
+      const contextId = matchResponse.headers.get('x-game-context-id');
+      assert.ok(contextId);
+
+      const response = await fetch(`${baseUrl}/api/games/prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: baseUrl },
+        body: JSON.stringify({ contextId, templateId: 'profile-riddle' }),
+      });
+      const body = await response.json();
+      assert.equal(response.status, 200);
+      assert.equal(body.templateId, 'profile-riddle');
+      assert.equal(body.label, renamedLabel);
+      assert.equal(body.available, true);
+      assert.equal(body.maxLength, 1_500);
+      assert.match(body.prompt, /周末/);
+      assert.match(body.prompt, /摄影/);
+      assert.equal(body.prompt.includes('昵称私密标记'), false);
+      assert.equal(body.prompt.includes('PROFILE-A-7788'), false);
+      assert.equal(body.prompt.includes('MEMORY-A-9911'), false);
+      assert.equal(body.prompt.includes('IDEAL-B-4422'), false);
+    },
+  );
+});
+
+test('custom template is reserved and generation returns 409 without calling AI', async () => {
+  let providerCalls = 0;
+  const aiService = {
+    cacheKey: () => 'custom-must-not-be-cached',
+    generate: async () => {
+      providerCalls += 1;
+      return generatedGame(validMatch.match_id, 'custom');
+    },
+    listModels: async () => [],
+  };
+  await withServer(
+    createApiHandler({
+      token: 'secret',
+      configStore: createMemoryConfigStore({
+        apiKey: 'fake-key',
+        gameTypes: [gameType('profile-riddle'), gameType('custom')],
+      }),
+      aiService,
+      fetchImpl: async () => new Response(JSON.stringify(validMatch), { status: 200 }),
+    }),
+    async (baseUrl) => {
+      const matchResponse = await fetch(`${baseUrl}/api/match`);
+      const contextId = matchResponse.headers.get('x-game-context-id');
+      const response = await fetch(`${baseUrl}/api/games/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: baseUrl },
+        body: JSON.stringify({ contextId, templateId: 'custom' }),
+      });
+      assert.equal(response.status, 409);
+      assert.equal((await response.json()).code, 'GAME_TEMPLATE_UNAVAILABLE');
+      assert.equal(providerCalls, 0);
+    },
+  );
+});
+
+test('generation rejects player prompts containing contact details before calling AI', async () => {
+  let providerCalls = 0;
+  const aiService = {
+    cacheKey: () => 'invalid-prompt-must-not-be-cached',
+    generate: async () => {
+      providerCalls += 1;
+      return generatedGame(validMatch.match_id);
+    },
+    listModels: async () => [],
+  };
+  await withServer(
+    createApiHandler({
+      token: 'secret',
+      configStore: createMemoryConfigStore({ apiKey: 'fake-key' }),
+      aiService,
+      fetchImpl: async () => new Response(JSON.stringify(validMatch), { status: 200 }),
+    }),
+    async (baseUrl) => {
+      const matchResponse = await fetch(`${baseUrl}/api/match`);
+      const contextId = matchResponse.headers.get('x-game-context-id');
+      const response = await fetch(`${baseUrl}/api/games/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: baseUrl },
+        body: JSON.stringify({
+          contextId,
+          templateId: 'profile-riddle',
+          prompt: '请生成轻松题目，完成后拨打 13812345678 联系对方继续游戏。',
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.equal((await response.json()).code, 'INVALID_GAME_PROMPT');
+      assert.equal(providerCalls, 0);
+    },
+  );
+});
+
+test('generation cache is isolated by stable template id and edited prompt', async () => {
+  let providerCalls = 0;
+  const selections = [];
+  const aiService = {
+    cacheKey: (_config, _match, selection) => `${selection.templateId}\0${selection.prompt}`,
+    generate: async (_config, match, selection) => {
+      providerCalls += 1;
+      selections.push(selection);
+      return generatedGame(match.match_id, selection.templateId, selection.gameLabel);
+    },
+    listModels: async () => [],
+  };
+  await withServer(
+    createApiHandler({
+      token: 'secret',
+      configStore: createMemoryConfigStore({
+        apiKey: 'fake-key',
+        gameTypes: [gameType('profile-riddle'), gameType('rapid-choice')],
+      }),
+      aiService,
+      fetchImpl: async () => new Response(JSON.stringify(validMatch), { status: 200 }),
+    }),
+    async (baseUrl) => {
+      const matchResponse = await fetch(`${baseUrl}/api/match`);
+      const contextId = matchResponse.headers.get('x-game-context-id');
+      assert.ok(contextId);
+      const promptA = '请围绕公开聊天中的周末安排，生成一局轻松、安全而且没有输赢的游戏。';
+      const promptB = '请围绕公开聊天中的摄影兴趣，生成一局轻松、安全而且没有输赢的游戏。';
+      const generate = (templateId, prompt) => fetch(`${baseUrl}/api/games/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: baseUrl },
+        body: JSON.stringify({ contextId, templateId, prompt }),
+      });
+
+      const first = await generate('profile-riddle', promptA);
+      const same = await generate('profile-riddle', promptA);
+      const otherTemplate = await generate('rapid-choice', promptA);
+      const otherPrompt = await generate('profile-riddle', promptB);
+
+      assert.equal(first.status, 200);
+      assert.equal((await first.json()).cached, false);
+      assert.equal(same.status, 200);
+      assert.equal((await same.json()).cached, true);
+      assert.equal(otherTemplate.status, 200);
+      assert.equal((await otherTemplate.json()).cached, false);
+      assert.equal(otherPrompt.status, 200);
+      assert.equal((await otherPrompt.json()).cached, false);
+      assert.equal(providerCalls, 3);
+      assert.deepEqual(selections.map(({ templateId, prompt }) => ({ templateId, prompt })), [
+        { templateId: 'profile-riddle', prompt: promptA },
+        { templateId: 'rapid-choice', prompt: promptA },
+        { templateId: 'profile-riddle', prompt: promptB },
+      ]);
     },
   );
 });
@@ -249,21 +468,7 @@ test('AI generation coalesces fresh requests and busy responses do not consume t
     generate: async (_config, match) => {
       providerCalls += 1;
       if (providerCalls === 1) await firstGate;
-      return {
-        schemaVersion: 1,
-        id: `game-${match.match_id}`,
-        matchId: match.match_id,
-        gameType: '默契猜猜',
-        title: '专属破冰小局',
-        eyebrow: 'AI 专属',
-        description: '根据双方聊天生成的三轮轻量选择游戏。',
-        whyItFits: '公开聊天里有自然共同点，适合从轻松选择继续。',
-        estimatedMinutes: 3,
-        topics: ['周末', '日常'],
-        questions: [],
-        generatedBy: 'ai',
-        generatedAt: new Date().toISOString(),
-      };
+      return generatedGame(match.match_id);
     },
     listModels: async () => [],
   };
@@ -288,7 +493,7 @@ test('AI generation coalesces fresh requests and busy responses do not consume t
       const generate = (contextId, fresh = false) => fetch(`${baseUrl}/api/games/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Origin: baseUrl },
-        body: JSON.stringify({ contextId, fresh }),
+        body: JSON.stringify({ contextId, templateId: 'profile-riddle', fresh }),
       });
 
       const first = generate(contexts[0], true);
@@ -312,21 +517,7 @@ test('AI generation limits forced refreshes per server-issued match context', as
     cacheKey: () => 'refresh-limit-cache-key',
     generate: async () => {
       providerCalls += 1;
-      return {
-        schemaVersion: 1,
-        id: `game-${providerCalls}`,
-        matchId: validMatch.match_id,
-        gameType: '默契猜猜',
-        title: '专属破冰小局',
-        eyebrow: 'AI 专属',
-        description: '根据双方聊天生成的三轮轻量选择游戏。',
-        whyItFits: '公开聊天里有自然共同点，适合从轻松选择继续。',
-        estimatedMinutes: 3,
-        topics: ['周末', '日常'],
-        questions: [],
-        generatedBy: 'ai',
-        generatedAt: new Date().toISOString(),
-      };
+      return { ...generatedGame(validMatch.match_id), id: `game-${providerCalls}` };
     },
     listModels: async () => [],
   };
@@ -347,7 +538,7 @@ test('AI generation limits forced refreshes per server-issued match context', as
       const generate = (fresh) => fetch(`${baseUrl}/api/games/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Origin: baseUrl },
-        body: JSON.stringify({ contextId, fresh }),
+        body: JSON.stringify({ contextId, templateId: 'profile-riddle', fresh }),
       });
 
       assert.equal((await generate(false)).status, 200);
