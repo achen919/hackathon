@@ -134,6 +134,11 @@ test('rejects malformed generated games before they reach the browser', () => {
 test('AI context keeps safe profile signals without sending raw private profiles or memories', () => {
   const compact = compactMatchForAi({
     ...match,
+    messages: [
+      ...match.messages,
+      { from: 'a', type: 'text', content: '我的微信号 abc12345', sent_at: '2026-08-22T12:00:00Z' },
+      { from: 'b', type: 'text', content: '周末一起聊聊电影', sent_at: '2026-08-22T12:01:00Z' },
+    ],
     user_a: {
       nickname: '不应发送的昵称',
       gender: 'female',
@@ -151,6 +156,8 @@ test('AI context keeps safe profile signals without sending raw private profiles
   assert.equal(serialized.includes('ALPHA-7788'), false);
   assert.equal(serialized.includes('BRAVO-9911'), false);
   assert.equal(serialized.includes('CHARLIE-6633'), false);
+  assert.equal(serialized.includes('abc12345'), false);
+  assert.match(serialized, /周末一起聊聊电影/);
 });
 
 test('enforces the three built-in template shapes', () => {

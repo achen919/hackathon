@@ -203,12 +203,15 @@ function safePersonalizationSignals(user) {
 }
 
 export function compactMatchForAi(match) {
-  const messages = match.messages.slice(-60).map((message) => ({
-    from: message.from,
-    type: clip(message.type, 30),
-    content: clip(message.content, 400),
-    sent_at: clip(message.sent_at, 40),
-  }));
+  const messages = match.messages
+    .filter((message) => !hasUnsafeContactOrLink(message.content))
+    .slice(-60)
+    .map((message) => ({
+      from: message.from,
+      type: clip(message.type, 30),
+      content: clip(message.content, 400),
+      sent_at: clip(message.sent_at, 40),
+    }));
   const compactUser = (user) => ({
     public_profile_signals: safePersonalizationSignals(user),
   });

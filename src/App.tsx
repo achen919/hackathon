@@ -390,7 +390,7 @@ export default function App() {
         <div className="brand-mark" aria-label="良配心动局">良</div>
         <nav className="rail-nav">
           <button className="rail-button is-active" type="button" aria-label="聊天">◌</button>
-          <button className="rail-button" type="button" aria-label="匹配">♡</button>
+          <button className="rail-button" type="button" aria-label="我也要聊，进入游园会真实匹配" onClick={() => { window.location.href = '/carnival'; }}>♡</button>
           <button className="rail-button" type="button" aria-label="AI 游戏管理后台" onClick={() => { window.location.href = '/admin'; }}>⌾</button>
         </nav>
         <Avatar name={currentUser.nickname} tone={toneFor(viewer)} size="small" />
@@ -403,6 +403,11 @@ export default function App() {
           <span className="match-list-item__copy"><strong>{otherUser.nickname}</strong><small>{messages.at(-1)?.content ?? '刚刚匹配成功'}</small></span>
           <span className="unread-dot" aria-label="有新消息" />
         </button>
+        <a className="carnival-entry" href="/carnival">
+          <span className="carnival-entry__icon" aria-hidden="true">♡</span>
+          <span><strong>我也要聊</strong><small>进入游园会真实匹配</small></span>
+          <span aria-hidden="true">→</span>
+        </a>
         <div className="sidebar-note"><span className={`source-dot source-dot--${dataSource}`} /><p>{sourceMessage}</p><button type="button" onClick={() => void loadMatch()} disabled={dataSource === 'loading'}>{dataSource === 'loading' ? '载入中' : dataSource === 'demo' ? '从接口抽一对' : '换一对案例'}</button></div>
       </aside>
 
@@ -414,6 +419,7 @@ export default function App() {
           </div>
           <div className="chat-header__actions">
             <button className="secondary-button compact-only" type="button" onClick={startOrResumeGame} disabled={!gameEligible || gameGeneration === 'loading'}>✦ 小游戏</button>
+            <a className="carnival-mobile-entry" href="/carnival">我也要聊</a>
             <button className="mobile-match-button" type="button" onClick={() => void loadMatch()} disabled={dataSource === 'loading'} aria-label={dataSource === 'loading' ? '正在载入匹配案例' : '从接口换一对匹配案例'}><span className="mobile-match-button__icon" aria-hidden="true">↻</span><span className="mobile-match-button__label">{dataSource === 'loading' ? '载入中' : '换案例'}</span><span className={`source-dot source-dot--${dataSource}`} aria-hidden="true" /></button>
             <button className="profile-open-button" type="button" onClick={() => setProfilesOpen(true)} aria-label="查看双方完整资料"><span className="profile-open-button__wide">双方资料</span><span className="profile-open-button__compact" aria-hidden="true">资料</span></button>
           </div>

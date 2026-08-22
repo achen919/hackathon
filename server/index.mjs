@@ -1,10 +1,16 @@
 import { createServer } from 'node:http';
+import { createAiCapacityGate } from './ai-capacity.mjs';
 import { createApiHandler } from './api.mjs';
+import { createCarnivalHttpHandler } from './carnival-http.mjs';
+import { createConfigStore } from './config-store.mjs';
 import { createStaticHandler } from './static.mjs';
 
 const host = process.env.HOST ?? '127.0.0.1';
 const port = Number(process.env.PORT ?? 8787);
-const handleApiRequest = createApiHandler();
+const configStore = createConfigStore();
+const aiGate = createAiCapacityGate();
+const handleCarnivalRequest = createCarnivalHttpHandler({ configStore, aiGate });
+const handleApiRequest = createApiHandler({ configStore, aiGate });
 const handleStaticRequest = createStaticHandler();
 
 const server = createServer(async (request, response) => {
@@ -19,6 +25,9 @@ const server = createServer(async (request, response) => {
   });
 
   try {
+    const carnivalHandled = await handleCarnivalRequest(request, response);
+    if (carnivalHandled) return;
+
     const handled = await handleApiRequest(request, response);
     if (handled) return;
 

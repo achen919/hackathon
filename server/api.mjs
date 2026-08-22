@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { clearSessionCookie, createAdminSessions, sessionCookie, verifyAdminPassword } from './admin-auth.mjs';
+import { createAiCapacityGate } from './ai-capacity.mjs';
 import { compactMatchForAi, createAiGameService } from './ai-game.mjs';
 import { createConfigStore, publicConfig } from './config-store.mjs';
 import {
@@ -218,6 +219,7 @@ export function createApiHandler({
   aiHourlyLimit = Number(process.env.AI_GENERATION_PER_HOUR ?? 20),
   aiFreshLimit = Number(process.env.AI_FRESH_PER_CONTEXT ?? 2),
   aiMaxConcurrency = Number(process.env.AI_MAX_CONCURRENCY ?? 2),
+  aiGate,
   fetchImpl = globalThis.fetch,
   configStore = createConfigStore(),
   sessions = createAdminSessions(),
@@ -231,13 +233,14 @@ export function createApiHandler({
   const takeGlobalLoginRate = createRateLimiter(40, 15 * 60_000);
   const takePromptRate = createRateLimiter(30, 10 * 60_000);
   const takeAiRate = createRateLimiter(Number.isFinite(aiRateLimit) ? Math.max(1, aiRateLimit) : 8, 10 * 60_000);
-  const takeGlobalAiRate = createRateLimiter(Number.isFinite(aiHourlyLimit) ? Math.max(1, aiHourlyLimit) : 20, 60 * 60_000);
-  const maxConcurrency = Number.isFinite(aiMaxConcurrency) ? Math.max(1, aiMaxConcurrency) : 2;
+  const capacityGate = aiGate ?? createAiCapacityGate({
+    hourlyLimit: aiHourlyLimit,
+    maxConcurrency: aiMaxConcurrency,
+  });
   const maxFreshGenerations = Number.isFinite(aiFreshLimit) ? Math.max(0, aiFreshLimit) : 2;
   const gameCache = new Map();
   const inFlight = new Map();
   const matchContexts = new Map();
-  let activeGenerations = 0;
   let activeLogins = 0;
 
   function storeMatchContext(match) {
@@ -415,25 +418,18 @@ export function createApiHandler({
         }, requestId);
         return;
       }
-      if (activeGenerations >= maxConcurrency) {
+      const slot = capacityGate.acquire();
+      if (!slot.allowed) {
         sendJson(response, 503, { error: 'AI game service is busy, please try again shortly', code: 'AI_BUSY', request_id: requestId }, requestId, {
-          'Retry-After': '3',
-        });
-        return;
-      }
-      const globalRate = takeGlobalAiRate('global');
-      if (!globalRate.allowed) {
-        sendJson(response, 503, { error: 'AI game service is busy, please try again shortly', code: 'AI_BUSY', request_id: requestId }, requestId, {
-          'Retry-After': String(globalRate.retryAfterSeconds),
+          'Retry-After': String(slot.retryAfterSeconds),
         });
         return;
       }
       if (body.fresh) context.freshGenerations += 1;
-      activeGenerations += 1;
-      promise = aiService.generate(config, match, selection);
+      promise = Promise.resolve().then(() => aiService.generate(config, match, selection));
       inFlight.set(key, promise);
       promise.finally(() => {
-        activeGenerations -= 1;
+        slot.release();
         if (inFlight.get(key) === promise) inFlight.delete(key);
       }).catch(() => {});
     }

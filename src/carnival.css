@@ -1,0 +1,558 @@
+.carnival-page {
+  --carnival-ink: #26222c;
+  --carnival-muted: #756d79;
+  --carnival-paper: #fffdfb;
+  --carnival-line: #e9e1dc;
+  --carnival-violet: #6657d8;
+  --carnival-violet-deep: #5043bd;
+  --carnival-violet-soft: #efedff;
+  --carnival-coral: #e76554;
+  --carnival-coral-soft: #fff0eb;
+  --carnival-green: #2c8069;
+  width: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow: auto;
+  background:
+    radial-gradient(circle at 15% 8%, rgba(255, 170, 137, 0.26), transparent 31%),
+    radial-gradient(circle at 86% 18%, rgba(121, 104, 232, 0.22), transparent 34%),
+    #f6f1ee;
+  color: var(--carnival-ink);
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.carnival-page *,
+.carnival-page *::before,
+.carnival-page *::after {
+  box-sizing: border-box;
+}
+
+.carnival-page button,
+.carnival-page input,
+.carnival-page textarea {
+  font: inherit;
+}
+
+.carnival-page button {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.carnival-page button:focus-visible,
+.carnival-page input:focus-visible,
+.carnival-page textarea:focus-visible {
+  outline: 3px solid rgba(102, 87, 216, 0.3);
+  outline-offset: 3px;
+}
+
+.carnival-page button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.carnival-page--center,
+.carnival-page--register {
+  display: grid;
+  min-height: 100vh;
+  min-height: 100dvh;
+  place-items: center;
+  padding: max(20px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+
+.carnival-page--register {
+  position: relative;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  align-items: safe center;
+  justify-items: center;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
+.carnival-lantern {
+  position: absolute;
+  width: 180px;
+  height: 180px;
+  border-radius: 50%;
+  opacity: 0.56;
+  filter: blur(1px);
+  pointer-events: none;
+}
+
+.carnival-lantern::before,
+.carnival-lantern::after {
+  position: absolute;
+  left: 50%;
+  content: '';
+  background: currentColor;
+  transform: translateX(-50%);
+}
+
+.carnival-lantern::before { top: -100vh; width: 1px; height: 100vh; opacity: 0.35; }
+.carnival-lantern::after { top: 100%; width: 2px; height: 74px; }
+.carnival-lantern--one { top: 9%; left: -92px; background: rgba(231, 101, 84, 0.18); color: #d86253; }
+.carnival-lantern--two { right: -105px; bottom: 7%; background: rgba(102, 87, 216, 0.16); color: #6657d8; }
+
+.carnival-register-card,
+.carnival-state-card {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 480px);
+  padding: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.78);
+  border-radius: 28px;
+  background: rgba(255, 253, 251, 0.95);
+  box-shadow: 0 28px 90px rgba(52, 38, 54, 0.16);
+}
+
+.carnival-brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 34px;
+}
+
+.carnival-brand > span {
+  display: grid;
+  width: 43px;
+  height: 43px;
+  place-items: center;
+  border-radius: 15px;
+  background: linear-gradient(135deg, var(--carnival-violet), #8b79f2);
+  color: #fff;
+  font-family: Georgia, "Songti SC", serif;
+  font-size: 20px;
+  font-weight: 800;
+  box-shadow: 0 10px 24px rgba(102, 87, 216, 0.25);
+}
+
+.carnival-brand > div { display: grid; gap: 1px; }
+.carnival-brand p { margin: 0; color: var(--carnival-muted); font-size: 10px; letter-spacing: 0.08em; }
+.carnival-brand strong { font-size: 15px; letter-spacing: 0.03em; }
+
+.carnival-eyebrow {
+  margin: 0 0 7px;
+  color: var(--carnival-violet-deep);
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.carnival-register-card__intro h1,
+.carnival-state-card h1 {
+  margin: 0;
+  font-size: clamp(27px, 8vw, 38px);
+  line-height: 1.16;
+  letter-spacing: -0.055em;
+}
+
+.carnival-register-card__intro > p:last-child,
+.carnival-state-card > p:not(.carnival-eyebrow):not(.carnival-error) {
+  margin: 14px 0 0;
+  color: var(--carnival-muted);
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+.carnival-register-card form { display: grid; gap: 19px; margin-top: 28px; }
+
+.carnival-field { display: grid; gap: 8px; }
+.carnival-field > span,
+.carnival-gender-field legend { font-size: 12px; font-weight: 800; }
+.carnival-field input {
+  width: 100%;
+  min-height: 50px;
+  padding: 0 14px;
+  border: 1px solid var(--carnival-line);
+  border-radius: 15px;
+  background: #fff;
+  color: var(--carnival-ink);
+  font-size: 16px;
+}
+.carnival-field input::placeholder { color: #a39ba5; }
+.carnival-field small { color: var(--carnival-muted); font-size: 10px; }
+
+.carnival-gender-field { min-width: 0; margin: 0; padding: 0; border: 0; }
+.carnival-gender-field > div { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 9px; }
+.carnival-gender-field label {
+  position: relative;
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--carnival-line);
+  border-radius: 16px;
+  background: #fff;
+  cursor: pointer;
+}
+.carnival-gender-field label.is-selected { border-color: rgba(102, 87, 216, 0.55); background: #f5f3ff; box-shadow: inset 0 0 0 1px rgba(102, 87, 216, 0.08); }
+.carnival-gender-field input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.carnival-gender-field label:focus-within { outline: 3px solid rgba(102, 87, 216, 0.3); outline-offset: 3px; }
+.carnival-gender-field label > span { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 11px; background: var(--carnival-violet-soft); color: var(--carnival-violet-deep); font-weight: 900; }
+.carnival-gender-field label:last-child > span { background: var(--carnival-coral-soft); color: #bf5143; }
+.carnival-gender-field strong { font-size: 13px; }
+
+.carnival-primary,
+.carnival-secondary,
+.carnival-text-button {
+  min-height: 46px;
+  border: 0;
+  border-radius: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.carnival-primary { padding: 0 18px; background: linear-gradient(135deg, var(--carnival-violet), var(--carnival-violet-deep)); color: #fff; box-shadow: 0 10px 22px rgba(80, 67, 189, 0.21); }
+.carnival-primary--wide { width: 100%; }
+.carnival-secondary { padding: 0 16px; background: var(--carnival-violet-soft); color: var(--carnival-violet-deep); }
+.carnival-text-button { padding: 0 12px; background: transparent; color: var(--carnival-muted); }
+
+.carnival-error {
+  margin: 0;
+  padding: 11px 12px;
+  border-radius: 13px;
+  background: #fff0ed;
+  color: #a83f35;
+  font-size: 11px;
+  line-height: 1.55;
+}
+.carnival-error button { margin-left: 6px; padding: 3px 6px; border: 0; background: transparent; color: inherit; font-weight: 850; text-decoration: underline; cursor: pointer; }
+.carnival-register-card__foot { margin: 18px 0 0; color: #938a94; font-size: 9px; line-height: 1.55; text-align: center; }
+
+.carnival-state-card { display: grid; justify-items: center; text-align: center; }
+.carnival-orbit {
+  display: grid;
+  width: 76px;
+  height: 76px;
+  margin-bottom: 22px;
+  place-items: center;
+  border-radius: 26px;
+  background: linear-gradient(135deg, var(--carnival-violet-soft), var(--carnival-coral-soft));
+  color: var(--carnival-violet-deep);
+  font-size: 30px;
+  animation: carnival-pulse 1.6s ease-in-out infinite;
+}
+.carnival-orbit.is-error { color: #b34438; animation: none; }
+.carnival-state-card__actions { display: grid; width: 100%; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 24px; }
+
+.carnival-waiting-people { display: flex; align-items: center; justify-content: center; margin: 4px 0 24px; }
+.carnival-waiting-people > span:nth-child(2) { display: flex; align-items: center; gap: 5px; width: 94px; justify-content: center; }
+.carnival-waiting-people i { width: 6px; height: 6px; border-radius: 50%; background: #9c91de; animation: carnival-dot 1.2s ease-in-out infinite; }
+.carnival-waiting-people i:nth-child(2) { animation-delay: 0.16s; }
+.carnival-waiting-people i:nth-child(3) { animation-delay: 0.32s; }
+.carnival-waiting-note { display: flex; width: 100%; min-height: 48px; align-items: center; justify-content: center; gap: 8px; margin: 22px 0 8px; border-radius: 15px; background: #f5f3ff; color: var(--carnival-violet-deep); font-size: 11px; font-weight: 750; }
+.carnival-waiting-note > span { animation: carnival-spin 1.4s linear infinite; }
+.carnival-waiting-card > .carnival-text-button { margin-top: 8px; }
+
+.carnival-avatar {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 17px;
+  background: linear-gradient(135deg, #6c5ddd, #9486f1);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 900;
+  box-shadow: 0 8px 20px rgba(91, 76, 197, 0.18);
+}
+.carnival-avatar.is-male { background: linear-gradient(135deg, #e15f50, #f2937f); box-shadow: 0 8px 20px rgba(196, 75, 61, 0.16); }
+.carnival-avatar.is-unknown { background: #e7e0dc; color: #847b84; box-shadow: none; }
+.carnival-avatar.is-small { width: 32px; height: 32px; border-radius: 11px; font-size: 11px; }
+
+.carnival-chat-page {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.carnival-chat-shell {
+  display: flex;
+  width: min(100%, 780px);
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  margin: 0 auto;
+  overflow: hidden;
+  background: rgba(255, 253, 251, 0.94);
+  box-shadow: 0 0 80px rgba(48, 34, 48, 0.14);
+}
+
+.carnival-chat-header {
+  z-index: 5;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: calc(11px + env(safe-area-inset-top)) calc(14px + env(safe-area-inset-right)) 11px calc(14px + env(safe-area-inset-left));
+  border-bottom: 1px solid var(--carnival-line);
+  background: rgba(255, 253, 251, 0.96);
+  backdrop-filter: blur(14px);
+}
+
+.carnival-chat-person { display: flex; min-width: 0; align-items: center; gap: 11px; }
+.carnival-chat-person > div { display: grid; min-width: 0; gap: 1px; }
+.carnival-chat-person span { color: var(--carnival-muted); font-size: 9px; }
+.carnival-chat-person strong { overflow: hidden; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.carnival-chat-person small { display: flex; align-items: center; gap: 5px; color: var(--carnival-muted); font-size: 9px; }
+.carnival-chat-person small i { width: 6px; height: 6px; border-radius: 50%; background: #35a681; box-shadow: 0 0 0 3px rgba(53, 166, 129, 0.12); }
+.carnival-chat-header__actions { display: flex; gap: 7px; }
+.carnival-chat-header__actions button { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid var(--carnival-line); border-radius: 14px; background: #fff; color: var(--carnival-muted); font-size: 17px; cursor: pointer; }
+
+.carnival-gate {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 12px calc(14px + env(safe-area-inset-right)) 12px calc(14px + env(safe-area-inset-left));
+  border-bottom: 1px solid #e7e1ed;
+  background: linear-gradient(135deg, #f4f1ff, #fff7f3);
+}
+.carnival-gate.is-unlocked { background: linear-gradient(135deg, #edeaff, #fff0e9); }
+.carnival-gate__copy { display: flex; min-width: 0; align-items: center; gap: 10px; }
+.carnival-gate__icon { display: grid; width: 36px; height: 36px; flex: 0 0 auto; place-items: center; border-radius: 12px; background: #fff; font-size: 17px; box-shadow: 0 5px 14px rgba(72, 55, 91, 0.08); }
+.carnival-gate__copy > div { display: grid; min-width: 0; gap: 2px; }
+.carnival-gate__copy p { margin: 0; font-size: 11px; font-weight: 850; }
+.carnival-gate__copy span:not(.carnival-gate__icon) { color: var(--carnival-muted); font-size: 9px; }
+.carnival-gate__progress { display: flex; align-items: center; gap: 8px; }
+.carnival-gate progress { width: 74px; height: 6px; overflow: hidden; border: 0; border-radius: 99px; background: #ded8e5; appearance: none; }
+.carnival-gate progress::-webkit-progress-bar { border-radius: 99px; background: #ded8e5; }
+.carnival-gate progress::-webkit-progress-value { border-radius: 99px; background: linear-gradient(90deg, var(--carnival-violet), #9a86ee); }
+.carnival-gate progress::-moz-progress-bar { border-radius: 99px; background: linear-gradient(90deg, var(--carnival-violet), #9a86ee); }
+.carnival-gate__progress strong { color: var(--carnival-violet-deep); font-size: 10px; }
+.carnival-gate__button { grid-column: 1 / -1; min-height: 42px; border: 0; border-radius: 13px; background: var(--carnival-violet); color: #fff; font-size: 11px; font-weight: 850; cursor: pointer; }
+
+.carnival-sync-error { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px; background: #fff0ed; color: #a83f35; font-size: 10px; }
+.carnival-sync-error button { min-height: 34px; padding: 0 9px; border: 0; border-radius: 10px; background: #fff; color: inherit; font-weight: 800; cursor: pointer; }
+
+.carnival-timeline {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 18px calc(14px + env(safe-area-inset-right)) 24px calc(14px + env(safe-area-inset-left));
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #d8d0d8 transparent;
+  -webkit-overflow-scrolling: touch;
+}
+
+.carnival-timeline__date { display: flex; justify-content: center; margin-bottom: 20px; }
+.carnival-timeline__date span { padding: 5px 10px; border-radius: 99px; background: rgba(255, 255, 255, 0.84); color: #948b94; font-size: 9px; box-shadow: 0 3px 12px rgba(40, 32, 43, 0.05); }
+.carnival-empty-chat { display: grid; justify-items: center; gap: 8px; padding: 32px 20px; color: var(--carnival-muted); text-align: center; }
+.carnival-empty-chat > span { font-size: 28px; }
+.carnival-empty-chat p { max-width: 260px; margin: 0; font-size: 11px; line-height: 1.6; }
+
+.carnival-message { display: flex; align-items: flex-end; gap: 7px; margin: 10px 0; }
+.carnival-message.is-mine { justify-content: flex-end; }
+.carnival-message > div { display: grid; max-width: min(78%, 490px); gap: 4px; }
+.carnival-message p { margin: 0; padding: 11px 13px; border: 1px solid var(--carnival-line); border-radius: 6px 17px 17px 17px; background: #fff; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; box-shadow: 0 7px 18px rgba(55, 42, 57, 0.05); }
+.carnival-message.is-mine p { border-color: transparent; border-radius: 17px 6px 17px 17px; background: linear-gradient(135deg, var(--carnival-violet), var(--carnival-violet-deep)); color: #fff; }
+.carnival-message time { color: #9a9299; font-size: 8px; }
+.carnival-message.is-mine time { text-align: right; }
+
+.carnival-invite {
+  position: relative;
+  width: min(92%, 430px);
+  margin: 18px 0;
+  padding: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(102, 87, 216, 0.18);
+  border-radius: 22px;
+  background: linear-gradient(145deg, #fff, #f7f4ff);
+  box-shadow: 0 15px 38px rgba(61, 45, 73, 0.1);
+}
+.carnival-invite.is-mine { margin-left: auto; background: linear-gradient(145deg, #fff, #fff3ee); border-color: rgba(231, 101, 84, 0.2); }
+.carnival-invite::before,
+.carnival-invite::after { position: absolute; top: 72px; width: 18px; height: 18px; border-radius: 50%; background: #f6f1ee; content: ''; }
+.carnival-invite::before { left: -10px; }
+.carnival-invite::after { right: -10px; }
+.carnival-invite__topline { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; color: var(--carnival-muted); font-size: 9px; }
+.carnival-invite__topline em { padding: 5px 8px; border-radius: 99px; background: var(--carnival-violet-soft); color: var(--carnival-violet-deep); font-style: normal; font-weight: 850; }
+.carnival-invite__topline em.is-failed,
+.carnival-invite__topline em.is-expired { background: #f3efec; color: #817982; }
+.carnival-invite__topline em.is-playing { background: #e8f6f1; color: #25715e; }
+.carnival-invite__ticket { display: flex; align-items: baseline; gap: 7px; margin-bottom: 7px; }
+.carnival-invite__ticket span { color: var(--carnival-coral); font-size: 9px; font-weight: 900; letter-spacing: 0.18em; }
+.carnival-invite__ticket strong { color: var(--carnival-violet-deep); font-size: 12px; }
+.carnival-invite h2 { margin: 0; font-size: 19px; line-height: 1.35; letter-spacing: -0.035em; }
+.carnival-invite > p { display: -webkit-box; overflow: hidden; margin: 8px 0 0; color: var(--carnival-muted); font-size: 10px; line-height: 1.6; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.carnival-invite > button { display: flex; width: 100%; min-height: 44px; align-items: center; justify-content: space-between; margin-top: 14px; padding: 0 13px; border: 0; border-radius: 13px; background: #2e2934; color: #fff; font-size: 11px; font-weight: 850; cursor: pointer; }
+.carnival-invite > small { display: block; margin-top: 8px; color: #a098a0; font-size: 8px; text-align: right; }
+
+.carnival-unlock-message,
+.carnival-pending-invite {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0;
+  padding: 13px;
+  border: 1px solid #dbd4f4;
+  border-radius: 18px;
+  background: #f4f1ff;
+}
+.carnival-unlock-message > span,
+.carnival-pending-invite > span { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 13px; background: #fff; }
+.carnival-unlock-message > div,
+.carnival-pending-invite__copy { display: grid; gap: 3px; }
+.carnival-unlock-message strong,
+.carnival-pending-invite strong { font-size: 11px; }
+.carnival-unlock-message p,
+.carnival-pending-invite p { margin: 0; color: var(--carnival-muted); font-size: 9px; line-height: 1.45; }
+.carnival-unlock-message > button,
+.carnival-pending-invite button { min-height: 38px; padding: 0 10px; border: 0; border-radius: 11px; background: var(--carnival-violet); color: #fff; font-size: 9px; font-weight: 850; cursor: pointer; }
+.carnival-pending-invite.is-error { border-color: #f0c7bf; background: #fff1ee; }
+.carnival-pending-invite__actions { display: flex; gap: 6px; }
+.carnival-pending-invite__actions button:last-child { background: #fff; color: var(--carnival-muted); }
+.carnival-error--timeline { margin: 12px 0; }
+.carnival-invite-rule { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 24px 0 4px; color: var(--carnival-violet-deep); font-size: 10px; font-weight: 850; text-align: center; }
+
+.carnival-composer {
+  position: relative;
+  z-index: 5;
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 10px calc(10px + env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) calc(10px + env(safe-area-inset-left));
+  border-top: 1px solid var(--carnival-line);
+  background: rgba(255, 253, 251, 0.98);
+  backdrop-filter: blur(16px);
+}
+.carnival-composer textarea { width: 100%; min-height: 46px; max-height: 112px; resize: none; padding: 12px 13px; border: 1px solid var(--carnival-line); border-radius: 15px; background: #f7f3f0; color: var(--carnival-ink); font-size: 16px; line-height: 1.35; }
+.carnival-composer__game { width: 46px; height: 46px; border: 0; border-radius: 15px; background: var(--carnival-violet-soft); color: var(--carnival-violet-deep); cursor: pointer; }
+.carnival-composer__send { min-width: 58px; height: 46px; padding: 0 12px; border: 0; border-radius: 15px; background: var(--carnival-violet); color: #fff; font-size: 11px; font-weight: 850; cursor: pointer; }
+.carnival-composer > p { grid-column: 1 / -1; margin: -1px 4px 0; color: #a83f35; font-size: 9px; }
+
+.carnival-modal-backdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(31, 25, 35, 0.58);
+  backdrop-filter: blur(9px);
+}
+
+.carnival-modal {
+  width: min(100%, 700px);
+  max-height: calc(100vh - 36px);
+  max-height: calc(100dvh - 36px);
+  overflow-y: auto;
+  border-radius: 28px;
+  background: var(--carnival-paper);
+  box-shadow: 0 30px 100px rgba(27, 21, 31, 0.35);
+  animation: carnival-sheet 220ms ease-out;
+  overscroll-behavior: contain;
+}
+
+.carnival-modal__header {
+  position: sticky;
+  z-index: 3;
+  top: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 20px 20px 15px;
+  border-bottom: 1px solid var(--carnival-line);
+  background: rgba(255, 253, 251, 0.96);
+  backdrop-filter: blur(12px);
+}
+.carnival-modal__header > div { display: grid; gap: 3px; }
+.carnival-modal__header span { color: var(--carnival-violet-deep); font-size: 9px; font-weight: 850; letter-spacing: 0.12em; text-transform: uppercase; }
+.carnival-modal__header h2 { margin: 0; font-size: 23px; line-height: 1.25; letter-spacing: -0.04em; }
+.carnival-modal__header > button { display: grid; width: 44px; height: 44px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 14px; background: #f2efec; color: var(--carnival-muted); font-size: 21px; cursor: pointer; }
+
+.carnival-game-studio { padding-bottom: calc(18px + env(safe-area-inset-bottom)); }
+.carnival-game-studio__rule { display: flex; align-items: center; gap: 10px; margin: 16px 18px 0; padding: 11px 12px; border-radius: 14px; background: linear-gradient(135deg, #f3f0ff, #fff2ed); }
+.carnival-game-studio__rule > span { color: var(--carnival-violet-deep); font-size: 18px; }
+.carnival-game-studio__rule p { display: grid; gap: 2px; margin: 0; color: var(--carnival-muted); font-size: 9px; line-height: 1.45; }
+.carnival-game-studio__rule strong { color: var(--carnival-ink); font-size: 10px; }
+
+.carnival-game-types { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; padding: 16px 18px 0; }
+.carnival-game-types button { display: grid; min-width: 0; min-height: 100px; align-content: center; justify-items: start; gap: 4px; padding: 13px; border: 1px solid var(--carnival-line); border-radius: 17px; background: #fff; color: var(--carnival-ink); text-align: left; cursor: pointer; }
+.carnival-game-types button.is-selected { border-color: rgba(102, 87, 216, 0.55); background: #f5f3ff; box-shadow: inset 0 0 0 1px rgba(102, 87, 216, 0.08); }
+.carnival-game-types button > span { font-size: 18px; }
+.carnival-game-types strong { overflow: hidden; width: 100%; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.carnival-game-types small { color: var(--carnival-muted); font-size: 9px; line-height: 1.45; }
+
+.carnival-prompt-field { display: grid; gap: 8px; padding: 17px 18px 0; }
+.carnival-prompt-field > span { font-size: 11px; font-weight: 850; }
+.carnival-prompt-field em { color: var(--carnival-muted); font-size: 9px; font-style: normal; font-weight: 500; }
+.carnival-prompt-field textarea { width: 100%; min-height: 185px; resize: vertical; padding: 13px; border: 1px solid var(--carnival-line); border-radius: 16px; background: #f8f5f3; color: var(--carnival-ink); font-size: 16px; line-height: 1.65; }
+.carnival-prompt-field > small { color: var(--carnival-muted); font-size: 9px; text-align: right; }
+.carnival-studio-status { margin: 12px 18px 0; color: var(--carnival-violet-deep); font-size: 10px; }
+.carnival-studio-error { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 18px 0; padding: 10px 11px; border-radius: 13px; background: #fff0ed; color: #a83f35; font-size: 9px; line-height: 1.45; }
+.carnival-studio-error button { min-height: 34px; flex: 0 0 auto; padding: 0 9px; border: 0; border-radius: 10px; background: #fff; color: inherit; font-weight: 850; cursor: pointer; }
+.carnival-game-studio__actions { position: sticky; bottom: 0; display: grid; grid-template-columns: auto 1fr; gap: 9px; margin-top: 16px; padding: 12px 18px 0; background: linear-gradient(transparent, var(--carnival-paper) 15%); }
+
+.carnival-network-game { padding-bottom: calc(18px + env(safe-area-inset-bottom)); }
+.carnival-game-placeholder { display: grid; justify-items: center; padding: 28px 20px 12px; text-align: center; }
+.carnival-game-placeholder > span { display: grid; width: 70px; height: 70px; margin-bottom: 17px; place-items: center; border-radius: 24px; background: linear-gradient(135deg, var(--carnival-violet-soft), var(--carnival-coral-soft)); font-size: 29px; }
+.carnival-game-placeholder h3 { margin: 0; font-size: 25px; }
+.carnival-game-placeholder > p:not(.carnival-eyebrow) { max-width: 490px; margin: 12px 0; color: var(--carnival-muted); font-size: 11px; line-height: 1.65; }
+.carnival-game-placeholder code { padding: 2px 5px; border-radius: 5px; background: #f0ece9; font-size: 10px; }
+.carnival-game-placeholder dl { width: min(100%, 480px); margin: 8px 0 20px; border: 1px solid var(--carnival-line); border-radius: 14px; overflow: hidden; }
+.carnival-game-placeholder dl > div { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 10px; padding: 9px 11px; border-bottom: 1px solid var(--carnival-line); text-align: left; }
+.carnival-game-placeholder dl > div:last-child { border-bottom: 0; }
+.carnival-game-placeholder dt { color: var(--carnival-muted); font-size: 9px; }
+.carnival-game-placeholder dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-size: 10px; font-weight: 750; }
+
+@keyframes carnival-sheet { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes carnival-spin { to { transform: rotate(360deg); } }
+@keyframes carnival-dot { 0%, 100% { opacity: 0.25; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-3px); } }
+@keyframes carnival-pulse { 50% { transform: translateY(-3px); box-shadow: 0 13px 28px rgba(80, 67, 189, 0.12); } }
+
+@media (min-width: 781px) {
+  .carnival-chat-page { padding: 22px; }
+  .carnival-chat-shell { height: calc(100dvh - 44px); border: 1px solid rgba(255, 255, 255, 0.8); border-radius: 28px; }
+  .carnival-gate { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .carnival-gate__button { grid-column: auto; min-width: 120px; }
+}
+
+@media (max-width: 480px) {
+  .carnival-register-card,
+  .carnival-state-card { padding: 21px 18px; border-radius: 24px; }
+  .carnival-brand { margin-bottom: 27px; }
+  .carnival-modal-backdrop { padding: max(8px, env(safe-area-inset-top)) 0 0; }
+  .carnival-modal { width: 100%; max-height: calc(100dvh - max(8px, env(safe-area-inset-top))); border-radius: 24px 24px 0 0; }
+  .carnival-unlock-message,
+  .carnival-pending-invite { grid-template-columns: auto minmax(0, 1fr); }
+  .carnival-unlock-message > button,
+  .carnival-pending-invite__actions { grid-column: 1 / -1; width: 100%; }
+  .carnival-unlock-message > button { min-height: 42px; }
+  .carnival-pending-invite__actions button { min-height: 42px; flex: 1; }
+}
+
+@media (max-width: 350px) {
+  .carnival-chat-person .carnival-avatar { width: 42px; height: 42px; }
+  .carnival-chat-header__actions button { width: 40px; height: 40px; }
+  .carnival-gate { grid-template-columns: 1fr; }
+  .carnival-gate__progress { justify-content: space-between; }
+  .carnival-gate progress { flex: 1; width: auto; }
+  .carnival-game-types { grid-template-columns: 1fr; }
+  .carnival-composer__send { min-width: 52px; padding: 0 9px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .carnival-page *,
+  .carnival-page *::before,
+  .carnival-page *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

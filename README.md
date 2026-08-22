@@ -4,6 +4,8 @@
 
 在线演示：[https://hackathon.shcyr.com](https://hackathon.shcyr.com)
 
+游园会真实匹配：[https://hackathon.shcyr.com/carnival](https://hackathon.shcyr.com/carnival)
+
 管理后台：[https://hackathon.shcyr.com/admin](https://hackathon.shcyr.com/admin)
 
 ## 运行
@@ -42,6 +44,13 @@ LIANGPEI_TOKEN=你的比赛令牌 npm run start:api
 - 上游超时、响应大小限制与每 IP 限流；
 - CSP、X-Frame-Options 等安全响应头；
 - SPA fallback 和带 hash 资源的长缓存。
+- `/api/carnival/*` 异性排队、双端聊天、持久化邀请与服务端游戏状态。
+
+## 游园会真实匹配
+
+首页的“我也要聊”会进入独立的游园会体验。用户选择性别和昵称后按异性 FIFO 配对；房间内双方累计发送 10 条文字消息后，同时解锁游戏摊位。双方可以并发发起多张邀请，每张邀请都有独立 `inviteId`，点击哪张卡片就进入哪位用户发起的那一局。
+
+会话、消息、邀请和未揭晓的游戏进度原子写入 `STATE_DIR/carnival-state.json`。浏览器只保存一次性 opaque token，磁盘只保存其哈希；资料猜谜和极限二选一在双方完成前不会向对方投影具体答案。AI 生成不可用时仍使用同模板的本地安全题卡，不中断现场体验。
 
 ## AI 专属游戏与管理后台
 
@@ -94,6 +103,11 @@ node /opt/hackathon-chat/deploy/bootstrap-production.mjs
 17. 严格 JSON Schema、模板 shape 与本地隐私二次校验，第三方网关不支持时仅对明确格式错误降级 JSON mode；
 18. 管理后台配置即时生效，Key 加密落盘且永不回传；
 19. AI 未配置、超时、鉴权失败、限流或输出异常时自动回退同玩法安全题库。
+20. “我也要聊”支持昵称/性别入场、异性 FIFO 匹配与双端真实聊天；
+21. 房间累计 10 条消息后双方同时解锁游戏，不要求每人各发 10 条；
+22. 双方可同时发起不同游戏，时间线保留所有独立邀请，按 `inviteId` 精确开局；
+23. 联网资料猜谜、共享转盘和极限二选一均由服务端保存状态，刷新后可恢复；
+24. 演示案例与游园会共用后台模板配置、AI Key 和全局调用预算。
 
 ## 游戏设计原则
 
@@ -101,7 +115,7 @@ node /opt/hackathon-chat/deploy/bootstrap-production.mjs
 - 本地题卡只使用双方已经在聊天中公开提到的安全话题。
 - AI 只接收公开聊天与从 `profile`、`memories_self`、`memories_ideal` 提炼出的非敏感信号，不接收原始私密文本。
 - 不自动发送消息，不替用户表白或做关系判断。
-- 真正的双端版本必须把锁定答案保存在服务端，在双方完成前禁止另一方读取。
+- 双端玩法把答案保存在服务端，并按当前参与者投影状态；双方完成前不会返回对方具体选择。
 
 ## 验证
 
