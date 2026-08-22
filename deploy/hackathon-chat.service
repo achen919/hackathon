@@ -1,0 +1,27 @@
+[Unit]
+Description=Liangpei Hackathon API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hackathon
+Group=hackathon
+WorkingDirectory=/opt/hackathon-chat
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=8788
+Environment=TRUST_PROXY=1
+Environment=STATIC_DIR=/var/www/hackathon
+EnvironmentFile=/etc/hackathon-chat.env
+ExecStart=/usr/bin/node server/index.mjs
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
