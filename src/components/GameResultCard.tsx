@@ -15,12 +15,10 @@ export function GameResultCardView({ card, compact = false, onPrompt }: GameResu
     >
       <div className="game-result-card__content">
         <div className="game-result-card__topline">
-          <span className="game-result-card__eyebrow">游戏结果 · {card.gameTitle}</span>
           <span className="game-result-card__badge">{card.badge}</span>
         </div>
         <div className="game-result-card__score"><strong>{card.score}</strong><span>/ 100<br />AI 评估</span></div>
         <h3>{card.headline}</h3>
-        <p>{card.summary}</p>
         {!compact && <ul>{card.highlights.map((item) => <li key={item}>{item}</li>)}</ul>}
         <div className="game-result-card__footer">
           <span>下一步 · {card.nextPrompt}</span>
