@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArcadePromptPreview } from '../arcade';
-import type { CarnivalExclusiveGameDefinition, CarnivalGamePreview } from '../carnival-types';
+import type { CarnivalExclusiveGameDefinition, CarnivalGamePreview, CarnivalPromptGameDefinition } from '../carnival-types';
+import type { ProfileRiddleChoiceGroup } from '../types';
 import { CarnivalExclusiveChoiceRenderer } from './CarnivalExclusiveGameDialog';
+import { TemplateGameStage, type DeepDiveTopic, type TwoChoiceQuestion } from './TemplateGameStage';
 
 interface PromptGamePreviewCardProps {
   preview: CarnivalGamePreview;
@@ -19,12 +21,80 @@ function formatClock(value: string) {
 }
 
 type ExclusivePreview = CarnivalGamePreview & { game: CarnivalExclusiveGameDefinition };
+type StablePreviewGame = Extract<CarnivalPromptGameDefinition, { schemaVersion: 2 }>;
+type StablePreview = CarnivalGamePreview & { game: StablePreviewGame };
 
 export function PromptGamePreviewCard(props: PromptGamePreviewCardProps) {
-  if (props.preview.game.engine === 'arcade-v1') {
+  if (props.preview.game.schemaVersion === 2) {
+    return <StablePromptGamePreviewCard {...props} preview={{ ...props.preview, game: props.preview.game }} />;
+  }
+  if ('engine' in props.preview.game && props.preview.game.engine === 'arcade-v1') {
     return <ArcadePromptPreview {...props} preview={{ ...props.preview, game: props.preview.game }} />;
   }
   return <ExclusivePromptGamePreviewCard {...props} preview={{ ...props.preview, game: props.preview.game }} />;
+}
+
+function StablePromptGamePreviewCard({
+  preview,
+  expired,
+  footerNote,
+  onComplete,
+  onRestart,
+  onRuntimeError,
+}: Omit<PromptGamePreviewCardProps, 'preview'> & { preview: StablePreview }) {
+  const game = preview.game;
+  const [viewer, setViewer] = useState<'a' | 'b'>('a');
+  const generatedGroups: ProfileRiddleChoiceGroup[] = game.mechanics.kind === 'profile-riddle'
+    ? game.mechanics.choiceGroups ?? game.questions.slice(0, 3).map((question) => ({
+        id: question.id,
+        options: question.options.slice(0, 3) as [string, string, string],
+      }))
+    : [];
+  const groupsByTarget = game.mechanics.kind === 'profile-riddle'
+    ? game.mechanics.choiceGroupsByTarget ?? { a: generatedGroups, b: generatedGroups }
+    : { a: generatedGroups, b: generatedGroups };
+  const topics: DeepDiveTopic[] = game.mechanics.kind === 'keyword-wheel'
+    ? game.mechanics.segments.map((segment) => ({ id: segment.id, label: segment.keyword, followUps: segment.followUps ?? [segment.prompt, segment.followUp] }))
+    : [];
+  const questions: TwoChoiceQuestion[] = game.templateId === 'rapid-choice'
+    ? game.questions.map((question) => ({
+        id: question.id,
+        prompt: question.prompt,
+        optionA: question.options[0],
+        optionB: question.options[1],
+        matchedDiscussionPrompt: question.matchedFollowUp,
+        differentDiscussionPrompt: question.differentFollowUp,
+      }))
+    : [];
+  return (
+    <section className="generated-template-prompt-preview" aria-label={`${game.gameType} 可玩预览`} aria-disabled={expired}>
+      <TemplateGameStage
+        key={preview.previewToken}
+        template={game.templateId}
+        label={game.gameType}
+        gameTitle={game.title}
+        viewer={viewer}
+        players={{
+          a: { nickname: '玩家 A', profileKeywords: groupsByTarget.a.flatMap((group) => group.options), profileChoiceGroups: groupsByTarget.a },
+          b: { nickname: '玩家 B', profileKeywords: groupsByTarget.b.flatMap((group) => group.options), profileChoiceGroups: groupsByTarget.b },
+        }}
+        deepDiveTopics={topics}
+        twoChoiceQuestions={questions}
+        renderer={game.renderer}
+        roundSeconds={game.mechanics.kind === 'rapid-choice' ? game.mechanics.roundSeconds : 8}
+        sessionKey={preview.previewToken}
+        paused={expired}
+        onViewerChange={setViewer}
+        onComplete={() => onComplete?.()}
+        onRestart={onRestart}
+        onRendererError={onRuntimeError}
+      />
+      <footer>
+        <span>{expired ? '这个邀请版本已过期，请重新生成' : '试玩操作不会提交给对方'}</span>
+        <small>{footerNote ?? `邀请版本保留至 ${formatClock(preview.expiresAt)}`}</small>
+      </footer>
+    </section>
+  );
 }
 
 function ExclusivePromptGamePreviewCard({

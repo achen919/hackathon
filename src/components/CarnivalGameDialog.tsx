@@ -8,6 +8,9 @@ import {
   type CSSProperties,
 } from 'react';
 import type { GameTemplateId, ParticipantId } from '../types';
+import type { GeneratedTemplateRenderer } from '../types';
+import { normalizeGeneratedTemplateRenderer } from '../generated-template';
+import { GeneratedCarnivalTemplateStage } from './GeneratedCarnivalTemplateStage';
 import '../carnival-game.css';
 
 export type CarnivalStableTemplateId = Exclude<GameTemplateId, 'custom'>;
@@ -39,6 +42,7 @@ interface CarnivalGamePublicBase {
   templateId: CarnivalStableTemplateId;
   title: string;
   description: string;
+  renderer?: GeneratedTemplateRenderer;
 }
 
 export interface CarnivalProfileSubmission {
@@ -114,7 +118,7 @@ export interface CarnivalRapidResult {
 export interface CarnivalRapidChoicePublicState extends CarnivalGamePublicBase {
   templateId: 'rapid-choice';
   phase: 'answering' | 'waiting-peer' | 'reveal-ready' | 'revealed';
-  roundSeconds: 5;
+  roundSeconds: number;
   questions: CarnivalRapidQuestion[];
   self: {
     participantId: ParticipantId;
@@ -174,7 +178,7 @@ export interface CarnivalGameDialogProps {
   onUseChatPrompt?: (text: string) => void;
 }
 
-type ActionRunner = (payload: CarnivalGameActionPayload) => Promise<boolean>;
+export type ActionRunner = (payload: CarnivalGameActionPayload) => Promise<boolean>;
 
 const OTHER: Record<ParticipantId, ParticipantId> = { a: 'b', b: 'a' };
 
@@ -193,7 +197,7 @@ const FALLBACK_PROFILE_GROUPS: [CarnivalProfileChoiceGroup, CarnivalProfileChoic
   { id: 'profile-decision', options: ['先列几个选项再定', '听完建议马上决定', '容易当场改变主意'] },
 ];
 
-function normalizedProfileGroups(state: CarnivalProfileRiddlePublicState): CarnivalProfileChoiceGroup[] {
+export function normalizedProfileGroups(state: CarnivalProfileRiddlePublicState): CarnivalProfileChoiceGroup[] {
   const groups = state.choiceGroups?.slice(0, 3).map((group) => ({
     id: group.id,
     options: cleanOptions(group.options).slice(0, 3),
@@ -248,6 +252,7 @@ export function CarnivalGameDialog({
   const actionLockRef = useRef(false);
   const [localPending, setLocalPending] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [failedRendererId, setFailedRendererId] = useState<string | null>(null);
   closeRef.current = onClose;
 
   const revision = gameState?.revision ?? invite.revision;
@@ -335,6 +340,7 @@ export function CarnivalGameDialog({
   if (!open) return null;
 
   const pending = localPending || actionPending;
+  const renderer = gameState ? normalizeGeneratedTemplateRenderer(gameState.renderer) : null;
   const peerId = OTHER[participant];
   const participantState = invite.participants[participant];
   const peerState = invite.participants[peerId];
@@ -381,6 +387,9 @@ export function CarnivalGameDialog({
         {(localError || actionError) && (
           <div className="carnival-game-error" role="alert">{localError ?? actionError}</div>
         )}
+        {failedRendererId && (
+          <div className="carnival-game-error is-safe-fallback" role="status">AI 定制界面暂不可用，已无缝切换到同一套安全玩法。</div>
+        )}
 
         {stateMismatch ? (
           <GameNotice title="游戏状态暂时对不上" detail="请关闭后重新进入这份邀请，系统会重新同步当前局。" />
@@ -394,6 +403,16 @@ export function CarnivalGameDialog({
             title={`正在等 ${peerState.nickname || '对方'} 加入`}
             detail="邀请页可以暂时关闭；对方加入后，服务端会从同一个 inviteId 恢复。"
             waiting
+          />
+        ) : renderer && failedRendererId !== renderer.artifact.artifactId ? (
+          <GeneratedCarnivalTemplateStage
+            participant={participant}
+            state={gameState}
+            renderer={renderer}
+            pending={pending}
+            runAction={dispatchAction}
+            onFallback={() => setFailedRendererId(renderer.artifact.artifactId)}
+            onExit={onClose}
           />
         ) : gameState.templateId === 'profile-riddle' ? (
           <ProfileRiddleGame
@@ -726,6 +745,8 @@ function RapidChoiceGame({ participant, invite, state, pending, runAction, onUse
   runAction: ActionRunner;
   onUseChatPrompt?: (text: string) => void;
 }) {
+  const roundSeconds = Number.isInteger(state.roundSeconds) ? Math.max(3, Math.min(15, state.roundSeconds)) : 8;
+  const roundMs = roundSeconds * 1_000;
   const [remainingMs, setRemainingMs] = useState(0);
   const timeoutQuestionRef = useRef<string | null>(null);
   const timeoutRetryAtRef = useRef(0);
@@ -746,7 +767,7 @@ function RapidChoiceGame({ participant, invite, state, pending, runAction, onUse
       return undefined;
     }
     const now = performance.now();
-    const serverRemaining = Math.min(5_000, Math.max(0, state.self.deadlineAtMs - state.serverNowMs));
+    const serverRemaining = Math.min(roundMs, Math.max(0, state.self.deadlineAtMs - state.serverNowMs));
     const candidateDeadline = now + serverRemaining;
     const previousDeadline = localDeadlineRef.current;
     const localDeadline = previousDeadline &&
@@ -779,7 +800,7 @@ function RapidChoiceGame({ participant, invite, state, pending, runAction, onUse
     tick();
     const timer = window.setInterval(tick, 100);
     return () => window.clearInterval(timer);
-  }, [currentQuestion, runAction, state.phase, state.self.deadlineAtMs, state.serverNowMs]);
+  }, [currentQuestion, roundMs, runAction, state.phase, state.self.deadlineAtMs, state.serverNowMs]);
 
   if (state.phase === 'revealed' && state.results) {
     return (
@@ -865,7 +886,7 @@ function RapidChoiceGame({ participant, invite, state, pending, runAction, onUse
 
   const seconds = Math.max(0, Math.ceil(remainingMs / 1_000));
   const expired = remainingMs <= 0;
-  const timerFraction = Math.min(1, Math.max(0, remainingMs / 5_000));
+  const timerFraction = Math.min(1, Math.max(0, remainingMs / roundMs));
   return (
     <div className="carnival-game-body carnival-rapid-play">
       <div className="carnival-rapid-meta">
@@ -910,7 +931,7 @@ function RapidChoiceGame({ participant, invite, state, pending, runAction, onUse
         ))}
         <i aria-hidden="true">VS</i>
       </div>
-      <p className="carnival-game-privacy">{expired ? '时间到，正在让服务器记录本题超时。' : '服务端会校验 5 秒截止时间；网络延迟不会延长作答窗口。'}</p>
+      <p className="carnival-game-privacy">{expired ? '时间到，正在让服务器记录本题超时。' : `服务端会校验 ${roundSeconds} 秒截止时间；网络延迟不会延长作答窗口。`}</p>
     </div>
   );
 }

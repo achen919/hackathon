@@ -1055,6 +1055,33 @@
 .carnival-exclusive-result-list article p b { color: var(--cg-muted); font-size: 8px; }
 .carnival-exclusive-result-list i { display: grid; width: 19px; height: 19px; place-items: center; border-radius: 50%; background: #fff; font-size: 9px; font-style: normal; font-weight: 850; }
 
+.carnival-generated-template {
+  display: grid;
+  gap: 12px;
+  padding-top: 14px;
+}
+
+.carnival-generated-template .generated-game-sandbox__frame {
+  min-height: clamp(360px, 56dvh, 590px);
+  aspect-ratio: auto;
+}
+
+.carnival-generated-template__host-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
+.carnival-generated-template__host-controls > button {
+  min-height: 44px;
+}
+
+.carnival-game-error.is-safe-fallback {
+  background: #f2f0ff;
+  color: #51479d;
+}
+
 @media (max-width: 620px) {
   .carnival-game-backdrop {
     align-items: flex-end;
@@ -1125,6 +1152,11 @@
   .carnival-exclusive-compare { grid-template-columns: 1fr; }
   .carnival-exclusive-compare > b { min-height: 20px; }
   .carnival-exclusive-result-list { grid-template-columns: 1fr; }
+  .carnival-generated-template { padding-top: 8px; }
+  .carnival-generated-template .generated-game-sandbox { border-radius: 16px; }
+  .carnival-generated-template .generated-game-sandbox__frame { min-height: max(390px, calc(100dvh - 300px)); }
+  .carnival-generated-template__host-controls { display: grid; }
+  .carnival-generated-template__host-controls > button { width: 100%; }
 }
 
 @media (max-width: 360px) {

@@ -39,7 +39,7 @@ import type {
 import { CarnivalGameBridge, type CarnivalGameCompletion } from './components/CarnivalGameBridge';
 import { GameResultCardView } from './components/GameResultCard';
 import { buildFallbackResultCard, type ResultCardRequest } from './game-result';
-import type { GameResultCard } from './types';
+import type { GameResultCard, StableGameTemplateId } from './types';
 import { PromptGamePreviewCard } from './components/PromptGamePreviewCard';
 import './carnival.css';
 
@@ -62,7 +62,7 @@ const DEFAULT_GAME_TYPES: CarnivalGameType[] = [
   {
     templateId: 'rapid-choice',
     label: '极限2选1',
-    description: '五秒凭直觉作答，最后一起看答案。',
+    description: '默认八秒凭直觉作答，最后一起看答案。',
     enabled: true,
     available: true,
   },
@@ -87,6 +87,10 @@ const REGENERABLE_PREVIEW_ERROR_CODES = new Set([
   'GAME_PREVIEW_STALE',
   'GAME_PREVIEW_ALREADY_USED',
 ]);
+
+function isPreviewableTemplateId(value: string): value is StableGameTemplateId | 'custom' {
+  return value === 'profile-riddle' || value === 'keyword-wheel' || value === 'rapid-choice' || value === 'custom';
+}
 
 type TimelineEntry =
   | { kind: 'message'; id: string; createdAt: string; message: CarnivalTextMessage }
@@ -237,8 +241,8 @@ function localPrompt(
     ? '生成三个不同生活场景，每组恰好三个口语化行为候选；后台维度不展示，双方每组各选一个组成一句，完成后再一起揭晓。不要使用宽泛人格词或直接复述资料。'
     : option.templateId === 'keyword-wheel'
       ? '从公开聊天主题生成转盘，每个关键词配一条低压力追问。'
-      : option.templateId === 'rapid-choice'
-        ? '生成 3–5 道五秒二选一，双方完成后再一起查看答案。'
+    : option.templateId === 'rapid-choice'
+        ? '生成 3–5 道二选一，默认每题 8 秒，双方完成后再一起查看答案。'
         : '根据双方公开聊天，生成一个轻量、可跳过的双人破冰玩法。';
   return `请为我们生成一局「${option.label}」。\n\n${mechanic}\n\n题面简短、轻松，不输出关系结论或私密资料，双方都可以选择不回答。`;
 }
@@ -443,10 +447,13 @@ export default function CarnivalPage({
     setGamePreviewStage(0);
   }, []);
   const rejectBrokenGamePreview = useCallback((message: string) => {
-    invalidateGamePreview();
+    gamePreviewVersionRef.current += 1;
+    gamePreviewControllerRef.current?.abort();
+    gamePreviewControllerRef.current = null;
+    gamePreviewContextRef.current = null;
     setGamePreviewStatus('error');
     setGamePreviewError(`${message} 这份代码不会被发送，请重新生成一版。`);
-  }, [invalidateGamePreview]);
+  }, []);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -891,8 +898,8 @@ export default function CarnivalPage({
     if (
       !token ||
       !selectedGameType?.available ||
-      selectedGameType.templateId !== 'custom' ||
-      !selectedSeriesId ||
+      !isPreviewableTemplateId(selectedGameType.templateId) ||
+      (selectedGameType.templateId === 'custom' && !selectedSeriesId) ||
       prompt.trim().length < 20 ||
       gamePreviewStatus === 'generating'
     ) return;
@@ -907,13 +914,15 @@ export default function CarnivalPage({
     const startedAt = Date.now();
     try {
       const nextPreview = await api.createGamePreview(token, {
-        templateId: 'custom',
-        seriesId: selectedSeriesId,
+        templateId: selectedGameType.templateId,
+        ...(selectedSeriesId ? { seriesId: selectedSeriesId } : {}),
         prompt: prompt.trim(),
       }, controller.signal);
       await waitForVisibleBuildStages(startedAt, controller.signal);
       if (controller.signal.aborted || version !== gamePreviewVersionRef.current || !mountedRef.current) return;
-      if (nextPreview.game.seriesId !== selectedSeriesId) {
+      const previewSeriesId = 'seriesId' in nextPreview.game ? nextPreview.game.seriesId : undefined;
+      if (nextPreview.game.templateId !== selectedGameType.templateId ||
+        (selectedGameType.templateId === 'custom' && previewSeriesId !== selectedSeriesId)) {
         gamePreviewContextRef.current = null;
         setGamePreviewStatus('error');
         setGamePreviewError('生成结果与所选系列不一致，请重新生成。');
@@ -1054,8 +1063,10 @@ export default function CarnivalPage({
   }, [partner, room, self]);
 
   function createInvite() {
-    const customPreview = selectedGameType?.templateId === 'custom' && gamePreview &&
-      gamePreview.game.seriesId === selectedSeriesId &&
+    const previewSeriesId = gamePreview && 'seriesId' in gamePreview.game ? gamePreview.game.seriesId : undefined;
+    const currentPreview = selectedGameType && gamePreview &&
+      gamePreview.game.templateId === selectedGameType.templateId &&
+      (selectedGameType.templateId !== 'custom' || previewSeriesId === selectedSeriesId) &&
       gamePreviewContextRef.current === currentRoomContext &&
       Date.parse(gamePreview.expiresAt) > Date.now()
       ? gamePreview
@@ -1064,13 +1075,14 @@ export default function CarnivalPage({
       !selectedGameType ||
       !selectedGameType.available ||
       prompt.trim().length < 20 ||
-      (selectedGameType.templateId === 'custom' && (!selectedSeriesId || !customPreview))
+      !currentPreview ||
+      (selectedGameType.templateId === 'custom' && !selectedSeriesId)
     ) return;
     void submitInvite({
       templateId: selectedGameType.templateId,
       ...(selectedSeriesId ? { seriesId: selectedSeriesId } : {}),
       prompt: prompt.trim(),
-      ...(customPreview ? { previewToken: customPreview.previewToken } : {}),
+      previewToken: currentPreview.previewToken,
       idempotencyKey: requestId(),
       label: exclusiveSeriesById(selectedSeriesId)?.shortTitle ?? selectedGameType.label,
     });
@@ -1138,7 +1150,8 @@ export default function CarnivalPage({
   const hasCurrentGamePreview = Boolean(
     gamePreview &&
     !gamePreviewExpired &&
-    gamePreview.game.seriesId === selectedSeriesId &&
+    gamePreview.game.templateId === selectedGameType?.templateId &&
+    (selectedGameType?.templateId !== 'custom' || ('seriesId' in gamePreview.game && gamePreview.game.seriesId === selectedSeriesId)) &&
     gamePreviewContextRef.current === currentRoomContext,
   );
 
@@ -1503,7 +1516,7 @@ export default function CarnivalPage({
             )}
           </div>
         )}
-        {selectedGameType?.templateId === 'custom' && gamePreviewStatus === 'generating' && (
+        {selectedGameType && gamePreviewStatus === 'generating' && (
           <section className="carnival-prompt-game-building" role="status" aria-live="polite" aria-label={`正在${PROMPT_GAME_STAGES[gamePreviewStage] ?? '生成游戏'}`}>
             <header><span aria-hidden="true">✦</span><div><strong>正在把 Prompt 变成可玩的游戏</strong></div><b className="carnival-prompt-game-building__countdown">{gamePreviewCountdown > 0 ? `预计 ${gamePreviewCountdown} 秒` : '马上就好'}</b></header>
             <ol>
@@ -1516,13 +1529,13 @@ export default function CarnivalPage({
             </ol>
           </section>
         )}
-        {selectedGameType?.templateId === 'custom' && gamePreviewError && (
+        {selectedGameType && gamePreviewError && (
           <div className="carnival-studio-error" role="alert">
             <span>{gamePreviewError}</span>
             <button type="button" onClick={() => void generateGamePreview()}>重试生成预览</button>
           </div>
         )}
-        {selectedGameType?.templateId === 'custom' && gamePreview && (
+        {selectedGameType && gamePreview && (
           <PromptGamePreviewCard
             key={gamePreview.previewToken}
             preview={gamePreview}
@@ -1543,19 +1556,17 @@ export default function CarnivalPage({
               (selectedGameType.templateId === 'custom' && !selectedSeries)
             }
             onClick={() => {
-              if (selectedGameType?.templateId === 'custom' && !hasCurrentGamePreview) void generateGamePreview();
+              if (!hasCurrentGamePreview) void generateGamePreview();
               else createInvite();
             }}
           >
-            {selectedGameType?.templateId === 'custom'
-              ? hasCurrentGamePreview
-                ? '用这个版本发邀请'
-                : gamePreviewStatus === 'generating'
-                  ? `正在${PROMPT_GAME_STAGES[gamePreviewStage] ?? '生成'}`
-                  : gamePreviewExpired
-                    ? '重新生成可玩预览'
-                    : '生成可玩预览'
-              : '生成邀请卡片'} <span aria-hidden="true">→</span>
+            {hasCurrentGamePreview
+              ? '用这个版本发邀请'
+              : gamePreviewStatus === 'generating'
+                ? `正在${PROMPT_GAME_STAGES[gamePreviewStage] ?? '生成'}`
+                : gamePreviewExpired
+                  ? '重新生成可玩预览'
+                  : '生成可玩预览'} <span aria-hidden="true">→</span>
           </button>
         </footer>
       </ModalShell>

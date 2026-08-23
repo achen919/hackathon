@@ -7,6 +7,16 @@ import {
   type CSSProperties,
 } from 'react';
 import type { GameTemplateId, ParticipantId, ProfileRiddleChoiceGroup } from '../types';
+import type { GeneratedTemplateRenderer } from '../types';
+import { GeneratedGameSandbox, type PairPlayInput } from '../arcade/GeneratedGameSandbox';
+import {
+  generatedTemplateControls,
+  generatedTemplateSeed,
+  isProfileSelectValue,
+  isProfileSubmitValue,
+  isRapidAnswerValue,
+  isRapidTimeoutValue,
+} from '../generated-template';
 import '../template-games.css';
 
 export type TemplateGameType = Exclude<GameTemplateId, 'custom'>;
@@ -57,10 +67,13 @@ export type TemplateGameResult =
 export interface TemplateGameStageProps {
   template: TemplateGameType;
   label: string;
+  gameTitle?: string;
   viewer: ParticipantId;
   players: Record<ParticipantId, TemplateGamePlayer>;
   deepDiveTopics?: DeepDiveTopic[];
   twoChoiceQuestions?: TwoChoiceQuestion[];
+  renderer?: GeneratedTemplateRenderer;
+  roundSeconds?: number;
   /** 同一模板开新局时修改此值，组件会重置内部进度。 */
   sessionKey?: string;
   /** 对话框暂时关闭时暂停倒计时，同时保留双方尚未揭晓的进度。 */
@@ -70,6 +83,7 @@ export interface TemplateGameStageProps {
   onComplete?: (result: TemplateGameResult) => void;
   onRestart?: () => void;
   onExit?: () => void;
+  onRendererError?: (message: string) => void;
 }
 
 const DEFAULT_PROFILE_CHOICE_GROUPS: ProfileRiddleChoiceGroup[] = [
@@ -219,10 +233,13 @@ function usePrefersReducedMotion() {
 export function TemplateGameStage({
   template,
   label,
+  gameTitle = label,
   viewer,
   players,
   deepDiveTopics,
   twoChoiceQuestions,
+  renderer,
+  roundSeconds = 8,
   sessionKey = 'default',
   paused = false,
   onViewerChange,
@@ -230,14 +247,18 @@ export function TemplateGameStage({
   onComplete,
   onRestart,
   onExit,
+  onRendererError,
 }: TemplateGameStageProps) {
   const prefersReducedMotion = usePrefersReducedMotion();
+  const rapidRoundSeconds = Math.max(3, Math.min(15, Math.round(roundSeconds || 8)));
+  const rapidRoundMs = rapidRoundSeconds * 1_000;
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
   const templateRootRef = useRef<HTMLElement>(null);
   const topics = useMemo(() => normalizeTopics(deepDiveTopics), [deepDiveTopics]);
   const questions = useMemo(() => normalizeTwoChoiceQuestions(twoChoiceQuestions), [twoChoiceQuestions]);
   const [localViewer, setLocalViewer] = useState(viewer);
+  const [rendererFailed, setRendererFailed] = useState(false);
 
   const [profileActivePlayer, setProfileActivePlayer] = useState<ParticipantId>(viewer);
   const [profileSelections, setProfileSelections] = useState(['', '', '']);
@@ -255,20 +276,24 @@ export function TemplateGameStage({
   const [twoActivePlayer, setTwoActivePlayer] = useState<ParticipantId>(viewer);
   const [twoRoundIndex, setTwoRoundIndex] = useState(0);
   const [twoPhase, setTwoPhase] = useState<'ready' | 'answering' | 'handoff' | 'reveal-ready' | 'reveal'>('ready');
-  const [secondsLeft, setSecondsLeft] = useState(5);
+  const [secondsLeft, setSecondsLeft] = useState(rapidRoundSeconds);
   const [twoTransitioning, setTwoTransitioning] = useState(false);
   const [twoPendingAnswer, setTwoPendingAnswer] = useState<TwoChoiceAnswer | null>(null);
   const [twoAnswers, setTwoAnswers] = useState<Record<ParticipantId, TwoChoiceAnswer[]>>({ a: [], b: [] });
   const twoAnswersRef = useRef(twoAnswers);
   const answerLockRef = useRef(false);
   const twoDeadlineRef = useRef<number | null>(null);
-  const twoRemainingMsRef = useRef(5_000);
+  const twoRemainingMsRef = useRef(rapidRoundMs);
   const twoAdvanceTimeoutRef = useRef<number | null>(null);
   const rapidBodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setLocalViewer(viewer);
   }, [viewer]);
+
+  useEffect(() => {
+    setRendererFailed(false);
+  }, [renderer?.artifact.artifactId, renderer?.artifact.codeHash, sessionKey]);
 
   const changeViewer = useCallback((nextViewer: ParticipantId) => {
     setLocalViewer(nextViewer);
@@ -296,14 +321,14 @@ export function TemplateGameStage({
     setTwoActivePlayer(firstViewer);
     setTwoRoundIndex(0);
     setTwoPhase('ready');
-    setSecondsLeft(5);
+    setSecondsLeft(rapidRoundSeconds);
     setTwoTransitioning(false);
     setTwoPendingAnswer(null);
     setTwoAnswers(emptyAnswers);
     twoAnswersRef.current = emptyAnswers;
     answerLockRef.current = false;
     twoDeadlineRef.current = null;
-    twoRemainingMsRef.current = 5_000;
+    twoRemainingMsRef.current = rapidRoundMs;
     if (twoAdvanceTimeoutRef.current !== null) window.clearTimeout(twoAdvanceTimeoutRef.current);
     twoAdvanceTimeoutRef.current = null;
   // `viewer` is intentionally sampled only when a new session/template starts.
@@ -439,16 +464,16 @@ export function TemplateGameStage({
 
   useEffect(() => {
     if (template !== 'rapid-choice' || twoPhase !== 'answering') return;
-    twoRemainingMsRef.current = 5_000;
-    setSecondsLeft(5);
-  }, [template, twoActivePlayer, twoPhase, twoRoundIndex]);
+    twoRemainingMsRef.current = rapidRoundMs;
+    setSecondsLeft(rapidRoundSeconds);
+  }, [rapidRoundMs, rapidRoundSeconds, template, twoActivePlayer, twoPhase, twoRoundIndex]);
 
   useEffect(() => {
     if (template !== 'rapid-choice' || twoPhase !== 'answering' || paused || twoTransitioning) return undefined;
     answerLockRef.current = false;
     setTwoTransitioning(false);
     setTwoPendingAnswer(null);
-    const remainingMs = Math.max(0, Math.min(5_000, twoRemainingMsRef.current));
+    const remainingMs = Math.max(0, Math.min(rapidRoundMs, twoRemainingMsRef.current));
     setSecondsLeft(Math.ceil(remainingMs / 1_000));
     if (remainingMs === 0) {
       queueMicrotask(() => commitTwoChoice('timeout'));
@@ -472,7 +497,7 @@ export function TemplateGameStage({
         twoDeadlineRef.current = null;
       }
     };
-  }, [commitTwoChoice, paused, template, twoActivePlayer, twoPhase, twoRoundIndex, twoTransitioning]);
+  }, [commitTwoChoice, paused, rapidRoundMs, template, twoActivePlayer, twoPhase, twoRoundIndex, twoTransitioning]);
 
   useEffect(() => {
     if (template !== 'rapid-choice' || paused) return undefined;
@@ -504,12 +529,12 @@ export function TemplateGameStage({
     setTwoActivePlayer(localViewer);
     setTwoRoundIndex(0);
     setTwoPhase('ready');
-    setSecondsLeft(5);
+    setSecondsLeft(rapidRoundSeconds);
     setTwoTransitioning(false);
     setTwoPendingAnswer(null);
     answerLockRef.current = false;
     twoDeadlineRef.current = null;
-    twoRemainingMsRef.current = 5_000;
+    twoRemainingMsRef.current = rapidRoundMs;
   };
 
   useEffect(() => {
@@ -555,11 +580,156 @@ export function TemplateGameStage({
     return `${index % 2 === 0 ? '#A3DAFF' : '#FD999A'} ${start}deg ${end}deg`;
   }).join(', ')})`;
 
+  const profileRendererGroups = normalizeProfileChoiceGroups(players[OTHER_PLAYER[profileActivePlayer]]);
+  const currentRapidQuestion = twoPhase === 'answering' ? questions[twoRoundIndex] ?? null : null;
+  const generatedState = template === 'profile-riddle'
+    ? {
+        templateId: template,
+        title: gameTitle,
+        phase: profilePhase,
+        me: { participantId: localViewer, active: localViewer === profileActivePlayer },
+        targetParticipantId: OTHER_PLAYER[profileActivePlayer],
+        choiceGroups: profileRendererGroups.map((group) => ({ id: group.id, options: group.options })),
+        selections: localViewer === profileActivePlayer ? profileSelections.map((selection, slot) => (
+          selection ? profileRendererGroups[slot]?.options.indexOf(selection) ?? -1 : -1
+        )) : [],
+        submitted: { a: Boolean(profileGuesses.a), b: Boolean(profileGuesses.b) },
+        ...(profilePhase === 'reveal' ? { revealedGuesses: profileGuesses } : {}),
+      }
+    : template === 'keyword-wheel'
+      ? {
+          templateId: template,
+          title: gameTitle,
+          phase: wheelSpinning ? 'spinning' : selectedTopic ? 'selected' : 'ready',
+          me: { participantId: localViewer },
+          segments: topics.map((topic) => ({ id: topic.id, keyword: topic.label, prompt: topic.followUps[0], followUps: topic.followUps })),
+          rotationDeg: wheelRotation,
+          selectedSegmentId: selectedTopic?.id,
+          followUpIndex,
+          canSpin: !wheelSpinning,
+        }
+      : {
+          templateId: template,
+          title: gameTitle,
+          phase: twoPhase,
+          roundSeconds: rapidRoundSeconds,
+          me: {
+            participantId: localViewer,
+            active: localViewer === twoActivePlayer,
+            answeredCount: twoAnswers[localViewer].length,
+            currentQuestionId: currentRapidQuestion?.id,
+            deadlineAtMs: currentRapidQuestion && twoDeadlineRef.current !== null
+              ? Date.now() + Math.max(0, twoDeadlineRef.current - performance.now())
+              : undefined,
+          },
+          peer: { answeredCount: twoAnswers[OTHER_PLAYER[localViewer]].length },
+          questions: questions.map((question) => ({
+            id: question.id,
+            prompt: question.prompt,
+            options: [question.optionA, question.optionB],
+          })),
+          ...(twoPhase === 'reveal' ? { revealedAnswers: twoAnswers } : {}),
+        };
+
+  const generatedInput = (input: PairPlayInput) => {
+    if (paused) return;
+    if (template === 'profile-riddle') {
+      if (profilePhase !== 'choosing' || localViewer !== profileActivePlayer) return;
+      if (input.control === 'profile.select' && isProfileSelectValue(input.value)) {
+        const selection = input.value;
+        const option = profileRendererGroups[selection.slot]?.options[selection.optionIndex];
+        if (!option) return;
+        setProfileSelections((current) => current.map((item, index) => index === selection.slot ? option : item));
+        return;
+      }
+      if (input.control === 'profile.submit') {
+        const groups = profileRendererGroups.slice(0, 3);
+        const legalIndexes = profileSelections.map((selection, slot) => groups[slot]?.options.indexOf(selection) ?? -1);
+        if (input.value !== undefined && (!isProfileSubmitValue(input.value) ||
+          input.value.selections.some((selection, slot) => selection !== legalIndexes[slot]))) return;
+        if (legalIndexes.length === 3 && legalIndexes.every((index) => index >= 0 && index <= 2) &&
+          new Set(profileSelections).size === 3) submitProfileGuess();
+      }
+      return;
+    }
+    if (template === 'keyword-wheel') {
+      if (input.control === 'wheel.spin' && !wheelSpinning) spinWheel();
+      else if (input.control === 'wheel.next' && selectedTopic && !wheelSpinning) showNextFollowUp();
+      return;
+    }
+    if (twoPhase !== 'answering' || localViewer !== twoActivePlayer || !currentRapidQuestion) return;
+    if (input.control === 'rapid.answer' && isRapidAnswerValue(input.value) && input.value.questionId === currentRapidQuestion.id) {
+      commitTwoChoice(input.value.answer);
+    } else if (input.control === 'rapid.timeout' && isRapidTimeoutValue(input.value) && input.value.questionId === currentRapidQuestion.id &&
+      twoDeadlineRef.current !== null && performance.now() >= twoDeadlineRef.current) {
+      commitTwoChoice('timeout');
+    }
+  };
+
   const titleByTemplate: Record<TemplateGameType, string> = {
     'profile-riddle': '凭第一感觉，猜 TA 的 3 个小细节',
     'keyword-wheel': '转一下，把一个话题聊深一点',
-    'rapid-choice': '5 秒凭直觉，看看你们怎么选',
+    'rapid-choice': `${rapidRoundSeconds} 秒凭直觉，看看你们怎么选`,
   };
+
+  if (renderer && !rendererFailed) {
+    return (
+      <section ref={templateRootRef} className="template-game template-game--generated" aria-labelledby="template-game-title">
+        <header className="template-game__header">
+          <div><p className="template-game__eyebrow">AI 深度定制 · {label}</p><h2 id="template-game-title">{gameTitle}</h2></div>
+          {onExit && <button className="template-game__close" type="button" onClick={onExit} aria-label="退出游戏">×</button>}
+        </header>
+        <GeneratedGameSandbox
+          key={`${renderer.artifact.artifactId}-${localViewer}`}
+          artifact={renderer.artifact}
+          role={localViewer}
+          playMode="preview"
+          mode={template}
+          seed={generatedTemplateSeed(renderer)}
+          state={generatedState}
+          allowedControls={generatedTemplateControls(template)}
+          paused={paused}
+          reducedMotion={prefersReducedMotion}
+          title={`${label} AI 定制界面`}
+          className="generated-template-sandbox"
+          fallback={<p>正在准备这份 AI 定制界面…</p>}
+          onInput={generatedInput}
+          onError={(message) => {
+            setRendererFailed(true);
+            onRendererError?.(message);
+          }}
+          onEscape={onExit}
+        />
+        <div className="generated-template-host-controls" aria-live="polite">
+          {template === 'profile-riddle' && profilePhase === 'handoff' && (
+            <button className="template-game__primary" type="button" onClick={handoffProfileGuess}>切换下一位玩家</button>
+          )}
+          {template === 'profile-riddle' && profilePhase === 'reveal-ready' && (
+            <button className="template-game__primary" type="button" onClick={revealProfileGuesses}>双方准备好了，一起揭晓</button>
+          )}
+          {template === 'profile-riddle' && profilePhase === 'reveal' && (
+            <button className="template-game__primary" type="button" onClick={restartProfileGuess}>再玩一局</button>
+          )}
+          {template === 'rapid-choice' && twoPhase === 'ready' && localViewer === twoActivePlayer && (
+            <button className="template-game__primary" type="button" onClick={() => setTwoPhase('answering')}>开始 {rapidRoundSeconds} 秒挑战</button>
+          )}
+          {template === 'rapid-choice' && (twoPhase === 'ready' || twoPhase === 'answering') && localViewer !== twoActivePlayer && (
+            <button className="template-game__primary" type="button" onClick={() => changeViewer(twoActivePlayer)}>切换到当前玩家</button>
+          )}
+          {template === 'rapid-choice' && twoPhase === 'handoff' && (
+            <button className="template-game__primary" type="button" onClick={handoffTwoChoice}>切换下一位玩家</button>
+          )}
+          {template === 'rapid-choice' && twoPhase === 'reveal-ready' && (
+            <button className="template-game__primary" type="button" onClick={revealTwoChoice}>双方准备好了，一起查看</button>
+          )}
+          {template === 'rapid-choice' && twoPhase === 'reveal' && (
+            <button className="template-game__primary" type="button" onClick={restartTwoChoice}>再来一局</button>
+          )}
+          <button className="template-game__secondary" type="button" onClick={() => setRendererFailed(true)}>使用安全模板界面</button>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section ref={templateRootRef} className="template-game" aria-labelledby="template-game-title">
@@ -574,6 +744,10 @@ export function TemplateGameStage({
           </button>
         )}
       </header>
+
+      {rendererFailed && (
+        <p className="template-game__renderer-fallback" role="status">AI 定制界面暂不可用，已切换到同一套安全玩法。</p>
+      )}
 
       {template === 'profile-riddle' && (
         <div className="template-game__body">
@@ -768,9 +942,9 @@ export function TemplateGameStage({
           ) : twoPhase === 'ready' ? (
             <div className="template-game__handoff" aria-live="polite">
               <span className="template-game__big-icon" aria-hidden="true">⚡</span>
-              <p className="template-game__eyebrow">五秒直觉挑战</p>
+              <p className="template-game__eyebrow">{rapidRoundSeconds} 秒直觉挑战</p>
               <h3>{players[twoActivePlayer].nickname}，准备好了吗？</h3>
-              <p>点击后才会出现第一题；接下来每题都有 5 秒，答案会一直保密到双方完成。</p>
+              <p>点击后才会出现第一题；接下来每题都有 {rapidRoundSeconds} 秒，答案会一直保密到双方完成。</p>
               <button className="template-game__primary" type="button" onClick={() => setTwoPhase('answering')}>
                 我准备好了，开始
               </button>
@@ -797,7 +971,7 @@ export function TemplateGameStage({
                       cy="20"
                       r="16"
                       pathLength="100"
-                      style={{ strokeDashoffset: 100 - secondsLeft * 20 }}
+                      style={{ strokeDashoffset: 100 - (secondsLeft / rapidRoundSeconds) * 100 }}
                     />
                   </svg>
                   <strong>{secondsLeft}</strong>
@@ -834,7 +1008,7 @@ export function TemplateGameStage({
                   ? twoPendingAnswer === 'timeout'
                     ? '本题已超时，正在进入下一题…'
                     : `已选 ${twoPendingAnswer === 0 ? 'A' : 'B'}，正在进入下一题…`
-                  : '5 秒后未选会自动跳过，对方作答前不会看到你的答案。'}
+                  : `${rapidRoundSeconds} 秒后未选会自动跳过，对方作答前不会看到你的答案。`}
               </p>
             </div>
           ) : twoPhase === 'handoff' ? (

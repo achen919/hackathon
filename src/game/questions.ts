@@ -6,6 +6,7 @@ import type {
   ParticipantId,
   ProfileRiddleChoiceGroup,
 } from '../types';
+import { normalizeGeneratedTemplateRenderer } from '../generated-template';
 
 const publicTopics = ['博物馆', '逛展', '徒步', '做饭', '摄影', '旅行', '咖啡', '电影', '运动', '阅读'];
 
@@ -160,7 +161,7 @@ function wheelQuestions(topic: string): GameQuestion[] {
 
 const rapidQuestions: GameQuestion[] = [
   {
-    id: 'plan-or-go', label: '周末模式', source: '五秒直觉题，没有更好的选项',
+    id: 'plan-or-go', label: '周末模式', source: '八秒直觉题，没有更好的选项',
     prompt: '周末出去玩，你更偏向哪一种？', options: ['提前把攻略做好', '当天醒来再决定'],
     matchedFollowUp: '你们都这样选，可以聊聊：这种方式最吸引你的是什么？',
     differentFollowUp: '你们选得不一样，可以聊聊：各自最看重安心感还是自由感？',
@@ -248,7 +249,7 @@ function mechanicsFor(
       })),
     };
   }
-  if (templateId === 'rapid-choice') return { kind: 'rapid-choice', roundSeconds: 5 };
+  if (templateId === 'rapid-choice') return { kind: 'rapid-choice', roundSeconds: 8 };
   return { kind: 'custom' };
 }
 
@@ -290,7 +291,7 @@ export function buildFallbackGame(
       : templateId === 'keyword-wheel'
         ? '转一下，把一个话题聊深一点'
         : templateId === 'rapid-choice'
-          ? '5 秒凭直觉，看看你们怎么选'
+          ? '8 秒凭直觉，看看你们怎么选'
           : '写一句 Prompt，现场变成游戏',
     eyebrow: `${gameType} · 双人破冰`,
     description: templateId === 'profile-riddle'
@@ -298,7 +299,7 @@ export function buildFallbackGame(
       : templateId === 'keyword-wheel'
         ? '转盘会从公开聊天线索中抽一个关键词，再给出一条低压力追问。'
         : templateId === 'rapid-choice'
-          ? '双方分别完成 3–5 道五秒二选一，最后一起查看答案和可以继续聊的原因。'
+          ? '双方分别完成 3–5 道八秒二选一，最后一起查看答案和可以继续聊的原因。'
           : '在当前案例页编辑 Prompt，让 AI 编写完整 HTML/CSS/JavaScript 小游戏并在隔离沙箱中直接试玩，无需登录。',
     whyItFits: templateId === 'profile-riddle'
       ? '三个小猜测都来自轻松日常，猜反了也能自然接着聊。'
@@ -329,10 +330,14 @@ function validMechanics(game: Partial<GameDefinition>) {
   }
   if (mechanics.kind === 'keyword-wheel') {
     return Array.isArray(mechanics.segments) && mechanics.segments.length >= 3 && mechanics.segments.length <= 5 && mechanics.segments.every(
-      (segment) => segment && typeof segment.id === 'string' && typeof segment.keyword === 'string' && typeof segment.prompt === 'string' && typeof segment.followUp === 'string',
+      (segment) => segment && typeof segment.id === 'string' && typeof segment.keyword === 'string' && typeof segment.prompt === 'string' && typeof segment.followUp === 'string' &&
+        (segment.followUps === undefined || (
+          Array.isArray(segment.followUps) && segment.followUps.length >= 2 && segment.followUps.length <= 3 &&
+          segment.followUps.every((item) => typeof item === 'string' && item.trim().length >= 4 && item.length <= 300)
+        )),
     );
   }
-  if (mechanics.kind === 'rapid-choice') return mechanics.roundSeconds === 5;
+  if (mechanics.kind === 'rapid-choice') return Number.isInteger(mechanics.roundSeconds) && mechanics.roundSeconds >= 3 && mechanics.roundSeconds <= 15;
   return mechanics.kind === 'custom';
 }
 
@@ -371,6 +376,7 @@ function validProfileGroups(groups: unknown) {
 
 export function isGameDefinition(value: unknown): value is GameDefinition {
   if (!value || typeof value !== 'object') return false;
+  if (['document', 'html', 'css', 'javascript', 'script', 'code'].some((key) => Object.prototype.hasOwnProperty.call(value, key))) return false;
   const game = value as Partial<GameDefinition>;
   if (
     game.schemaVersion !== 2 ||
@@ -387,7 +393,8 @@ export function isGameDefinition(value: unknown): value is GameDefinition {
     !game.topics.every((topic) => typeof topic === 'string' && topic.length >= 2 && topic.length <= 24) ||
     new Set(game.topics).size !== game.topics.length ||
     !Array.isArray(game.questions) || game.questions.length < 3 || game.questions.length > 5 ||
-    (game.generatedBy !== 'fallback' && game.generatedBy !== 'ai') || typeof game.generatedAt !== 'string' || !validMechanics(game)
+    (game.generatedBy !== 'fallback' && game.generatedBy !== 'ai') || typeof game.generatedAt !== 'string' || !validMechanics(game) ||
+    (game.renderer !== undefined && normalizeGeneratedTemplateRenderer(game.renderer) === null)
   ) return false;
 
   const ids = new Set<string>();

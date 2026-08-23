@@ -1,5 +1,23 @@
 export type ParticipantId = 'a' | 'b';
 export type GameTemplateId = 'profile-riddle' | 'keyword-wheel' | 'rapid-choice' | 'custom';
+export type StableGameTemplateId = Exclude<GameTemplateId, 'custom'>;
+
+/** Public, code-free pointer to an isolated generated renderer. */
+export interface GeneratedGameArtifact {
+  artifactId: string;
+  codeHash: string;
+  runtimePath: string;
+}
+
+/**
+ * Stable templates keep their audited mechanics and may opt into an AI-made
+ * presentation layer. The executable document is never returned to clients.
+ */
+export interface GeneratedTemplateRenderer {
+  engine: 'generated-template-v1';
+  bridge: 'PairPlayTemplate-v1';
+  artifact: GeneratedGameArtifact;
+}
 
 export interface MatchUser {
   nickname: string;
@@ -84,14 +102,15 @@ export interface GameDefinition {
         sentencePattern: string;
       }
     | {
-        kind: 'keyword-wheel';
-        segments: Array<{ id: string; keyword: string; prompt: string; followUp: string }>;
+      kind: 'keyword-wheel';
+        segments: Array<{ id: string; keyword: string; prompt: string; followUp: string; followUps?: string[] }>;
       }
     | {
         kind: 'rapid-choice';
-        roundSeconds: 5;
+        roundSeconds: number;
       }
     | { kind: 'custom' };
+  renderer?: GeneratedTemplateRenderer;
   generatedBy: 'fallback' | 'ai';
   generatedAt: string;
 }

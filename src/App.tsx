@@ -73,11 +73,13 @@ function sessionSummary(result: TemplateGameResult) {
 function templateSteps(templateId: GameTemplateId, questionLabels: string[]) {
   if (templateId === 'profile-riddle') return ['完成三个小猜测', '交换聊天视角', '一起揭晓回应'];
   if (templateId === 'keyword-wheel') return ['转动关键词转盘', '抽中一条追问', '把话题带回聊天'];
-  if (templateId === 'rapid-choice') return questionLabels.length > 0 ? questionLabels : ['五秒凭直觉选择', '交换视角作答', '一起查看答案'];
+  if (templateId === 'rapid-choice') return questionLabels.length > 0 ? questionLabels : ['八秒凭直觉选择', '交换视角作答', '一起查看答案'];
   return questionLabels.length > 0 ? questionLabels : ['修改专属 Prompt', '试玩三种交互', '收下续聊话题'];
 }
 
-function customGameShell(match: MatchPayload, game: CarnivalPromptGameDefinition) {
+type CarnivalCustomPromptGame = Extract<CarnivalPromptGameDefinition, { templateId: 'custom' }>;
+
+function customGameShell(match: MatchPayload, game: CarnivalCustomPromptGame) {
   const shell = buildFallbackGame(match, 'custom', '专属小游戏');
   if (game.engine === 'arcade-v1') {
     return {
@@ -377,7 +379,7 @@ export default function App() {
   }
 
   function launchCasePromptGame(
-    game: CarnivalPromptGameDefinition,
+    game: CarnivalCustomPromptGame,
     mode: 'ready' | 'fallback',
     notice: string,
   ) {
@@ -447,6 +449,7 @@ export default function App() {
         const payload = (await response.json()) as { game?: unknown; cached?: boolean; code?: string };
         if (!response.ok || !payload.game) throw new Error(payload.code ?? `HTTP ${response.status}`);
         const game = normalizeCarnivalPromptGame(payload.game);
+        if (game.templateId !== 'custom') throw new Error('GAME_TEMPLATE_MISMATCH');
         if (runVersion !== generationVersionRef.current) return;
         if (game.generatedBy === 'ai') {
           setAiStatus((current) => ({ configured: true, model: current?.model ?? null, gameTypes: current?.gameTypes ?? gameTypes }));

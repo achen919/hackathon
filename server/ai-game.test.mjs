@@ -10,7 +10,9 @@ import {
   isGeneratedGamePayload,
   isGeneratedProfileRiddlePayload,
   isGeneratedPromptGamePayload,
+  isGeneratedTemplatePayload,
 } from './ai-game.mjs';
+import { FALLBACK_GENERATED_TEMPLATE_DOCUMENTS } from './generated-template-game.mjs';
 import {
   buildPromptPreview,
   isTemplateShapeValid,
@@ -189,23 +191,33 @@ test('validates output and keeps renamed labels on the stable profile-riddle mec
   let requestBody;
   const fetchImpl = async (_url, init) => {
     requestBody = JSON.parse(init.body);
-    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(validProfilePayload) } }] }), {
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+      ...validProfilePayload,
+      document: FALLBACK_GENERATED_TEMPLATE_DOCUMENTS['profile-riddle'],
+    }) } }] }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
   };
   const renamedConfig = {
     ...config,
-    gameTypes: [gameType('profile-riddle', '读懂彼此三连猜')],
+    gameTypes: [{
+      ...gameType('profile-riddle', '读懂彼此三连猜'),
+      generationPrompt: '管理员默认使用彩色下拉筛选框展示三轮猜测。',
+    }],
   };
   const game = await createAiGameService({ fetchImpl }).generate(renamedConfig, match, {
     templateId: 'profile-riddle',
-    prompt: '请围绕公开聊天里的周末兴趣，生成一局轻松、不越界的资料猜谜游戏。',
+    prompt: '请围绕公开聊天里的周末兴趣生成资料猜谜，并覆盖默认视觉：改成黑白三轮圆形转盘。',
   });
   assert.equal(requestBody.response_format.type, 'json_schema');
   assert.equal(requestBody.model, 'test-model');
-  assert.equal(requestBody.max_tokens, 2_500);
+  assert.equal(requestBody.max_tokens, 6_000);
   assert.equal(game.generatedBy, 'ai');
+  assert.equal(game.renderer.engine, 'generated-template-v1');
+  assert.equal(game.renderer.bridge, 'PairPlayTemplate-v1');
+  assert.match(game.renderer.artifact.codeHash, /^[a-f0-9]{64}$/);
+  assert.match(game.renderer.artifact.document, /^<!doctype html>/);
   assert.equal(game.matchId, match.match_id);
   assert.equal(game.schemaVersion, 2);
   assert.equal(game.gameType, '读懂彼此三连猜');
@@ -228,11 +240,87 @@ test('validates output and keeps renamed labels on the stable profile-riddle mec
   assert.equal(profileSchema.properties.questionsByTarget.additionalProperties, false);
   assert.equal(profileSchema.properties.questionsByTarget.properties.a.maxItems, 3);
   assert.equal(profileSchema.properties.questionsByTarget.properties.b.items.properties.options.maxItems, 3);
+  assert.equal(profileSchema.properties.document.maxLength, 50_000);
   assert.match(JSON.stringify(requestBody.messages), /questionsByTarget\.a.*user_a\.public_profile_signals/s);
   assert.match(JSON.stringify(requestBody.messages), /questionsByTarget\.b.*from=b/s);
   assert.match(JSON.stringify(requestBody.messages), /不得把另一人的资料或发言当成当前 target/);
+  assert.match(JSON.stringify(requestBody.messages), /管理员默认使用彩色下拉筛选框/);
+  assert.match(JSON.stringify(requestBody.messages), /黑白三轮圆形转盘/);
+  assert.match(JSON.stringify(requestBody.messages), /可以覆盖管理员默认模板中的颜色、布局、动画和固定控件表现/);
   assert.equal(isGeneratedProfileRiddlePayload(validProfilePayload), true);
+  assert.equal(isGeneratedTemplatePayload({
+    ...validProfilePayload,
+    document: FALLBACK_GENERATED_TEMPLATE_DOCUMENTS['profile-riddle'],
+  }, 'profile-riddle'), true);
   assert.equal(isGeneratedGamePayload(validPayload), true);
+});
+
+test('keyword and rapid AI generation honor editable presentation prompts while preserving authoritative mechanics', async () => {
+  const cases = [
+    {
+      templateId: 'keyword-wheel',
+      label: '关键词深挖',
+      adminPrompt: '管理员默认使用紫色静态圆盘。',
+      playerPrompt: '覆盖默认美术：使用复古报纸拼贴和明显旋转动画，但落点仍由服务器决定。',
+      payload: {
+        ...validPayload,
+        document: FALLBACK_GENERATED_TEMPLATE_DOCUMENTS['keyword-wheel'],
+      },
+      verify(game) {
+        assert.equal(game.mechanics.kind, 'keyword-wheel');
+        assert.equal(game.mechanics.segments.every((segment) => segment.followUps.length === 3), true);
+      },
+    },
+    {
+      templateId: 'rapid-choice',
+      label: '极限2选1',
+      adminPrompt: '管理员默认使用粉色卡牌和淡入动画。',
+      playerPrompt: '覆盖默认美术：使用像素运动场和左右碰撞动画，倒计时规则保持服务端权威。',
+      payload: {
+        ...validPayload,
+        questions: validPayload.questions.map((question) => ({
+          ...question,
+          options: question.options.slice(0, 2),
+        })),
+        roundSeconds: 8,
+        document: FALLBACK_GENERATED_TEMPLATE_DOCUMENTS['rapid-choice'],
+      },
+      verify(game) {
+        assert.equal(game.mechanics.kind, 'rapid-choice');
+        assert.equal(game.mechanics.roundSeconds, 8);
+        assert.equal(game.questions.every((question) => question.options.length === 2), true);
+      },
+    },
+  ];
+
+  for (const entry of cases) {
+    let requestBody;
+    const fetchImpl = async (_url, init) => {
+      requestBody = JSON.parse(init.body);
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify(entry.payload) } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    const typeConfig = {
+      ...config,
+      gameTypes: [{
+        ...gameType(entry.templateId, entry.label),
+        generationPrompt: entry.adminPrompt,
+      }],
+    };
+    const game = await createAiGameService({ fetchImpl }).generate(typeConfig, match, {
+      templateId: entry.templateId,
+      prompt: entry.playerPrompt,
+    });
+    const serializedMessages = JSON.stringify(requestBody.messages);
+    assert.match(serializedMessages, new RegExp(entry.adminPrompt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.match(serializedMessages, new RegExp(entry.playerPrompt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.match(serializedMessages, /以玩家要求为准/);
+    assert.equal(isGeneratedTemplatePayload(entry.payload, entry.templateId), true);
+    assert.equal(game.renderer.engine, 'generated-template-v1');
+    assert.equal(game.renderer.artifact.document, entry.payload.document);
+    entry.verify(game);
+  }
 });
 
 test('custom AI generation pins series id, guidance, shape, mechanics, and cache identity', async () => {

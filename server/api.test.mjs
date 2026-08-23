@@ -6,6 +6,10 @@ import { createApiHandler } from './api.mjs';
 import { createMemoryConfigStore } from './config-store.mjs';
 import { buildExclusiveFallbackGame } from './exclusive-series.mjs';
 import { isPromptGameDefinition } from './prompt-game.mjs';
+import {
+  attachFallbackGeneratedTemplateRenderer,
+  publicGeneratedTemplateGame,
+} from './generated-template-game.mjs';
 
 const validMatch = {
   match_id: 'test-match',
@@ -45,7 +49,7 @@ function gameType(id, label = GAME_LABELS[id]) {
 }
 
 function generatedGame(matchId, templateId = 'profile-riddle', label = GAME_LABELS[templateId]) {
-  return {
+  const game = {
     schemaVersion: 2,
     id: `game-${matchId}-${templateId}`,
     matchId,
@@ -64,6 +68,7 @@ function generatedGame(matchId, templateId = 'profile-riddle', label = GAME_LABE
     generatedBy: 'ai',
     generatedAt: new Date().toISOString(),
   };
+  return templateId === 'custom' ? game : attachFallbackGeneratedTemplateRenderer(game);
 }
 
 async function withServer(handler, run) {
@@ -270,7 +275,7 @@ test('AI game endpoint accepts only same-origin server-issued contexts and retur
         body: JSON.stringify({ contextId, templateId: 'profile-riddle' }),
       });
       assert.equal(response.status, 200);
-      assert.deepEqual((await response.json()).game, game);
+      assert.deepEqual((await response.json()).game, publicGeneratedTemplateGame(game, '/api/games/runtime'));
       assert.equal(receivedSelection.templateId, 'profile-riddle');
       assert.equal(receivedSelection.gameLabel, '资料猜谜局');
       assert.equal(typeof receivedSelection.prompt, 'string');
@@ -507,15 +512,22 @@ test('prompt arcade stays playable without an AI key and compiles edited prompts
         headers: { 'Content-Type': 'application/json', Origin: baseUrl },
         body: JSON.stringify({ contextId, templateId: 'profile-riddle' }),
       });
-      assert.equal(builtIn.status, 503);
-      assert.equal((await builtIn.json()).code, 'AI_NOT_CONFIGURED');
+      assert.equal(builtIn.status, 200);
+      const builtInBody = await builtIn.json();
+      assert.equal(builtInBody.fallback, true);
+      assert.equal(builtInBody.providerUnavailable, 'AI_NOT_CONFIGURED');
+      assert.equal(builtInBody.game.generatedBy, 'fallback');
+      assert.equal(builtInBody.game.renderer.artifact.document, undefined);
+      const builtInRuntime = await fetch(`${baseUrl}${builtInBody.game.renderer.artifact.runtimePath}`);
+      assert.equal(builtInRuntime.status, 200);
+      assert.equal(builtInRuntime.headers.get('x-generated-code-hash'), builtInBody.game.renderer.artifact.codeHash);
       assert.equal(providerCalls, 0);
       assert.equal(capacityCalls, 0);
     },
   );
 });
 
-test('prompt arcade falls back on provider authentication failure while built-in errors stay unchanged', async () => {
+test('prompt arcade and built-in generated templates fall back on provider authentication failure', async () => {
   const upstreamUrl = 'https://match.example.test/case';
   let providerCalls = 0;
   const fetchImpl = async (url) => {
@@ -569,8 +581,11 @@ test('prompt arcade falls back on provider authentication failure while built-in
 
       const builtInResponse = await generate('profile-riddle');
       const builtIn = await builtInResponse.json();
-      assert.equal(builtInResponse.status, 502);
-      assert.equal(builtIn.code, 'AI_AUTH_FAILED');
+      assert.equal(builtInResponse.status, 200);
+      assert.equal(builtIn.fallback, true);
+      assert.equal(builtIn.providerUnavailable, 'AI_AUTH_FAILED');
+      assert.equal(builtIn.game.renderer.engine, 'generated-template-v1');
+      assert.equal(builtIn.game.renderer.artifact.document, undefined);
       assert.equal(providerCalls, 2);
     },
   );

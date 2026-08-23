@@ -23,6 +23,12 @@ import {
   PROMPT_GAME_SCHEMA_VERSION,
   assertPromptGameDefinition,
 } from './prompt-game.mjs';
+import {
+  assertGeneratedTemplateRenderer,
+  generatedTemplateArtifact,
+  hasGeneratedTemplateRenderer,
+  publicGeneratedTemplateGame,
+} from './generated-template-game.mjs';
 
 export const CARNIVAL_TEMPLATE_IDS = Object.freeze([
   'profile-riddle',
@@ -33,7 +39,6 @@ export const CARNIVAL_TEMPLATE_IDS = Object.freeze([
 
 const STATE_VERSION = 1;
 const UNLOCK_MESSAGE_COUNT = 10;
-const RAPID_ROUND_MS = 5_000;
 const RAPID_NETWORK_GRACE_MS = 750;
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 const OPAQUE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{20,200}$/;
@@ -58,8 +63,8 @@ const TEMPLATE_LABELS = Object.freeze({
 
 const TEMPLATE_PROMPTS = Object.freeze({
   'profile-riddle': '生成三个不同生活场景，每组恰好三个口语化行为候选；双方每组各选一个，猜测在双方都提交前必须保密。',
-  'keyword-wheel': '生成三到八个来自公开聊天共同点的安全转盘话题，每个话题附一条轻松追问。',
-  'rapid-choice': '生成三到五道五秒二选一，选项没有优劣；双方独立完成后，再一起查看答案并讨论为什么选择 A 或 B。',
+  'keyword-wheel': '生成三到八个来自公开聊天共同点的安全转盘话题，每个话题附两到三个不同角度的轻松追问。',
+  'rapid-choice': '生成三到五道二选一，默认每题八秒且仅允许三到十五秒；双方独立完成后，再一起查看答案并讨论为什么选择 A 或 B。',
   custom: '从稳定专属系列生成三轮轮流猜答；每轮由一方私密作答、另一方猜测，猜测锁定后才揭晓本轮。',
 });
 
@@ -78,6 +83,16 @@ const PROFILE_RIDDLE_DIRECTION_CATEGORIES = Object.freeze({
 
 function profileRiddleSentence(targetName, keywords) {
   return `我觉得${targetName}是一个${keywords[0]}、${keywords[1]}，而且${keywords[2]}的人。`;
+}
+
+function rapidRoundMs(game) {
+  const seconds = Number(game?.mechanics?.roundSeconds);
+  return (Number.isSafeInteger(seconds) && seconds >= 3 && seconds <= 15 ? seconds : 8) * 1_000;
+}
+
+function wheelFollowUps(segment) {
+  if (Array.isArray(segment?.followUps) && segment.followUps.length > 0) return segment.followUps;
+  return typeof segment?.followUp === 'string' ? [segment.followUp] : [];
 }
 
 const DEFAULT_LIMITS = Object.freeze({
@@ -394,11 +409,24 @@ function validateCarnivalGameDefinition(templateId, seriesId, value, limits) {
       ids.add(id);
       normalizeString(segment.keyword, `game.mechanics.segments[${index}].keyword`, { max: 40 });
       normalizeString(segment.prompt, `game.mechanics.segments[${index}].prompt`, { max: 300 });
-      normalizeString(segment.followUp, `game.mechanics.segments[${index}].followUp`, { max: 300 });
+      if (segment.followUps !== undefined) {
+        uniqueStrings(segment.followUps, `game.mechanics.segments[${index}].followUps`, {
+          minItems: 2,
+          maxItems: 3,
+          maxLength: 300,
+        });
+      } else {
+        normalizeString(segment.followUp, `game.mechanics.segments[${index}].followUp`, { max: 300 });
+      }
     }
   } else if (templateId === 'rapid-choice') {
-    if (game.mechanics?.kind !== 'rapid-choice' || game.mechanics.roundSeconds !== 5) {
-      fail('INVALID_GAME', 'rapid-choice mechanics must use a five second round', 400);
+    if (
+      game.mechanics?.kind !== 'rapid-choice' ||
+      !Number.isSafeInteger(game.mechanics.roundSeconds) ||
+      game.mechanics.roundSeconds < 3 ||
+      game.mechanics.roundSeconds > 15
+    ) {
+      fail('INVALID_GAME', 'rapid-choice mechanics must use a 3 to 15 second round', 400);
     }
     if (!Array.isArray(game.questions) || game.questions.length < 3 || game.questions.length > 5) {
       fail('INVALID_GAME', 'rapid-choice must contain between 3 and 5 questions', 400);
@@ -481,6 +509,16 @@ function validateCarnivalGameDefinition(templateId, seriesId, value, limits) {
       });
       normalizeString(question.matchedFollowUp, `game.questions[${index}].matchedFollowUp`, { min: 6, max: 140 });
       normalizeString(question.differentFollowUp, `game.questions[${index}].differentFollowUp`, { min: 6, max: 140 });
+    }
+  }
+  if (game.renderer !== undefined) {
+    if (!hasGeneratedTemplateRenderer(game)) {
+      fail('INVALID_GAME', 'built-in renderer must use generated-template-v1', 400);
+    }
+    try {
+      assertGeneratedTemplateRenderer(game.renderer, templateId);
+    } catch {
+      fail('INVALID_GAME', 'generated template renderer is invalid', 400);
     }
   }
   return game;
@@ -575,12 +613,12 @@ function invitePrivateStateForView(invite, participantId) {
   return invite.privateByParticipant[participantId] ?? newInvitePrivateState();
 }
 
-function startRapidQuestions(privateState, timestamp) {
+function startRapidQuestions(privateState, timestamp, roundMs) {
   if (privateState.rapidStartedAt !== null) return false;
   privateState.rapidStartedAt = timestamp;
   privateState.rapidCurrentQuestionIndex = 0;
   privateState.rapidQuestionStartedAt = timestamp;
-  privateState.rapidQuestionDeadlineAt = timestamp + RAPID_ROUND_MS;
+  privateState.rapidQuestionDeadlineAt = timestamp + roundMs;
   return true;
 }
 
@@ -725,7 +763,11 @@ function scopedInvite(invite, room, participantId) {
           }
       : null;
 
-  const definition = arcadeView ? publicArcadeDefinition(invite.game) : clonePublic(invite.game);
+  const definition = arcadeView
+    ? publicArcadeDefinition(invite.game)
+    : hasGeneratedTemplateRenderer(invite.game)
+      ? publicGeneratedTemplateGame(invite.game, '/api/carnival/games/runtime')
+      : clonePublic(invite.game);
   const status = publicInviteStatus(invite.status);
 
   return {
@@ -1315,7 +1357,7 @@ export function createCarnivalService(options = {}) {
         invite.status = 'active';
         if (invite.templateId === 'rapid-choice' && invite.joinedParticipantIds.length === room.members.length) {
           for (const member of room.members) {
-            startRapidQuestions(invitePrivateState(invite, member.id), timestamp);
+            startRapidQuestions(invitePrivateState(invite, member.id), timestamp, rapidRoundMs(invite.game));
           }
         }
         invite.updatedAt = timestamp;
@@ -1459,12 +1501,28 @@ export function createCarnivalService(options = {}) {
         }
         const segment = clonePublic(segments[selectedIndex]);
         action = appendAction(invite, participant.id, input.type, { segmentId: segment.id }, timestamp);
-        invite.shared = { lastSpin: { segment, actorId: participant.id, createdAt: timestamp } };
+        invite.shared = {
+          lastSpin: { segment, actorId: participant.id, createdAt: timestamp },
+          followUpIndex: 0,
+        };
+      } else if (input.type === 'wheel-next-follow-up') {
+        if (invite.templateId !== 'keyword-wheel') fail('INVALID_ACTION', 'Action does not match the game template', 400);
+        const lastSpin = invite.shared?.lastSpin;
+        if (!lastSpin?.segment?.id) fail('WHEEL_NOT_SPUN', 'Spin the wheel before changing the question', 409);
+        const segment = invite.game.mechanics.segments.find((item) => item.id === lastSpin.segment.id);
+        const followUps = wheelFollowUps(segment);
+        if (followUps.length < 2) fail('FOLLOW_UP_UNAVAILABLE', 'This topic has no alternate question', 409);
+        const followUpIndex = (Number(invite.shared.followUpIndex) + 1) % followUps.length;
+        invite.shared = { ...invite.shared, followUpIndex };
+        action = appendAction(invite, participant.id, input.type, {
+          segmentId: segment.id,
+          followUpIndex,
+        }, timestamp);
       } else if (input.type === 'rapid-start') {
         if (invite.templateId !== 'rapid-choice') fail('INVALID_ACTION', 'Action does not match the game template', 400);
         const privateState = invitePrivateState(invite, participant.id);
         if (privateState.rapidStartedAt !== null) fail('ALREADY_STARTED', 'Rapid-choice was already started', 409);
-        startRapidQuestions(privateState, timestamp);
+        startRapidQuestions(privateState, timestamp, rapidRoundMs(invite.game));
         action = appendAction(invite, participant.id, input.type, {
           questionId: invite.game.questions[0].id,
           startedAt: timestamp,
@@ -1490,7 +1548,7 @@ export function createCarnivalService(options = {}) {
         const nextQuestion = invite.game.questions[nextQuestionIndex] ?? null;
         privateState.rapidCurrentQuestionIndex = nextQuestion ? nextQuestionIndex : null;
         privateState.rapidQuestionStartedAt = nextQuestion ? timestamp : null;
-        privateState.rapidQuestionDeadlineAt = nextQuestion ? timestamp + RAPID_ROUND_MS : null;
+        privateState.rapidQuestionDeadlineAt = nextQuestion ? timestamp + rapidRoundMs(invite.game) : null;
         action = appendAction(invite, participant.id, input.type, {
           questionId,
           answer: recordedAnswer,
@@ -1652,28 +1710,40 @@ export function createCarnivalService(options = {}) {
     });
   }
 
-  async function getArcadeArtifact(artifactId) {
+  async function getGameArtifact(artifactId) {
     const normalized = normalizeString(artifactId, 'artifactId', { min: 41, max: 89 });
     if (!/^artifact_[A-Za-z0-9_-]{32,80}$/.test(normalized)) {
       fail('ARCADE_ARTIFACT_NOT_FOUND', 'Arcade runtime was not found', 404);
     }
     return transact(() => {
       for (const room of Object.values(state.rooms)) {
-        const invite = room.invites.find((item) =>
-          isArcadeInvite(item) && item.game.artifact?.artifactId === normalized,
-        );
+        const invite = room.invites.find((item) => {
+          if (isArcadeInvite(item)) return item.game.artifact?.artifactId === normalized;
+          return hasGeneratedTemplateRenderer(item.game) &&
+            item.game.renderer.artifact?.artifactId === normalized;
+        });
         if (!invite) continue;
-        try {
-          assertArcadeGameDefinition(invite.game, { hasUnsafeText: hasUnsafeGameText });
-        } catch {
-          fail('STATE_CORRUPT', 'Persisted arcade runtime is invalid', 500);
+        let artifact;
+        if (isArcadeInvite(invite)) {
+          try {
+            assertArcadeGameDefinition(invite.game, { hasUnsafeText: hasUnsafeGameText });
+          } catch {
+            fail('STATE_CORRUPT', 'Persisted arcade runtime is invalid', 500);
+          }
+          artifact = invite.game.artifact;
+        } else {
+          try {
+            artifact = generatedTemplateArtifact(invite.game);
+          } catch {
+            fail('STATE_CORRUPT', 'Persisted generated template runtime is invalid', 500);
+          }
         }
         return {
           changed: false,
           result: () => ({
             artifactId: normalized,
-            codeHash: invite.game.artifact.codeHash,
-            document: invite.game.artifact.document,
+            codeHash: artifact.codeHash,
+            document: artifact.document,
           }),
         };
       }
@@ -1719,7 +1789,8 @@ export function createCarnivalService(options = {}) {
     joinInvite,
     gameAction,
     submitAction: gameAction,
-    getArcadeArtifact,
+    getGameArtifact,
+    getArcadeArtifact: getGameArtifact,
     leave,
   };
 }

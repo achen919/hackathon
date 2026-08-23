@@ -27,6 +27,8 @@ import type {
   CarnivalPromptGameDefinition,
 } from './carnival-types';
 import { exclusiveSeriesById, type CarnivalExclusiveSeriesId } from './carnival-exclusive';
+import { isGameDefinition } from './game/questions';
+import { normalizeGeneratedTemplateRenderer } from './generated-template';
 
 type JsonObject = Record<string, unknown>;
 
@@ -404,6 +406,16 @@ export function normalizeCarnivalArcadeGame(value: unknown): CarnivalArcadeGameD
 
 export function normalizeCarnivalPromptGame(value: unknown): CarnivalPromptGameDefinition {
   const source = isObject(value) && isObject(value.definition) ? value.definition : value;
+  if (isObject(source) && source.schemaVersion === 2 &&
+    (source.templateId === 'profile-riddle' || source.templateId === 'keyword-wheel' || source.templateId === 'rapid-choice')) {
+    if (['document', 'html', 'css', 'javascript', 'script', 'code'].some((key) => Object.prototype.hasOwnProperty.call(source, key))) {
+      throw new CarnivalApiError('模板试玩响应包含不应下发的执行源码。', 0, 'CARNIVAL_BAD_RESPONSE');
+    }
+    if (!isGameDefinition(source)) throw new CarnivalApiError('模板试玩使用了不支持的游戏协议。', 0, 'CARNIVAL_BAD_RESPONSE');
+    const renderer = normalizeGeneratedTemplateRenderer(source.renderer);
+    if (!renderer) throw new CarnivalApiError('模板试玩缺少可执行的代码版本。', 0, 'CARNIVAL_BAD_RESPONSE');
+    return { ...source, templateId: source.templateId, renderer };
+  }
   return isObject(source) && (source.schemaVersion === 4 || source.engine === 'arcade-v1')
     ? normalizeCarnivalArcadeGame(source)
     : normalizeCarnivalExclusiveGame(source);
@@ -519,8 +531,8 @@ export function createCarnivalApi({
         method: 'POST', signal,
         headers: { ...bearer(token), 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          templateId: 'custom',
-          seriesId: input.seriesId,
+          templateId: input.templateId,
+          ...(input.seriesId ? { seriesId: input.seriesId } : {}),
           prompt: input.prompt,
         }),
       }));

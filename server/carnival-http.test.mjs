@@ -261,8 +261,70 @@ test('rapid-choice fallback is accepted and a completed idempotent retry does no
     });
     assert.equal(joined.response.status, 200);
     assert.equal(joined.payload.invite.game.definition.phase, 'answering');
-    assert.equal(joined.payload.invite.game.definition.roundSeconds, 5);
+    assert.equal(joined.payload.invite.game.definition.roundSeconds, 8);
     assert.equal(Number.isFinite(joined.payload.invite.game.definition.self.deadlineAtMs), true);
+  }, { configStore, aiService });
+});
+
+test('built-in generated-template previews serve isolated code and bind the exact artifact to invitations', async () => {
+  let aiCalls = 0;
+  const configStore = createMemoryConfigStore({ apiKey: 'test-only-provider-key' });
+  const aiService = {
+    async generate(_config, match, selection) {
+      aiCalls += 1;
+      return {
+        ...buildCarnivalFallbackGame(match, selection.templateId, selection.gameLabel, {
+          prompt: selection.prompt,
+        }),
+        generatedBy: 'ai',
+      };
+    },
+  };
+  await withCarnival(async (baseUrl) => {
+    const users = await pairedUsers(baseUrl);
+    await unlock(baseUrl, users);
+    for (const [index, templateId] of ['profile-riddle', 'keyword-wheel', 'rapid-choice'].entries()) {
+      const prompt = `请生成第 ${index + 1} 局可执行双人游戏，允许深度调整安全视觉与动画，但保留服务端权威规则。`;
+      const preview = await jsonRequest(baseUrl, '/api/carnival/game-preview', {
+        method: 'POST',
+        token: users.a.token,
+        body: { templateId, prompt },
+      });
+      assert.equal(preview.response.status, 201);
+      assert.equal(preview.payload.game.templateId, templateId);
+      assert.equal(preview.payload.game.renderer.engine, 'generated-template-v1');
+      assert.equal(preview.payload.game.renderer.artifact.document, undefined);
+      assert.equal(JSON.stringify(preview.payload).includes('<!doctype html>'), false);
+
+      const runtime = await fetch(`${baseUrl}${preview.payload.game.renderer.artifact.runtimePath}`);
+      const document = await runtime.text();
+      assert.equal(runtime.status, 200);
+      assert.equal(runtime.headers.get('x-generated-code-hash'), preview.payload.game.renderer.artifact.codeHash);
+      assert.match(runtime.headers.get('content-security-policy'), /sandbox allow-scripts/);
+      assert.match(document, /^<!doctype html>/);
+
+      const created = await jsonRequest(baseUrl, '/api/carnival/invites', {
+        method: 'POST',
+        token: users.a.token,
+        headers: { 'Idempotency-Key': `builtin-preview-${index}-exact-artifact` },
+        body: { templateId, prompt, previewToken: preview.payload.previewToken },
+      });
+      assert.equal(created.response.status, 201);
+      assert.deepEqual(
+        Object.keys(created.payload.invite.game.definition.renderer).sort(),
+        ['artifact', 'bridge', 'engine'],
+      );
+      assert.deepEqual(
+        Object.keys(created.payload.invite.game.definition.renderer.artifact).sort(),
+        ['artifactId', 'codeHash', 'runtimePath'],
+      );
+      assert.equal(
+        created.payload.invite.game.definition.renderer.artifact.codeHash,
+        preview.payload.game.renderer.artifact.codeHash,
+      );
+      assert.equal(created.payload.invite.game.definition.renderer.artifact.document, undefined);
+    }
+    assert.equal(aiCalls, 3);
   }, { configStore, aiService });
 });
 

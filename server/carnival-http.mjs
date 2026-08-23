@@ -20,6 +20,13 @@ import {
   templateForId,
 } from './game-templates.mjs';
 import { assertPromptGameDefinition } from './prompt-game.mjs';
+import {
+  assertGeneratedTemplateRenderer,
+  generatedTemplateArtifact,
+  hasGeneratedTemplateRenderer,
+  publicGeneratedTemplateGame,
+  publicGeneratedTemplateRenderer,
+} from './generated-template-game.mjs';
 
 const GAME_PREVIEW_TTL_MS = 5 * 60_000;
 const GAME_PREVIEW_TOKEN_PATTERN = /^[A-Za-z0-9_-]{20,120}$/;
@@ -62,6 +69,7 @@ function sendArcadeDocument(response, request, artifact, requestId) {
   response.setHeader('X-Frame-Options', 'SAMEORIGIN');
   response.setHeader('X-Request-Id', requestId);
   response.setHeader('X-Arcade-Code-Hash', artifact.codeHash);
+  response.setHeader('X-Generated-Code-Hash', artifact.codeHash);
   response.setHeader(
     'Content-Security-Policy',
     `default-src 'none'; script-src ${scriptSources}; script-src-attr 'none'; style-src 'unsafe-inline'; img-src 'none'; ` +
@@ -166,7 +174,10 @@ function participant(value) {
 }
 
 function publicGeneratedGame(game) {
-  const projected = structuredClone(game);
+  let projected = structuredClone(game);
+  if (hasGeneratedTemplateRenderer(projected)) {
+    projected = publicGeneratedTemplateGame(projected, '/api/carnival/games/runtime');
+  }
   if (
     projected?.schemaVersion === ARCADE_GAME_SCHEMA_VERSION &&
     projected?.engine === ARCADE_GAME_ENGINE &&
@@ -223,6 +234,9 @@ function publicProfileChoiceGroups(mechanics, targetKey) {
 function networkGameState(rawInvite, state, serverNowMs) {
   const roles = roleMap(state);
   const game = rawInvite.game;
+  const publicRenderer = hasGeneratedTemplateRenderer(game)
+    ? publicGeneratedTemplateRenderer(game.renderer, game.templateId, '/api/carnival/games/runtime')
+    : undefined;
   const revision = rawInvite.templateId === 'custom' && Number.isSafeInteger(rawInvite.revision)
     ? rawInvite.revision
     : state.revision;
@@ -236,6 +250,7 @@ function networkGameState(rawInvite, state, serverNowMs) {
     title: game.title,
     description: game.description,
     generatedBy: game.generatedBy,
+    ...(publicRenderer ? { renderer: publicRenderer } : {}),
   };
   if (rawInvite.templateId === 'profile-riddle') {
     const targetKey = state.peer.id === rawInvite.creatorId ? 'a' : 'b';
@@ -290,12 +305,12 @@ function networkGameState(rawInvite, state, serverNowMs) {
         id: segment.id,
         keyword: segment.keyword,
         prompt: segment.prompt,
-        followUps: [segment.followUp],
+        followUps: Array.isArray(segment.followUps) ? [...segment.followUps] : [segment.followUp],
       })),
       spinSequence: spins,
       rotationDeg: lastSpin ? spins * 1_440 + 360 - (selectedIndex + 0.5) * angle : 0,
       selectedSegmentId: lastSpin?.segment?.id,
-      followUpIndex: 0,
+      followUpIndex: Number(rawInvite.shared?.followUpIndex ?? 0),
       lastSpunBy: lastSpin ? roles.get(lastSpin.actorId) : undefined,
       canSpin: true,
     };
@@ -441,8 +456,9 @@ function networkGameState(rawInvite, state, serverNowMs) {
   const selfCompleted = selfAnswered >= questions.length;
   const peerCompleted = peerAnswered >= questions.length;
   const startedAt = rawInvite.privateState?.questionStartedAt ?? rawInvite.privateState?.startedAt;
+  const roundSeconds = Number.isSafeInteger(game.mechanics?.roundSeconds) ? game.mechanics.roundSeconds : 8;
   const deadlineAt = rawInvite.privateState?.deadlineAt
-    ?? (startedAt ? Number(startedAt) + 5_000 : undefined);
+    ?? (startedAt ? Number(startedAt) + roundSeconds * 1_000 : undefined);
   const current = selfCompleted ? null : questions[selfAnswered];
   const results = revealed
     ? questions.map((question) => ({
@@ -456,7 +472,7 @@ function networkGameState(rawInvite, state, serverNowMs) {
   return {
     ...base,
     phase: revealed ? 'revealed' : selfCompleted ? 'waiting-peer' : 'answering',
-    roundSeconds: 5,
+    roundSeconds,
     questions: questions.map((question) => ({
       id: question.id,
       prompt: question.prompt,
@@ -672,7 +688,9 @@ export function createCarnivalHttpHandler({
         document: previewArtifact.document,
       };
     }
-    return service.getArcadeArtifact(artifactId);
+    return typeof service.getGameArtifact === 'function'
+      ? service.getGameArtifact(artifactId)
+      : service.getArcadeArtifact(artifactId);
   }
 
   function allocatePreviewToken() {
@@ -721,6 +739,13 @@ export function createCarnivalHttpHandler({
   }
 
   function assertPreviewGameMatchesSelection(game, prepared) {
+    if (prepared.selected.id !== 'custom') {
+      if (!hasGeneratedTemplateRenderer(game) || game.templateId !== prepared.selected.id || prepared.series !== null) {
+        throw new Error('Generated template renderer does not match the selected built-in template');
+      }
+      assertGeneratedTemplateRenderer(game.renderer, game.templateId);
+      return;
+    }
     if (prepared.series?.seriesId === 'prompt-arcade') {
       assertArcadeGameDefinition(game, { hasUnsafeText: hasUnsafeGameText });
       if (
@@ -780,9 +805,6 @@ export function createCarnivalHttpHandler({
   }
 
   async function createGamePreview(token, body) {
-    if (body.templateId !== 'custom') {
-      throw new CarnivalError('GAME_PREVIEW_UNSUPPORTED', 'Game preview is only available for custom games', 400);
-    }
     const prompt = normalizePlayerPrompt(body.prompt);
     const prepared = await prepareGameRequest(token, body, prompt);
     const roomIdAtStart = prepared.rawState.room.id;
@@ -808,17 +830,19 @@ export function createCarnivalHttpHandler({
       ownerTokenHash: tokenKey(token),
       roomId: roomIdAtStart,
       roomRevision: roomRevisionAtStart,
-      seriesId: prepared.series.seriesId,
+      templateId: prepared.selected.id,
+      seriesId: prepared.series?.seriesId ?? null,
       promptHash: promptFingerprint(prompt),
       game: structuredClone(game),
       expiresAt,
       consumedBy: null,
-      artifactId: game.artifact?.artifactId ?? null,
+      artifactId: generatedTemplateArtifact(game)?.artifactId ?? game.artifact?.artifactId ?? null,
     });
-    if (game.artifact?.artifactId && game.artifact?.document) {
-      previewArtifacts.set(game.artifact.artifactId, {
-        codeHash: game.artifact.codeHash,
-        document: game.artifact.document,
+    const artifact = generatedTemplateArtifact(game) ?? game.artifact ?? null;
+    if (artifact?.artifactId && artifact?.document) {
+      previewArtifacts.set(artifact.artifactId, {
+        codeHash: artifact.codeHash,
+        document: artifact.document,
         expiresAt,
       });
     }
@@ -846,8 +870,8 @@ export function createCarnivalHttpHandler({
       throw new CarnivalError('GAME_PREVIEW_FORBIDDEN', 'This game preview belongs to another participant', 403);
     }
     if (
-      prepared.selected.id !== 'custom' ||
-      preview.seriesId !== prepared.series?.seriesId ||
+      preview.templateId !== prepared.selected.id ||
+      preview.seriesId !== (prepared.series?.seriesId ?? null) ||
       preview.promptHash !== promptFingerprint(prepared.prompt)
     ) {
       throw new CarnivalError('GAME_PREVIEW_MISMATCH', 'The preview does not match this series and prompt', 409);
@@ -1003,8 +1027,8 @@ export function createCarnivalHttpHandler({
             const body = await readJson(request, 8_000);
             if (
               !isRecord(body) ||
-              body.templateId !== 'custom' ||
-              typeof body.seriesId !== 'string' ||
+              typeof body.templateId !== 'string' ||
+              (body.seriesId !== undefined && typeof body.seriesId !== 'string') ||
               typeof body.prompt !== 'string'
             ) {
               throw new CarnivalError('INVALID_INPUT', 'Invalid carnival game preview request', 400);
@@ -1047,7 +1071,8 @@ export function createCarnivalHttpHandler({
             if (body.action === 'join') result = await service.joinInvite(token, body.inviteId);
             else if (body.action === 'profile-riddle.submit') result = await service.gameAction(token, body.inviteId, { type: 'profile-submit', keywords: payload.keywords });
             else if (body.action === 'keyword-wheel.spin') result = await service.gameAction(token, body.inviteId, { type: 'wheel-spin' });
-            else if (body.action === 'keyword-wheel.next-follow-up' || body.action.endsWith('.confirm-reveal')) result = await service.getInvite(token, body.inviteId);
+            else if (body.action === 'keyword-wheel.next-follow-up') result = await service.gameAction(token, body.inviteId, { type: 'wheel-next-follow-up' });
+            else if (body.action.endsWith('.confirm-reveal')) result = await service.getInvite(token, body.inviteId);
             else if (body.action === 'rapid-choice.answer') result = await service.gameAction(token, body.inviteId, { type: 'rapid-answer', questionId: payload.questionId, answer: payload.answer });
             else if (body.action === 'rapid-choice.timeout') result = await service.gameAction(token, body.inviteId, { type: 'rapid-answer', questionId: payload.questionId, answer: 'timeout' });
             else if (body.action === 'exclusive.answer') result = await service.gameAction(token, body.inviteId, {

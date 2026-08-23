@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { TemplateGameStage, type DeepDiveTopic, type TemplateGameResult, type TwoChoiceQuestion } from './TemplateGameStage';
 import type { GameDefinition, MatchPayload, ParticipantId, ProfileRiddleChoiceGroup } from '../types';
+import { normalizeGeneratedTemplateRenderer } from '../generated-template';
 
 interface TemplateGameDialogProps {
   open: boolean;
@@ -82,9 +83,9 @@ export function TemplateGameDialog({
     : { a: generatedChoiceGroups, b: generatedChoiceGroups };
   const deepDiveTopics: DeepDiveTopic[] = game.mechanics.kind === 'keyword-wheel'
     ? game.mechanics.segments.map((segment) => ({
-        id: segment.id,
-        label: segment.keyword,
-        followUps: [segment.prompt, segment.followUp],
+      id: segment.id,
+      label: segment.keyword,
+        followUps: segment.followUps ?? [segment.prompt, segment.followUp],
       }))
     : [];
   const twoChoiceQuestions: TwoChoiceQuestion[] = game.templateId === 'rapid-choice'
@@ -110,6 +111,7 @@ export function TemplateGameDialog({
           key={sessionKey}
           template={game.templateId}
           label={game.gameType}
+          gameTitle={game.title}
           viewer={viewer}
           players={{
             a: { nickname: match.user_a.nickname, profileKeywords: generatedChoiceGroupsByTarget.a.flatMap((group) => group.options), profileChoiceGroups: generatedChoiceGroupsByTarget.a },
@@ -117,6 +119,8 @@ export function TemplateGameDialog({
           }}
           deepDiveTopics={deepDiveTopics}
           twoChoiceQuestions={twoChoiceQuestions}
+          renderer={normalizeGeneratedTemplateRenderer(game.renderer) ?? undefined}
+          roundSeconds={game.mechanics.kind === 'rapid-choice' ? game.mechanics.roundSeconds : 8}
           sessionKey={sessionKey}
           paused={!open}
           onViewerChange={onViewerChange}
