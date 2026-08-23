@@ -80,6 +80,8 @@ const PROMPT_GAME_STAGES = [
   ['试玩检查', '锁定可邀请的同一版本'],
 ] as const;
 
+const PROMPT_GAME_ESTIMATE_SECONDS = 3;
+
 const REGENERABLE_PREVIEW_ERROR_CODES = new Set([
   'INVALID_GAME_PREVIEW',
   'GAME_PREVIEW_EXPIRED',
@@ -369,6 +371,7 @@ export default function CarnivalPage({
   const [gamePreviewStatus, setGamePreviewStatus] = useState<'idle' | 'generating' | 'ready' | 'error'>('idle');
   const [gamePreviewError, setGamePreviewError] = useState<string | null>(null);
   const [gamePreviewStage, setGamePreviewStage] = useState(0);
+  const [gamePreviewCountdown, setGamePreviewCountdown] = useState(0);
   const gamePreviewVersionRef = useRef(0);
   const gamePreviewControllerRef = useRef<AbortController | null>(null);
   const gamePreviewContextRef = useRef<string | null>(null);
@@ -423,6 +426,18 @@ export default function CarnivalPage({
     const timer = window.setInterval(() => {
       setGamePreviewStage((current) => Math.min(PROMPT_GAME_STAGES.length - 1, current + 1));
     }, 650);
+    return () => window.clearInterval(timer);
+  }, [gamePreviewStatus]);
+
+  useEffect(() => {
+    if (gamePreviewStatus !== 'generating') {
+      setGamePreviewCountdown(0);
+      return undefined;
+    }
+    setGamePreviewCountdown(PROMPT_GAME_ESTIMATE_SECONDS);
+    const timer = window.setInterval(() => {
+      setGamePreviewCountdown((current) => Math.max(0, current - 1));
+    }, 1_000);
     return () => window.clearInterval(timer);
   }, [gamePreviewStatus]);
 
@@ -613,6 +628,17 @@ export default function CarnivalPage({
       return time || left.id.localeCompare(right.id);
     });
   }, [room]);
+
+  const partnerEnteredInvite = useMemo(() => {
+    if (!room || !self || !partner) return null;
+    return room.invites
+      .filter((invitation) => (
+        invitation.status === 'playing' &&
+        invitation.joinedParticipantIds.includes(partner.participantId) &&
+        !invitation.joinedParticipantIds.includes(self.participantId)
+      ))
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0] ?? null;
+  }, [partner, room, self]);
 
   useEffect(() => {
     if (!room) return;
@@ -1184,6 +1210,19 @@ export default function CarnivalPage({
           </div>
         )}
 
+        {partnerEnteredInvite && (
+          <div className="carnival-game-waiting" role="status" aria-live="polite">
+            <span className="carnival-game-waiting__icon" aria-hidden="true">🎮</span>
+            <div>
+              <strong>{partner.nickname} 已经进入「{inviteGameLabel(partnerEnteredInvite)}」游戏，在等你了</strong>
+              <p>点击进入游戏，和 TA 直接开始这一局。</p>
+            </div>
+            <button type="button" onClick={() => void openInvitation(partnerEnteredInvite)} disabled={Boolean(openingInviteId)}>
+              {openingInviteId === partnerEnteredInvite.inviteId ? '正在进入…' : '进入游戏'}
+            </button>
+          </div>
+        )}
+
         <section
           className="carnival-timeline"
           ref={timelineRef}
@@ -1372,7 +1411,7 @@ export default function CarnivalPage({
         )}
         {selectedGameType?.templateId === 'custom' && gamePreviewStatus === 'generating' && (
           <section className="carnival-prompt-game-building" role="status" aria-live="polite" aria-label={`正在${PROMPT_GAME_STAGES[gamePreviewStage]?.[0] ?? '生成游戏'}`}>
-            <header><span aria-hidden="true">✦</span><div><strong>正在把 Prompt 变成可玩的游戏</strong><small>不只是生成题目，还会现做玩法、场景和动效</small></div></header>
+            <header><span aria-hidden="true">✦</span><div><strong>正在把 Prompt 变成可玩的游戏</strong><small>不只是生成题目，还会现做玩法、场景和动效</small></div><b className="carnival-prompt-game-building__countdown">{gamePreviewCountdown > 0 ? `预计 ${gamePreviewCountdown} 秒` : '马上就好'}</b></header>
             <ol>
               {PROMPT_GAME_STAGES.map(([title, detail], index) => (
                 <li key={title} className={index < gamePreviewStage ? 'is-complete' : index === gamePreviewStage ? 'is-current' : ''}>

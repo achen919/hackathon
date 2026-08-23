@@ -363,6 +363,41 @@
 .carnival-message time { color: #9a9299; font-size: 8px; }
 .carnival-message.is-mine time { text-align: right; }
 
+.carnival-game-waiting {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 14px 0;
+  padding: 13px;
+  border: 1px solid rgba(44, 128, 105, 0.24);
+  border-radius: 18px;
+  background: linear-gradient(135deg, #effaf6, #f8fffd);
+  box-shadow: 0 10px 24px rgba(44, 128, 105, 0.08);
+}
+.carnival-game-waiting__icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 13px;
+  background: #fff;
+  font-size: 19px;
+}
+.carnival-game-waiting > div { display: grid; gap: 3px; min-width: 0; }
+.carnival-game-waiting strong { font-size: 11px; line-height: 1.45; }
+.carnival-game-waiting p { margin: 0; color: var(--carnival-muted); font-size: 9px; line-height: 1.45; }
+.carnival-game-waiting button {
+  min-height: 38px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 11px;
+  background: var(--carnival-green);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 850;
+  cursor: pointer;
+}
 .carnival-invite {
   position: relative;
   width: min(92%, 430px);
@@ -767,4 +802,14 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+.carnival-prompt-game-building__countdown {
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--carnival-violet-deep);
+  font-size: 10px;
+  white-space: nowrap;
 }
