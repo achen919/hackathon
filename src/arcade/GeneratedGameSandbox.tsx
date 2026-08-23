@@ -66,7 +66,11 @@ type SandboxStatus = 'verifying' | 'loading' | 'ready' | 'error' | 'stopped';
 const PAIRPLAY_VERSION = 1;
 const MAX_SYNC_BYTES = 96_000;
 const MAX_REMOTE_EVENTS = 240;
-const MAX_MESSAGES_PER_SECOND = 90;
+// 120 Hz phone displays can legitimately emit one range/pointer event per
+// frame. The network adapter still coalesces continuous controls to ~10 Hz;
+// this higher renderer-side ceiling prevents a real finger drag from being
+// mistaken for a hostile message flood.
+const MAX_MESSAGES_PER_SECOND = 240;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);

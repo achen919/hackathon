@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import {
   ARCADE_GAME_ENGINE,
@@ -136,7 +137,39 @@ test('fallback runtime bootstraps PairPlay and provides a local-opponent preview
   assert.match(FALLBACK_ARCADE_DOCUMENT, /playMode==='preview'/u);
   assert.match(FALLBACK_ARCADE_DOCUMENT, /previewState/u);
   assert.match(FALLBACK_ARCADE_DOCUMENT, /Math\.sin\(now\/620\)/u);
+  assert.match(FALLBACK_ARCADE_DOCUMENT, /grid-template-rows:minmax\(0,1fr\) auto/u);
+  assert.match(FALLBACK_ARCADE_DOCUMENT, /setPointerCapture/u);
+  assert.match(FALLBACK_ARCADE_DOCUMENT, /keeperPointerMove/u);
+  assert.match(FALLBACK_ARCADE_DOCUMENT, /按住向左/u);
   assert.doesNotMatch(FALLBACK_ARCADE_DOCUMENT, /等待双方进入游戏/u);
+});
+
+test('basketball documents must expose a real mobile pointer control path', () => {
+  assert.equal(isArcadeGamePayload(payload()), true);
+  assert.equal(isArcadeGamePayload(payload({
+    document: FALLBACK_ARCADE_DOCUMENT.replaceAll('pointermove', 'mousemove'),
+  })), false);
+  assert.equal(isArcadeGamePayload(payload({
+    document: FALLBACK_ARCADE_DOCUMENT.replaceAll('setPointerCapture', 'capturePointer'),
+  })), false);
+});
+
+test('keeps persisted schema v4 basketball invitations readable after the mobile gate', () => {
+  const current = buildArcadeGameDefinition(payload(), {
+    id: 'persisted-basketball-v4', matchId: 'persisted-match', generatedBy: 'fallback',
+  });
+  const legacyDocument = current.artifact.document
+    .replaceAll('pointermove', 'mousemove')
+    .replaceAll('setPointerCapture', 'capturePointer');
+  const persisted = {
+    ...current,
+    artifact: {
+      ...current.artifact,
+      document: legacyDocument,
+      codeHash: createHash('sha256').update(legacyDocument).digest('hex'),
+    },
+  };
+  assert.deepEqual(assertArcadeGameDefinition(persisted), persisted);
 });
 
 test('classifies prompts across all presets and defaults the prompt arcade to basketball', () => {

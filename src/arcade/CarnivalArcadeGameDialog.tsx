@@ -36,6 +36,16 @@ const PRESETS = new Set<PairPlayMode>([
 ]);
 const PHASES = new Set<ArcadePhase>(['waiting', 'countdown', 'playing', 'finished']);
 const CONTINUOUS_CONTROLS = new Set(['move', 'aim', 'power', 'select']);
+const NON_FATAL_ACTION_CODES = new Set([
+  'ACTION_THROTTLED',
+  'STALE_ACTION',
+  'ALREADY_READY',
+  'GAME_NOT_READY',
+  'COUNTDOWN_ACTIVE',
+  'SHOT_IN_FLIGHT',
+  'ROUND_LIMIT',
+  'GAME_COMPLETE',
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -121,7 +131,12 @@ export function CarnivalArcadeGameDialog({
   const lastContinuousAtRef = useRef(new Map<string, number>());
   const continuousTimersRef = useRef(new Map<string, number>());
   const queuedContinuousRef = useRef(new Map<string, PairPlayInput>());
+  const readyRetryTimerRef = useRef<number | null>(null);
+  const keeperHoldRef = useRef<{ pointerId: number; startedAt: number } | null>(null);
+  const keeperStopTimerRef = useRef<number | null>(null);
   const dialogRef = useRef<HTMLElement>(null);
+  const [hostAim, setHostAim] = useState(0);
+  const [hostPower, setHostPower] = useState(0.72);
   const closeRef = useRef(context.close);
   closeRef.current = context.close;
   const roleDefinition = useMemo(() => state.arcade.roles.find((role) => role.id === state.self.role), [state.arcade.roles, state.self.role]);
@@ -137,13 +152,27 @@ export function CarnivalArcadeGameDialog({
 
   useEffect(() => {
     seqRef.current = Math.max(seqRef.current, state.self.seq);
-    if (state.self.ready) readySentRef.current = true;
+    if (state.self.ready) {
+      readySentRef.current = true;
+      if (readyRetryTimerRef.current !== null) {
+        window.clearTimeout(readyRetryTimerRef.current);
+        readyRetryTimerRef.current = null;
+      }
+    }
   }, [state.self.ready, state.self.seq]);
+
+  useEffect(() => {
+    const input = isRecord(state.self.input) ? state.self.input : {};
+    if (typeof input.aim === 'number' && Number.isFinite(input.aim)) setHostAim(Math.max(-1, Math.min(1, input.aim)));
+    if (typeof input.power === 'number' && Number.isFinite(input.power)) setHostPower(Math.max(0.25, Math.min(1, input.power)));
+  }, [state.self.input, state.self.role]);
 
   useEffect(() => () => {
     continuousTimersRef.current.forEach((timer) => window.clearTimeout(timer));
     continuousTimersRef.current.clear();
     queuedContinuousRef.current.clear();
+    if (readyRetryTimerRef.current !== null) window.clearTimeout(readyRetryTimerRef.current);
+    if (keeperStopTimerRef.current !== null) window.clearTimeout(keeperStopTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -199,7 +228,7 @@ export function CarnivalArcadeGameDialog({
       requestId: actionId(),
     }));
     const result: Promise<void> = pending.then(() => undefined).catch((error: unknown) => {
-      if (error instanceof CarnivalApiError && ['ACTION_THROTTLED', 'STALE_ACTION'].includes(error.code)) return undefined;
+      if (error instanceof CarnivalApiError && NON_FATAL_ACTION_CODES.has(error.code)) return undefined;
       setSyncError(error instanceof Error ? error.message : '操作暂时没有同步，请重试。');
       throw error;
     });
@@ -248,7 +277,41 @@ export function CarnivalArcadeGameDialog({
   const markReady = () => {
     if (state.self.ready || readySentRef.current) return;
     readySentRef.current = true;
-    void enqueueAction('arcade.ready', {}).catch(() => { readySentRef.current = false; });
+    void enqueueAction('arcade.ready', {}).catch(() => {
+      readySentRef.current = false;
+      if (readyRetryTimerRef.current !== null) window.clearTimeout(readyRetryTimerRef.current);
+      readyRetryTimerRef.current = window.setTimeout(() => {
+        readyRetryTimerRef.current = null;
+        markReady();
+      }, 1_200);
+    });
+  };
+
+  const startKeeperMove = (event: React.PointerEvent<HTMLButtonElement>, direction: -1 | 1) => {
+    if (state.phase !== 'playing') return;
+    event.preventDefault();
+    if (keeperStopTimerRef.current !== null) {
+      window.clearTimeout(keeperStopTimerRef.current);
+      keeperStopTimerRef.current = null;
+    }
+    keeperHoldRef.current = { pointerId: event.pointerId, startedAt: performance.now() };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    void sendInput({ control: 'move', value: direction, sequence: 0 })?.catch(() => undefined);
+  };
+
+  const stopKeeperMove = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const hold = keeperHoldRef.current;
+    if (!hold || hold.pointerId !== event.pointerId) return;
+    keeperHoldRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    const finish = () => {
+      keeperStopTimerRef.current = null;
+      void sendInput({ control: 'move', value: 0, sequence: 0 })?.catch(() => undefined);
+    };
+    // A quick phone tap must still advance at least one authoritative frame;
+    // otherwise move=-1/+1 and move=0 can land in the same server tick.
+    const remaining = Math.max(0, 180 - (performance.now() - hold.startedAt));
+    keeperStopTimerRef.current = window.setTimeout(finish, remaining);
   };
 
   const finished = state.phase === 'finished';
@@ -282,11 +345,32 @@ export function CarnivalArcadeGameDialog({
           state={rendererState}
           remoteEvents={state.events}
           allowedControls={state.self.controls}
-          paused={finished}
+          paused={state.phase !== 'playing'}
           title={state.title}
           onReady={markReady}
           onInput={sendInput}
         />
+
+        {state.arcade.preset === 'basketball-duel' && (
+          <section className="arcade-mobile-controls" aria-label="手机篮球操作区">
+            <header>
+              <strong>{state.self.role === 'shooter' ? '投手触控台' : '篮筐触控台'}</strong>
+              <span>{state.phase === 'playing' ? '现在可以操作' : state.phase === 'countdown' ? '倒计时后自动解锁' : '等待双方进入同一局'}</span>
+            </header>
+            {state.self.role === 'shooter' ? (
+              <div className="arcade-mobile-controls__shooter">
+                <label><span>角度 {Math.round(28 + (hostAim + 1) * 22)}°</span><input type="range" min="-1" max="1" step="0.02" value={hostAim} disabled={state.phase !== 'playing'} onChange={(event) => { const value = Number(event.target.value); setHostAim(value); void sendInput({ control: 'aim', value, sequence: 0 })?.catch(() => undefined); }} /></label>
+                <label><span>力度 {Math.round(hostPower * 100)}%</span><input type="range" min="0.25" max="1" step="0.02" value={hostPower} disabled={state.phase !== 'playing'} onChange={(event) => { const value = Number(event.target.value); setHostPower(value); void sendInput({ control: 'power', value, sequence: 0 })?.catch(() => undefined); }} /></label>
+                <button type="button" disabled={state.phase !== 'playing'} onClick={() => { void sendInput({ control: 'shoot', value: 1, sequence: 0 })?.catch(() => undefined); }}>投篮</button>
+              </div>
+            ) : (
+              <div className="arcade-mobile-controls__keeper">
+                <button type="button" disabled={state.phase !== 'playing'} onPointerDown={(event) => startKeeperMove(event, -1)} onPointerUp={stopKeeperMove} onPointerCancel={stopKeeperMove} onLostPointerCapture={stopKeeperMove}>按住向左</button>
+                <button type="button" disabled={state.phase !== 'playing'} onPointerDown={(event) => startKeeperMove(event, 1)} onPointerUp={stopKeeperMove} onPointerCancel={stopKeeperMove} onLostPointerCapture={stopKeeperMove}>按住向右</button>
+              </div>
+            )}
+          </section>
+        )}
 
         {finished && (
           <div className="arcade-network-result" role="status" aria-live="polite">

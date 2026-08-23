@@ -51,7 +51,8 @@ const PAIRPLAY_RUNTIME_PROMPT = `prompt-arcade 的 document 是会在无 allow-s
 - 父页后续发送 {pairplay:1,type:'host.sync',channel,playMode,state,events}，还可能发送 host.pause/host.resume/host.stop。操作时子页发送 {pairplay:1,type:'game.input',channel,control,value}；可发送 game.complete/game.error。
 - message 监听必须校验 event.source===parent、pairplay===1 和 channel；不得读取父页 DOM。所有角色、control 名和规则都来自所选服务端 preset，不得增加自定义控制协议。
 - playMode==='preview' 时必须在 iframe 内启动可操作的短局，本地模拟另一角色并继续发送 game.input；不得停在“等待双方”。playMode==='network' 时不得本地改比分、胜负或权威状态，只能渲染 host.init/host.sync。
-- basketball-duel 必须画出会飞行的篮球与可移动篮筐：shooter 使用 aim/power/shoot，keeper 使用 move；preview 中 AI 接管未操作角色，network 中状态和比分只读取 host.sync。
+- 所有玩法必须优先适配 320-430px 手机竖屏：viewport 正确、画布可收缩、操作区始终在首屏底部、触控目标至少 44px；使用 pointer 事件与 pointer capture，不能只支持 hover、键盘或鼠标。
+- basketball-duel 必须画出会飞行的篮球与可移动篮筐：shooter 使用 aim/power/shoot，并显示带文字标签的大滑杆与投篮按钮；keeper 使用 move，既能在画布上单指拖动篮筐，也有“按住向左/按住向右”大按钮。preview 中 AI 接管未操作角色，network 中状态和比分只读取 host.sync。
 - 为保证生成结果真的能运行，请以 <known_good_pairplay_document> 中的完整代码为基线。保留它的 doctype、单一 strict script、消息桥、preview/network 分流和安全 API 用法；可以根据 Prompt 改写 CSS、画面元素、可见文案、绘制函数与动画表现，但不要换成点击页面、alert、Math.random、window、定时器或脱离 PairPlay 的独立小游戏。
 - document 必须是上述 JSON 的普通字符串字段；整个响应不要使用 Markdown 代码围栏，也不要在 JSON 前后添加解释。`;
 

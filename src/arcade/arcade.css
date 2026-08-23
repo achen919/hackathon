@@ -249,7 +249,15 @@
   .arcade-runtime__result { inset: 120px 10px 40px; padding: 18px; }
   .arcade-runtime__footer { padding: 8px 12px 10px; }
   .generated-game-sandbox { border-radius: 16px; }
-  .generated-game-sandbox__frame { min-height: min(72vh, 520px); aspect-ratio: auto; }
+  .generated-game-sandbox__frame {
+    /* Prompt preview adds its own title and role picker above the iframe.
+       Reserve enough of the viewport for those controls so the generated
+       game's touch deck is visible without trying to scroll through canvas. */
+    height: clamp(320px, calc(100dvh - 470px), 420px);
+    min-height: 0;
+    aspect-ratio: auto;
+  }
+  .generated-game-sandbox iframe { position: absolute; inset: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -284,11 +292,48 @@
 .arcade-network-result strong,.arcade-network-result p { display: block; margin: 0; }
 .arcade-network-result p { margin-top: 4px; color: #6f6877; }
 .arcade-network-result button { min-height: 44px; padding: 0 14px; border: 0; border-radius: 14px; background: #6555bb; color: #fff; font-weight: 800; }
+.arcade-mobile-controls { display: none; }
 
 @media (max-width: 620px) {
-  .arcade-network-dialog { width: 100%; max-height: 100dvh; border-radius: 0; }
+  .arcade-network-dialog { width: 100%; max-height: 100dvh; padding-bottom: 168px; border-radius: 0; }
   .arcade-network-presence { grid-template-columns: 1fr 1fr; }
   .arcade-network-presence b { grid-column: 1 / -1; justify-self: start; }
   .arcade-network-result { grid-template-columns: auto 1fr; }
   .arcade-network-result button { grid-column: 1 / -1; width: 100%; }
+  .arcade-mobile-controls {
+    position: fixed;
+    z-index: 4;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: min(100%, 620px);
+    margin-inline: auto;
+    display: grid;
+    gap: 9px;
+    padding: 11px 11px max(11px, env(safe-area-inset-bottom));
+    border: 1px solid #dcd5ef;
+    border-radius: 17px 17px 0 0;
+    background: rgba(250, 248, 255, .97);
+    box-shadow: 0 -12px 36px rgba(32, 27, 55, .14);
+    color: #332d42;
+  }
+  .arcade-mobile-controls header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .arcade-mobile-controls header strong { font-size: 14px; }
+  .arcade-mobile-controls header span { color: #756e80; font-size: 11px; }
+  .arcade-mobile-controls__shooter { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .arcade-mobile-controls__shooter label { display: grid; min-width: 0; gap: 4px; color: #5f586a; font-size: 11px; font-weight: 800; }
+  .arcade-mobile-controls__shooter input { width: 100%; min-width: 0; min-height: 44px; accent-color: #ed745f; touch-action: pan-x; }
+  .arcade-mobile-controls__shooter button { grid-column: 1 / -1; }
+  .arcade-mobile-controls__keeper { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+  .arcade-mobile-controls button {
+    min-height: 52px;
+    border: 0;
+    border-radius: 14px;
+    background: #6555bb;
+    color: #fff;
+    font-size: 15px;
+    font-weight: 900;
+    touch-action: none;
+  }
+  .arcade-mobile-controls button:disabled,.arcade-mobile-controls input:disabled { opacity: .45; }
 }
