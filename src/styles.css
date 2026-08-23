@@ -660,27 +660,6 @@ p {
   line-height: 1.65;
 }
 
-.game-invite .game-ai-note {
-  margin: 13px 0 0;
-  padding: 9px 10px;
-  border: 1px solid rgba(117, 103, 232, 0.12);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.58);
-  color: #716a75;
-  font-size: 9px;
-}
-
-.game-invite .game-ai-note.is-loading {
-  border-color: rgba(117, 103, 232, 0.24);
-  color: var(--violet-deep);
-  animation: breathe 1.2s ease-in-out infinite;
-}
-
-.game-invite .game-ai-note.is-ready {
-  border-color: rgba(47, 155, 118, 0.2);
-  color: #50786b;
-}
-
 .topic-chips {
   display: flex;
   flex-wrap: wrap;
