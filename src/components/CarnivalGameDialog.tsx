@@ -14,6 +14,7 @@ export type CarnivalStableTemplateId = Exclude<GameTemplateId, 'custom'>;
 
 export interface CarnivalParticipantPublicState {
   nickname: string;
+  gender: 'male' | 'female';
   joined: boolean;
   online: boolean;
 }
@@ -435,7 +436,7 @@ function Presence({ person, label, active = false }: {
   const stateLabel = !person.joined ? '等待加入' : person.online ? '在线' : '暂时离线';
   return (
     <div className={`carnival-game-person ${active ? 'is-me' : ''}`}>
-      <span className="carnival-game-avatar" aria-hidden="true">{person.nickname.trim().slice(0, 1) || '?'}</span>
+      <span className={`carnival-game-avatar is-${person.gender}`} aria-hidden="true">{person.nickname.trim().slice(0, 1) || '?'}</span>
       <span>
         <strong>{person.nickname || label}</strong>
         <small>{label} · {stateLabel}</small>
@@ -559,7 +560,7 @@ function ProfileRiddleGame({ participant, invite, state, pending, runAction, onU
   return (
     <div className="carnival-game-body carnival-profile-form">
       <div className="carnival-game-turn">
-        <span className="carnival-game-avatar" aria-hidden="true">{myName.trim().slice(0, 1)}</span>
+        <span className={`carnival-game-avatar is-${invite.participants[participant].gender}`} aria-hidden="true">{myName.trim().slice(0, 1)}</span>
         <span><strong>{myName}</strong><small>正在描述 {peerName}</small></span>
         <em>仅自己可见</em>
       </div>

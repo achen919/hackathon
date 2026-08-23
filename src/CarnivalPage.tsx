@@ -1352,7 +1352,7 @@ export default function CarnivalPage({
               const mine = entry.message.senderId === self.participantId;
               const author = mine ? self : partner;
               return (
-                <article className={`carnival-message ${mine ? 'is-mine' : ''}`} key={`message-${entry.id}`}>
+                <article className={`carnival-message is-${author.gender} ${mine ? 'is-mine' : ''}`} key={`message-${entry.id}`}>
                   {!mine && <CarnivalAvatar participant={author} small />}
                   <div><p>{entry.message.content}</p><time dateTime={entry.message.createdAt}>{formatClock(entry.message.createdAt)}</time></div>
                 </article>
@@ -1404,7 +1404,7 @@ export default function CarnivalPage({
           {openInviteError && <p className="carnival-error carnival-error--timeline" role="alert">{openInviteError}</p>}
         </section>
 
-        <footer className="carnival-composer">
+        <footer className={`carnival-composer is-${self.gender}`}>
           {gameUnlocked && (
             <button className="carnival-composer__game" type="button" onClick={openStudio} disabled={inviteSending || !hasAvailableGame} aria-label="发起一局游戏">
               {inviteSending ? '…' : '🎲'}

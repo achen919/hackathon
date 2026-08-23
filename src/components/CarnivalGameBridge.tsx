@@ -52,11 +52,13 @@ function inviteState(context: CarnivalNetworkGameContext): CarnivalInvitePublicS
     participants: {
       a: {
         nickname: context.self.nickname,
+        gender: context.self.gender,
         joined: invitation.joinedParticipantIds.includes(context.self.participantId),
         online: true,
       },
       b: {
         nickname: context.partner.nickname,
+        gender: context.partner.gender,
         joined: invitation.joinedParticipantIds.includes(context.partner.participantId),
         online: true,
       },
@@ -93,11 +95,13 @@ function exclusiveInviteState(context: CarnivalNetworkGameContext): CarnivalExcl
     participants: {
       a: {
         nickname: context.self.nickname,
+        gender: context.self.gender,
         joined: invitation.joinedParticipantIds.includes(context.self.participantId),
         online: true,
       },
       b: {
         nickname: context.partner.nickname,
+        gender: context.partner.gender,
         joined: invitation.joinedParticipantIds.includes(context.partner.participantId),
         online: true,
       },
