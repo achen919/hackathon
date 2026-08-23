@@ -216,6 +216,7 @@ export function GeneratedGameSandbox({
   const frameLoadCountRef = useRef(0);
   const bootstrapSeenRef = useRef(false);
   const initSentRef = useRef(false);
+  const lastSyncSignatureRef = useRef<string | null>(null);
   const timeoutRef = useRef<number | null>(null);
   const preflightRef = useRef<AbortController | null>(null);
   const onErrorRef = useRef(onError);
@@ -227,6 +228,15 @@ export function GeneratedGameSandbox({
   const controls = useMemo(() => new Set(controlList), [controlList]);
   const stateSnapshot = useMemo(() => safeJsonClone(state), [state]);
   const eventSnapshot = useMemo(() => safeJsonClone(remoteEvents.slice(-MAX_REMOTE_EVENTS), MAX_SYNC_BYTES), [remoteEvents]);
+  const syncPayload = useMemo(() => ({
+    playMode: resolvedPlayMode,
+    state: stateSnapshot,
+    events: eventSnapshot,
+    paused,
+    reducedMotion,
+    controls: controlList,
+  }), [controlList, eventSnapshot, paused, reducedMotion, resolvedPlayMode, stateSnapshot]);
+  const syncSignature = useMemo(() => JSON.stringify(syncPayload), [syncPayload]);
 
   const reportError = useCallback((message: string) => {
     preflightRef.current?.abort();
@@ -258,15 +268,14 @@ export function GeneratedGameSandbox({
       codeHash: artifact.codeHash,
       role: role.slice(0, 40),
       mode,
-      playMode: resolvedPlayMode,
       seed: Number.isFinite(seed) ? Math.trunc(seed) : 0,
-      state: stateSnapshot,
-      events: eventSnapshot,
-      paused,
-      reducedMotion,
-      controls: controlList,
+      ...syncPayload,
     });
-  }, [artifact.artifactId, artifact.codeHash, controlList, eventSnapshot, mode, paused, post, reducedMotion, resolvedPlayMode, role, seed, stateSnapshot]);
+    // host.init already carries the same public state as host.sync. Remember
+    // its semantic payload so parent polling/re-renders cannot make generated
+    // games rebuild an unchanged interface and steal focus from the player.
+    lastSyncSignatureRef.current = syncSignature;
+  }, [artifact.artifactId, artifact.codeHash, mode, post, role, seed, syncPayload, syncSignature]);
 
   useEffect(() => {
     if (!runtimeUrl || !validArtifact) {
@@ -283,6 +292,7 @@ export function GeneratedGameSandbox({
     frameLoadCountRef.current = 0;
     bootstrapSeenRef.current = false;
     initSentRef.current = false;
+    lastSyncSignatureRef.current = null;
     const boundedTimeout = Math.max(3_000, Math.min(20_000, timeoutMs));
     const verificationTimer = window.setTimeout(() => {
       if (disposed) return;
@@ -406,8 +416,10 @@ export function GeneratedGameSandbox({
 
   useEffect(() => {
     if (status !== 'ready') return;
-    post('host.sync', { playMode: resolvedPlayMode, state: stateSnapshot, events: eventSnapshot, paused, reducedMotion, controls: controlList });
-  }, [controlList, eventSnapshot, paused, post, reducedMotion, resolvedPlayMode, stateSnapshot, status]);
+    if (lastSyncSignatureRef.current === syncSignature) return;
+    lastSyncSignatureRef.current = syncSignature;
+    post('host.sync', syncPayload);
+  }, [post, status, syncPayload, syncSignature]);
 
   useEffect(() => {
     if (status !== 'ready') return;
@@ -424,6 +436,7 @@ export function GeneratedGameSandbox({
     frameLoadCountRef.current = 0;
     bootstrapSeenRef.current = false;
     initSentRef.current = false;
+    lastSyncSignatureRef.current = null;
     setErrorMessage(null);
     setVerifiedRuntimeUrl(null);
     setStatus('verifying');

@@ -49,6 +49,14 @@ test('fallback profile visibly uses three black-and-white wheel controls and whe
   assert.match(wheel, /现在聊聊/);
 });
 
+test('rapid fallback updates only its timer between host state changes', () => {
+  const rapid = FALLBACK_GENERATED_TEMPLATE_DOCUMENTS['rapid-choice'];
+  assert.match(rapid, /function updateRapidTimer\(\)/);
+  assert.match(rapid, /aria-label','本题剩余时间'/);
+  assert.match(rapid, /template==='rapid-choice'&&channel\)updateRapidTimer\(\)/);
+  assert.doesNotMatch(rapid, /template==='rapid-choice'&&channel\)render\(\)/);
+});
+
 test('renderer rejects unsafe capabilities, wrong controls, and a tampered hash', () => {
   const profile = FALLBACK_GENERATED_TEMPLATE_DOCUMENTS['profile-riddle'];
   assert.equal(isSafeGeneratedTemplateDocument(profile.replace("'use strict';", "'use strict';setTimeout(()=>{},1);"), 'profile-riddle'), false);
