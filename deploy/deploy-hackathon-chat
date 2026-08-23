@@ -377,7 +377,7 @@ allowed_app_roots = {
     'tsconfig.json',
     'vite.config.mjs',
 }
-blocked_parts = {'node_modules', 'dist', 'data', '.git', '.github'}
+blocked_parts = {'node_modules', 'dist', '.git', '.github'}
 required_files = {
     'app/RELEASE_SHA',
     'app/index.html',
@@ -425,6 +425,8 @@ try:
                 fail('member outside app/ or static/')
             if any(part in blocked_parts or part == '.env' or part.startswith('.env.') for part in path.parts):
                 fail('forbidden generated, VCS, state, or environment path')
+            if path.parts[:2] == ('app', 'data'):
+                fail('forbidden top-level state path')
             if any(part.startswith('.') for part in path.parts):
                 fail('hidden archive member')
             if path.parts[0] == 'app' and len(path.parts) > 1 and path.parts[1] not in allowed_app_roots:

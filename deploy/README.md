@@ -17,7 +17,8 @@ The gzip tar archive has exactly two top-level trees:
 
 - `app/`: repository source needed by `npm ci` and `npm run verify`, plus an
   `app/RELEASE_SHA` file containing the full SHA. It must not contain `.git`,
-  `.github`, `.env*`, `data`, `dist`, `node_modules`, links, or special files.
+  `.github`, `.env*`, top-level `data/`, `dist`, `node_modules`, links, or
+  special files. Runtime source such as `src/data/` remains allowed.
 - `static/`: the contents of CI's `dist/`, including `static/index.html`.
 
 The server rebuilds the static bundle as the separate `hackbuild` user, which
