@@ -116,7 +116,7 @@ function shortText(value: unknown, fallback: string, maximum: number) {
   return text || fallback;
 }
 
-/** Safely turns AI/fallback JSON into a runnable registry definition. */
+/** Safely turns a manifest into a client-owned fallback definition. */
 export function normalizeArcadeDefinition(value: unknown): ArcadeGameDefinition {
   const input = value && typeof value === 'object' ? value as Record<string, unknown> : {};
   const kind = typeof input.kind === 'string' && ARCADE_GAME_KINDS.includes(input.kind as ArcadeGameKind)

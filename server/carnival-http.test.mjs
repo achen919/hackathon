@@ -163,6 +163,12 @@ test('profile answers remain private until both participants submit', async () =
   await withCarnival(async (baseUrl) => {
     const users = await pairedUsers(baseUrl);
     await unlock(baseUrl, users);
+    await jsonRequest(baseUrl, '/api/carnival/messages', {
+      method: 'POST', token: users.a.token, body: { content: '旅行时我很想去徒步和露营。' },
+    });
+    await jsonRequest(baseUrl, '/api/carnival/messages', {
+      method: 'POST', token: users.b.token, body: { content: '最近想研究火锅和烘焙。' },
+    });
     const preview = await jsonRequest(baseUrl, '/api/carnival/prompt', {
       method: 'POST', token: users.a.token, body: { templateId: 'profile-riddle' },
     });
@@ -172,35 +178,51 @@ test('profile answers remain private until both participants submit', async () =
       body: { templateId: 'profile-riddle', prompt: preview.payload.prompt },
     });
     const inviteId = created.payload.invite.inviteId;
-    await jsonRequest(baseUrl, '/api/carnival/games/action', {
+    const joined = await jsonRequest(baseUrl, '/api/carnival/games/action', {
       method: 'POST', token: users.b.token, body: { inviteId, action: 'join' },
     });
+    const creatorState = await jsonRequest(baseUrl, '/api/carnival/state', { token: users.a.token });
+    const creatorInvite = creatorState.payload.room.invites.find((invite) => invite.inviteId === inviteId);
+    const creatorGroups = creatorInvite.game.definition.choiceGroups;
+    const joinerGroups = joined.payload.invite.game.definition.choiceGroups;
+    assert.deepEqual(creatorGroups.map((group) => group.options.length), [3, 3, 3]);
+    assert.deepEqual(joinerGroups.map((group) => group.options.length), [3, 3, 3]);
+    assert.notDeepEqual(creatorGroups, joinerGroups);
+    assert.deepEqual(creatorInvite.game.definition.keywordOptions, creatorGroups.flatMap((group) => group.options));
+    assert.deepEqual(joined.payload.invite.game.definition.keywordOptions, joinerGroups.flatMap((group) => group.options));
+    const firstKeywords = creatorGroups.map((group) => group.options[0]);
+    const secondKeywords = joinerGroups.map((group) => group.options[1]);
+    const firstSentence = `我觉得阿川是一个${firstKeywords[0]}、${firstKeywords[1]}，而且${firstKeywords[2]}的人。`;
     const first = await jsonRequest(baseUrl, '/api/carnival/games/action', {
       method: 'POST', token: users.a.token,
       body: {
         inviteId,
         action: 'profile-riddle.submit',
-        payload: { keywords: ['真诚', '有趣', '细腻'], sentence: '我觉得你真诚、有趣，而且很细腻。' },
+        payload: { keywords: firstKeywords, sentence: '客户端不能覆盖这句话 unsafe_12345' },
       },
     });
     assert.equal(first.response.status, 200);
     const peerView = await jsonRequest(baseUrl, '/api/carnival/state', { token: users.b.token });
     const peerInvite = peerView.payload.room.invites.find((invite) => invite.inviteId === inviteId);
     assert.equal(peerInvite.game.definition.phase, 'collecting');
-    assert.equal(JSON.stringify(peerInvite).includes('我觉得你真诚'), false);
+    assert.equal(JSON.stringify(peerInvite).includes(firstSentence), false);
 
     const second = await jsonRequest(baseUrl, '/api/carnival/games/action', {
       method: 'POST', token: users.b.token,
       body: {
         inviteId,
         action: 'profile-riddle.submit',
-        payload: { keywords: ['会倾听', '有分寸', '有计划'], sentence: '我猜你会倾听、有分寸，也很有计划。' },
+        payload: { keywords: secondKeywords },
       },
     });
     assert.equal(second.response.status, 200);
     assert.equal(second.payload.invite.game.definition.phase, 'revealed');
-    assert.match(JSON.stringify(second.payload.invite.game.definition.revealedSubmissions), /我觉得你真诚/);
-    assert.match(JSON.stringify(second.payload.invite.game.definition.revealedSubmissions), /我猜你会倾听/);
+    assert.match(JSON.stringify(second.payload.invite.game.definition.revealedSubmissions), new RegExp(firstKeywords[0]));
+    assert.match(JSON.stringify(second.payload.invite.game.definition.revealedSubmissions), new RegExp(secondKeywords[0]));
+    const revealed = JSON.stringify(second.payload.invite.game.definition.revealedSubmissions);
+    assert.equal(revealed.includes('unsafe_12345'), false);
+    assert.match(revealed, /我觉得小雨是一个/);
+    assert.match(revealed, /我觉得阿川是一个/);
   });
 });
 
@@ -459,18 +481,19 @@ test('custom invitation idempotency rejects changed series or prompt without ano
   }, { configStore, aiService });
 });
 
-test('prompt-game preview is reused byte-for-byte without a second AI call and keeps answers private', async () => {
+test('arcade preview serves isolated runtime, reuses it byte-for-byte, and keeps source out of state JSON', async () => {
   let aiCalls = 0;
   const configStore = createMemoryConfigStore({ apiKey: 'test-only-provider-key' });
   const aiService = {
     async generate(_config, match, selection) {
       aiCalls += 1;
-      return buildCarnivalFallbackGame(match, selection.templateId, selection.gameLabel, {
-        // A schema-valid provider result for another series must not escape in
-        // the preview; the HTTP layer should replace it with the safe local game.
-        seriesId: 'future-trailer',
-        prompt: selection.prompt,
-      });
+      return {
+        ...buildCarnivalFallbackGame(match, selection.templateId, selection.gameLabel, {
+          seriesId: selection.seriesId,
+          prompt: selection.prompt,
+        }),
+        generatedBy: 'ai',
+      };
     },
   };
   await withCarnival(async (baseUrl) => {
@@ -485,14 +508,30 @@ test('prompt-game preview is reused byte-for-byte without a second AI call and k
     assert.equal(preview.response.status, 201);
     assert.match(preview.payload.previewToken, /^[A-Za-z0-9_-]{20,120}$/);
     assert.equal(Date.parse(preview.payload.expiresAt) > Date.now(), true);
-    assert.equal(preview.payload.game.schemaVersion, 3);
-    assert.equal(preview.payload.game.engine, 'exclusive-choice-v1');
-    assert.equal(preview.payload.game.presentation.scene, 'cosmos');
-    assert.equal(preview.payload.game.questions[0].interaction.kind, 'orbit-pick');
+    assert.equal(preview.payload.game.schemaVersion, 4);
+    assert.equal(preview.payload.game.engine, 'arcade-v1');
+    assert.equal(preview.payload.game.arcade.preset, 'basketball-duel');
     assert.equal(preview.payload.game.seriesId, 'prompt-arcade');
-    assert.equal(preview.payload.game.mechanics.seriesId, 'prompt-arcade');
-    assert.equal(preview.payload.game.mechanics.templateKey, 'exclusive_game_prompt_arcade_v1');
+    assert.equal(preview.payload.game.generatedBy, 'ai');
+    assert.equal(preview.payload.game.artifact.document, undefined);
+    assert.match(preview.payload.game.artifact.runtimePath, /^\/api\/carnival\/games\/runtime\/artifact_/);
+    assert.equal(JSON.stringify(preview.payload).includes('<!doctype html>'), false);
     assert.equal(aiCalls, 1);
+
+    const previewRuntime = await fetch(`${baseUrl}${preview.payload.game.artifact.runtimePath}`);
+    const previewDocument = await previewRuntime.text();
+    assert.equal(previewRuntime.status, 200);
+    assert.equal(previewRuntime.headers.get('cache-control'), 'no-store');
+    assert.equal(previewRuntime.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(previewRuntime.headers.get('x-arcade-code-hash'), preview.payload.game.artifact.codeHash);
+    assert.match(previewRuntime.headers.get('content-security-policy'), /default-src 'none'/);
+    assert.match(previewRuntime.headers.get('content-security-policy'), /sandbox allow-scripts/);
+    assert.match(previewRuntime.headers.get('content-security-policy'), /connect-src 'none'/);
+    assert.match(previewRuntime.headers.get('content-security-policy'), /script-src 'sha256-/);
+    assert.doesNotMatch(previewRuntime.headers.get('content-security-policy'), /script-src 'unsafe-inline'/);
+    assert.match(previewRuntime.headers.get('content-security-policy'), /navigate-to 'none'/);
+    assert.match(previewDocument, /^<!doctype html>/);
+    assert.match(previewDocument, /pairplay\s*:\s*1/);
 
     const inviteRequest = {
       method: 'POST',
@@ -511,42 +550,33 @@ test('prompt-game preview is reused byte-for-byte without a second AI call and k
     assert.equal(replay.response.status, 201);
     assert.equal(replay.payload.invite.inviteId, created.payload.invite.inviteId);
     assert.equal(created.payload.invite.game.gameId, preview.payload.game.id);
-    assert.equal(created.payload.invite.game.definition.engine, 'exclusive-choice-v1');
-    assert.deepEqual(created.payload.invite.game.definition.presentation, preview.payload.game.presentation);
-    assert.deepEqual(
-      created.payload.invite.game.definition.questions.map((question) => question.interaction),
-      preview.payload.game.questions.map((question) => question.interaction),
-    );
-    assert.deepEqual(created.payload.invite.game.definition.ending, preview.payload.game.ending);
+    assert.equal(created.payload.invite.game.definition.engine, 'arcade-v1');
+    assert.equal(created.payload.invite.game.definition.artifact.codeHash, preview.payload.game.artifact.codeHash);
+    assert.equal(created.payload.invite.game.definition.artifact.document, undefined);
     assert.equal(aiCalls, 1);
 
     const inviteId = created.payload.invite.inviteId;
-    await jsonRequest(baseUrl, '/api/carnival/games/action', {
+    const joined = await jsonRequest(baseUrl, '/api/carnival/games/action', {
       method: 'POST', token: users.b.token, body: { inviteId, action: 'join' },
     });
-    const creatorState = await jsonRequest(baseUrl, '/api/carnival/state', { token: users.a.token });
-    const creatorInvite = creatorState.payload.room.invites.find((item) => item.inviteId === inviteId);
-    const questionId = creatorInvite.game.definition.question.id;
-    const answered = await jsonRequest(baseUrl, '/api/carnival/games/action', {
-      method: 'POST', token: users.a.token,
-      body: {
-        inviteId,
-        action: 'exclusive.answer',
-        payload: {
-          questionId,
-          answer: 0,
-          requestId: 'prompt-preview-private-answer-01',
-          expectedRevision: creatorInvite.game.definition.revision,
-        },
-      },
-    });
-    assert.equal(answered.response.status, 200);
+    assert.equal(joined.payload.invite.game.definition.self.role, 'keeper');
+    const [readyA, readyB] = await Promise.all([
+      jsonRequest(baseUrl, '/api/carnival/games/action', {
+        method: 'POST', token: users.a.token,
+        body: { inviteId, action: 'arcade.ready', payload: { seq: 0, requestId: 'http-arcade-ready-a-001' } },
+      }),
+      jsonRequest(baseUrl, '/api/carnival/games/action', {
+        method: 'POST', token: users.b.token,
+        body: { inviteId, action: 'arcade.ready', payload: { seq: 0, requestId: 'http-arcade-ready-b-001' } },
+      }),
+    ]);
+    assert.equal(readyA.response.status, 200);
+    assert.equal(readyB.response.status, 200);
+    assert.equal(['waiting', 'countdown'].includes(readyA.payload.invite.game.definition.phase), true);
+    assert.equal(readyB.payload.invite.game.definition.phase, 'countdown');
     const peerState = await jsonRequest(baseUrl, '/api/carnival/state', { token: users.b.token });
-    const peerInvite = peerState.payload.room.invites.find((item) => item.inviteId === inviteId);
-    assert.equal(peerInvite.game.definition.phase, 'guessing');
-    assert.equal(peerInvite.game.definition.question.interaction.kind, 'orbit-pick');
-    assert.equal(peerInvite.game.definition.revealedRound, null);
-    assert.equal(JSON.stringify(peerInvite).includes('"answer":0'), false);
+    assert.equal(JSON.stringify(peerState.payload).includes('<!doctype html>'), false);
+    assert.equal(peerState.payload.room.invites[0].game.definition.artifact.codeHash, preview.payload.game.artifact.codeHash);
   }, { configStore, aiService });
 });
 

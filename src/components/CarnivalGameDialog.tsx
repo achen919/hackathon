@@ -47,6 +47,11 @@ export interface CarnivalProfileSubmission {
   sentence: string;
 }
 
+export interface CarnivalProfileChoiceGroup {
+  id: string;
+  options: [string, string, string];
+}
+
 /**
  * Participant-scoped projection: before `phase === 'revealed'`, the server MUST
  * omit the peer's keywords and sentence. Only booleans are shared pre-reveal.
@@ -55,6 +60,8 @@ export interface CarnivalProfileRiddlePublicState extends CarnivalGamePublicBase
   templateId: 'profile-riddle';
   phase: 'collecting' | 'reveal-ready' | 'revealed';
   target: { participantId: ParticipantId; nickname: string };
+  choiceGroups: [CarnivalProfileChoiceGroup, CarnivalProfileChoiceGroup, CarnivalProfileChoiceGroup];
+  /** Legacy flat list retained while previously persisted invites age out. */
   keywordOptions: string[];
   submitted: Record<ParticipantId, boolean>;
   revealReady: Record<ParticipantId, boolean>;
@@ -133,7 +140,6 @@ export type CarnivalGameActionPayload =
   | {
       type: 'profile-riddle.submit';
       keywords: [string, string, string];
-      sentence: string;
     }
   | { type: 'profile-riddle.confirm-reveal' }
   | { type: 'keyword-wheel.spin' }
@@ -180,9 +186,28 @@ function cleanOptions(options: string[]) {
   return [...new Set(options.map((option) => option.trim()).filter((option) => option.length > 0))].slice(0, 16);
 }
 
+const FALLBACK_PROFILE_GROUPS: [CarnivalProfileChoiceGroup, CarnivalProfileChoiceGroup, CarnivalProfileChoiceGroup] = [
+  { id: 'profile-weekend', options: ['睡醒再决定安排', '约好一件事就够', '喜欢把一天排满'] },
+  { id: 'profile-food', options: ['先看评价再选店', '想吃什么当场定', '会为一家店绕路'] },
+  { id: 'profile-decision', options: ['先列几个选项再定', '听完建议马上决定', '容易当场改变主意'] },
+];
+
+function normalizedProfileGroups(state: CarnivalProfileRiddlePublicState): CarnivalProfileChoiceGroup[] {
+  const groups = state.choiceGroups?.slice(0, 3).map((group) => ({
+    id: group.id,
+    options: cleanOptions(group.options).slice(0, 3),
+  })).filter((group) => group.options.length === 3);
+  if (groups?.length === 3) return groups as CarnivalProfileChoiceGroup[];
+  const flat = cleanOptions([...state.keywordOptions, ...FALLBACK_PROFILE_GROUPS.flatMap((group) => group.options)]);
+  return FALLBACK_PROFILE_GROUPS.map((fallback, index) => ({
+    id: fallback.id,
+    options: flat.slice(index * 3, index * 3 + 3) as [string, string, string],
+  }));
+}
+
 function profileSentence(target: string, keywords: string[]) {
   if (keywords.length !== 3 || keywords.some((keyword) => !keyword)) return '';
-  return `我觉得 ${target} 是一个${keywords[0]}、${keywords[1]}，而且很${keywords[2]}的人。`;
+  return `我觉得${target}是一个${keywords[0]}、${keywords[1]}，而且${keywords[2]}的人。`;
 }
 
 function answerLabel(question: CarnivalRapidQuestion, answer: CarnivalRapidAnswer) {
@@ -440,34 +465,30 @@ function ProfileRiddleGame({ participant, invite, state, pending, runAction, onU
   onUseChatPrompt?: (text: string) => void;
 }) {
   const [keywords, setKeywords] = useState(['', '', '']);
-  const [sentence, setSentence] = useState('');
-  const [sentenceEdited, setSentenceEdited] = useState(false);
-  const options = useMemo(() => cleanOptions(state.keywordOptions), [state.keywordOptions]);
+  const choiceGroups = useMemo(() => normalizedProfileGroups(state), [state]);
   const peer = OTHER[participant];
   const myName = invite.participants[participant].nickname;
   const peerName = invite.participants[peer].nickname;
 
   useEffect(() => {
     setKeywords(['', '', '']);
-    setSentence('');
-    setSentenceEdited(false);
   }, [invite.inviteId]);
 
   const changeKeyword = (slot: number, value: string) => {
     const next = [...keywords];
     next[slot] = value;
     setKeywords(next);
-    if (!sentenceEdited) setSentence(profileSentence(state.target.nickname, next));
   };
 
-  const canSubmit = keywords.every(Boolean) && new Set(keywords).size === 3 &&
-    sentence.trim().length >= 8 && sentence.trim().length <= 160;
+  const sentence = keywords.every(Boolean)
+    ? profileSentence(state.target.nickname, keywords)
+    : '选满三个小猜测后，这里会自动组成一句话。';
+  const canSubmit = keywords.every(Boolean) && new Set(keywords).size === 3;
   const submit = () => {
     if (!canSubmit) return;
     void runAction({
       type: 'profile-riddle.submit',
       keywords: keywords as [string, string, string],
-      sentence: sentence.trim(),
     });
   };
 
@@ -497,7 +518,7 @@ function ProfileRiddleGame({ participant, invite, state, pending, runAction, onU
           })}
         </div>
         <div className="carnival-discussion-card">
-          可以聊聊：哪个关键词最让你意外？对方是从哪次聊天里感受到这一面的？
+          想回哪句都可以：“这个挺准”“你猜反了”“我其实只有出去玩时会这样”。
         </div>
       </div>
     );
@@ -530,7 +551,7 @@ function ProfileRiddleGame({ participant, invite, state, pending, runAction, onU
         <span className="carnival-game-state-icon" aria-hidden="true">🔐</span>
         <p className="carnival-game-eyebrow">你的印象已保密提交</p>
         <h3 data-carnival-focus tabIndex={-1}>{state.submitted[peer] ? '双方都提交了，正在同步揭晓阶段' : `等待 ${peerName} 完成`}</h3>
-        <p>对方现在只能看到“已提交”，看不到你的关键词和句子。</p>
+        <p>对方现在只能看到“已提交”，看不到你的三个小猜测和句子。</p>
         <SubmitStatus invite={invite} submitted={state.submitted} />
       </div>
     );
@@ -544,21 +565,18 @@ function ProfileRiddleGame({ participant, invite, state, pending, runAction, onU
         <em>仅自己可见</em>
       </div>
       <div>
-        <p className="carnival-game-eyebrow">第一步 · 选三个不重复的词</p>
-        <h3 data-carnival-focus tabIndex={-1}>你觉得 {state.target.nickname} 是怎样的人？</h3>
+        <p className="carnival-game-eyebrow">凭第一感觉 · 完成三个小猜测</p>
+        <h3 data-carnival-focus tabIndex={-1}>你觉得 {state.target.nickname} 更像哪一种？</h3>
+        <p className="carnival-profile-helper">每一框都是不同生活场景。没有标准答案，选你最想猜的就好。</p>
       </div>
       <div className="carnival-profile-selects">
-        {[0, 1, 2].map((slot) => (
-          <label key={slot}>
-            <span>关键词 {slot + 1}</span>
+        {choiceGroups.map((group, slot) => (
+          <label key={group.id}>
+            <span>小猜测 {slot + 1}</span>
             <select value={keywords[slot]} onChange={(event) => changeKeyword(slot, event.target.value)}>
               <option value="">请选择</option>
-              {options.map((option) => (
-                <option
-                  key={option}
-                  value={option}
-                  disabled={keywords.some((keyword, index) => index !== slot && keyword === option)}
-                >
+              {group.options.map((option) => (
+                <option key={option} value={option}>
                   {option}
                 </option>
               ))}
@@ -566,20 +584,10 @@ function ProfileRiddleGame({ participant, invite, state, pending, runAction, onU
           </label>
         ))}
       </div>
-      <label className="carnival-profile-sentence">
-        <span>第二步 · 生成一句印象，也可以自己修改</span>
-        <textarea
-          rows={3}
-          maxLength={160}
-          value={sentence}
-          placeholder="选满三个词后会自动生成一句话"
-          onChange={(event) => {
-            setSentenceEdited(true);
-            setSentence(event.target.value);
-          }}
-        />
-        <small>{sentence.length}/160</small>
-      </label>
+      <div className="carnival-profile-sentence" aria-live="polite">
+        <span>自动生成的一句话</span>
+        <p>{sentence}</p>
+      </div>
       <button className="carnival-game-primary" type="button" disabled={!canSubmit || pending} onClick={submit}>
         保密提交给服务器
       </button>

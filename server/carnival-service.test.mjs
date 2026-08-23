@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { buildArcadeFallbackGame } from './arcade-game.mjs';
 import { createCarnivalService } from './carnival-service.mjs';
 import { buildExclusiveFallbackGame } from './exclusive-series.mjs';
 
@@ -17,6 +18,44 @@ function profileGame() {
       kind: 'profile-riddle',
       keywordOptions: ['真诚', '有趣', '细腻', '松弛', '好奇', '热爱生活'],
       sentencePattern: '我猜你是一个……的人。',
+    },
+  };
+}
+
+function groupedProfileGame() {
+  const choiceGroups = [
+    { id: 'profile-weekend', options: ['睡醒再决定安排', '约好一件事就够', '喜欢把一天排满'] },
+    { id: 'profile-food', options: ['先看评价再选店', '想吃什么当场定', '会为一家店绕路'] },
+    { id: 'profile-decision', options: ['先列几个选项再定', '听完建议马上决定', '容易当场改变主意'] },
+  ];
+  return {
+    schemaVersion: 2,
+    templateId: 'profile-riddle',
+    title: '三个生活小猜测',
+    mechanics: {
+      kind: 'profile-riddle',
+      choiceGroups,
+      keywordOptions: choiceGroups.flatMap((group) => group.options),
+      sentencePattern: '我觉得{昵称}是一个{猜测一}、{猜测二}，而且{猜测三}的人。',
+    },
+  };
+}
+
+function targetedGroupedProfileGame() {
+  const base = groupedProfileGame();
+  const targetA = [
+    { id: 'profile-travel', options: ['出门前先排好路线', '到了当地再决定', '经常临时改变路线'] },
+    { id: 'profile-interest', options: ['感兴趣会查到底', '会拉朋友一起体验', '有空再慢慢研究'] },
+    { id: 'profile-communication', options: ['有话比较直接说', '先听完再回应', '想清楚以后再开口'] },
+  ];
+  return {
+    ...base,
+    mechanics: {
+      ...base.mechanics,
+      choiceGroupsByTarget: {
+        a: targetA,
+        b: base.mechanics.choiceGroups,
+      },
     },
   };
 }
@@ -237,18 +276,10 @@ test('keeps profile sentences and keywords private until both participants submi
     });
     const inviteId = created.invite.inviteId;
     await service.joinInvite(players.femaleToken, inviteId);
-    await assert.rejects(
-      () => service.gameAction(players.maleToken, inviteId, {
-        type: 'profile-submit',
-        keywords: ['真诚', '有趣', '好奇'],
-        sentence: '我猜你很真诚，可以加微信号 unsafe_12345 继续聊。',
-      }),
-      hasCode('INVALID_ACTION'),
-    );
     await service.gameAction(players.maleToken, inviteId, {
       type: 'profile-submit',
       keywords: ['真诚', '有趣', '好奇'],
-      sentence: '我猜你是一个真诚、有趣，而且愿意探索新东西的人。',
+      sentence: '这段带微信号 unsafe_12345 的客户端句子必须被服务端忽略。',
     });
 
     const femaleView = (await service.getInvite(players.femaleToken, inviteId)).invite;
@@ -269,11 +300,15 @@ test('keeps profile sentences and keywords private until both participants submi
     assert.equal(completed.invite.status, 'completed');
     assert.equal(
       completed.invite.reveal.answers[players.maleId].sentence,
-      '我猜你是一个真诚、有趣，而且愿意探索新东西的人。',
+      '我觉得小余是一个真诚、有趣，而且好奇的人。',
     );
     assert.deepEqual(
       completed.invite.reveal.answers[players.femaleId].keywords,
       ['细腻', '松弛', '热爱生活'],
+    );
+    assert.equal(
+      completed.invite.reveal.answers[players.femaleId].sentence,
+      '我觉得小林是一个细腻、松弛，而且热爱生活的人。',
     );
 
     const outsiders = await pair(service, ['另一位男生', '另一位女生']);
@@ -281,6 +316,76 @@ test('keeps profile sentences and keywords private until both participants submi
       () => service.getInvite(outsiders.maleToken, inviteId),
       hasCode('INVITE_NOT_FOUND'),
     );
+  });
+});
+
+test('grouped profile riddles accept exactly one choice from each hidden group', async () => {
+  await withStateDir(async (_stateDir, service) => {
+    const players = await pair(service);
+    await unlock(service, players);
+    const created = await service.createInvite(players.maleToken, {
+      templateId: 'profile-riddle', prompt: PROMPT, game: groupedProfileGame(),
+    });
+    const inviteId = created.invite.inviteId;
+    await service.joinInvite(players.femaleToken, inviteId);
+
+    await assert.rejects(
+      () => service.gameAction(players.maleToken, inviteId, {
+        type: 'profile-submit',
+        keywords: ['睡醒再决定安排', '约好一件事就够', '先列几个选项再定'],
+        sentence: '我觉得你是一个睡醒再决定安排、约好一件事就够，而且先列几个选项再定的人。',
+      }),
+      hasCode('INVALID_ACTION'),
+    );
+
+    const accepted = await service.gameAction(players.maleToken, inviteId, {
+      type: 'profile-submit',
+      keywords: ['睡醒再决定安排', '想吃什么当场定', '先列几个选项再定'],
+      sentence: '我觉得你是一个睡醒再决定安排、想吃什么当场定，而且先列几个选项再定的人。',
+    });
+    assert.equal(accepted.invite.progress.selfSubmitted, true);
+    assert.equal(accepted.invite.privateState.keywords[1], '想吃什么当场定');
+  });
+});
+
+test('targeted profile riddles validate each participant against the person they are guessing', async () => {
+  await withStateDir(async (_stateDir, service) => {
+    const players = await pair(service);
+    await unlock(service, players);
+    const created = await service.createInvite(players.maleToken, {
+      templateId: 'profile-riddle', prompt: PROMPT, game: targetedGroupedProfileGame(),
+    });
+    const inviteId = created.invite.inviteId;
+    await service.joinInvite(players.femaleToken, inviteId);
+
+    await assert.rejects(
+      () => service.gameAction(players.maleToken, inviteId, {
+        type: 'profile-submit',
+        keywords: ['出门前先排好路线', '感兴趣会查到底', '有话比较直接说'],
+      }),
+      hasCode('INVALID_ACTION'),
+    );
+    await service.gameAction(players.maleToken, inviteId, {
+      type: 'profile-submit',
+      keywords: ['睡醒再决定安排', '想吃什么当场定', '先列几个选项再定'],
+    });
+
+    await assert.rejects(
+      () => service.gameAction(players.femaleToken, inviteId, {
+        type: 'profile-submit',
+        keywords: ['睡醒再决定安排', '想吃什么当场定', '先列几个选项再定'],
+      }),
+      hasCode('INVALID_ACTION'),
+    );
+    const completed = await service.gameAction(players.femaleToken, inviteId, {
+      type: 'profile-submit',
+      keywords: ['出门前先排好路线', '感兴趣会查到底', '有话比较直接说'],
+    });
+
+    assert.equal(completed.invite.reveal.answers[players.maleId].sentence,
+      '我觉得小余是一个睡醒再决定安排、想吃什么当场定，而且先列几个选项再定的人。');
+    assert.equal(completed.invite.reveal.answers[players.femaleId].sentence,
+      '我觉得小林是一个出门前先排好路线、感兴趣会查到底，而且有话比较直接说的人。');
   });
 });
 
@@ -458,6 +563,137 @@ test('runs custom series as a private alternating three-round server state machi
       }
     }
   });
+});
+
+test('runs persisted arcade v4 with isolated roles, concurrent actor sequences, bounded events, and capability runtime', async () => {
+  let timestamp = 100_000;
+  await withStateDir(async (stateDir, service) => {
+    const players = await pair(service);
+    await unlock(service, players);
+    const game = buildArcadeFallbackGame({ match_id: 'arcade-service-match', messages: [] }, '专属小游戏', {
+      prompt: '做一个一人投篮、一人移动篮筐的篮球游戏',
+    });
+    const created = await service.createInvite(players.maleToken, {
+      templateId: 'custom',
+      seriesId: 'prompt-arcade',
+      prompt: PROMPT,
+      game,
+      idempotencyKey: 'arcade-service-invite-key-01',
+    });
+    const inviteId = created.invite.inviteId;
+    assert.equal(created.invite.game.definition.schemaVersion, 4);
+    assert.equal(created.invite.game.definition.engine, 'arcade-v1');
+    assert.equal(created.invite.game.definition.arcade.preset, 'basketball-duel');
+    assert.equal(created.invite.game.definition.artifact.document, undefined);
+    assert.match(created.invite.game.definition.artifact.runtimePath, /^\/api\/carnival\/games\/runtime\/artifact_/);
+    assert.equal(JSON.stringify(created.invite).includes('<!doctype html>'), false);
+
+    const runtime = await service.getArcadeArtifact(game.artifact.artifactId);
+    assert.equal(runtime.codeHash, game.artifact.codeHash);
+    assert.match(runtime.document, /^<!doctype html>/);
+
+    const joined = await service.joinInvite(players.femaleToken, inviteId);
+    assert.equal(joined.invite.progress.selfRole, 'keeper');
+    assert.equal((await service.getInvite(players.maleToken, inviteId)).invite.progress.selfRole, 'shooter');
+
+    await Promise.all([
+      service.gameAction(players.maleToken, inviteId, {
+        type: 'arcade-ready', seq: 0, requestId: 'arcade-ready-male-0001',
+      }),
+      service.gameAction(players.femaleToken, inviteId, {
+        type: 'arcade-ready', seq: 0, requestId: 'arcade-ready-female-01',
+      }),
+    ]);
+    timestamp += 1_001;
+    const beforeInputs = (await service.getInvite(players.maleToken, inviteId)).invite.revision;
+    const [aimed, moved] = await Promise.all([
+      service.gameAction(players.maleToken, inviteId, {
+        type: 'arcade-input', seq: 1, control: 'aim', value: 0.25,
+        requestId: 'arcade-aim-male-000001', expectedRevision: -999,
+      }),
+      service.gameAction(players.femaleToken, inviteId, {
+        type: 'arcade-input', seq: 1, control: 'move', value: -1,
+        requestId: 'arcade-move-female-001', expectedRevision: -999,
+      }),
+    ]);
+    assert.equal(aimed.invite.revision > beforeInputs, true);
+    assert.equal(moved.invite.revision > beforeInputs, true);
+    const shot = await service.gameAction(players.maleToken, inviteId, {
+      type: 'arcade-input', seq: 2, control: 'shoot', value: 1,
+      requestId: 'arcade-shoot-male-0001',
+    });
+    assert.equal(shot.invite.shared.arcade.frame.ball.inFlight, true);
+    const ballAtShot = shot.invite.shared.arcade.frame.ball;
+    timestamp += 500;
+    const polled = (await service.getInvite(players.maleToken, inviteId)).invite;
+    assert.equal(polled.shared.arcade.frame.tick > shot.invite.shared.arcade.frame.tick, true);
+    assert.notDeepEqual(polled.shared.arcade.frame.ball, ballAtShot);
+    const replay = await service.gameAction(players.maleToken, inviteId, {
+      type: 'arcade-input', seq: 1, control: 'aim', value: 0.25,
+      requestId: 'arcade-aim-male-000001', expectedRevision: 0,
+    });
+    assert.equal(replay.reused, true);
+    await assert.rejects(
+      () => service.gameAction(players.maleToken, inviteId, {
+        type: 'arcade-input', seq: 3, control: 'power', value: 0.9,
+        requestId: 'arcade-aim-male-000001',
+      }),
+      hasCode('IDEMPOTENCY_CONFLICT'),
+    );
+
+    const femaleView = (await service.getInvite(players.femaleToken, inviteId)).invite;
+    assert.deepEqual(femaleView.privateState.input, { move: -1 });
+    const peerAimEvent = femaleView.shared.arcade.events.find((event) => event.control === 'aim');
+    assert.deepEqual(peerAimEvent, {
+      cursor: 3,
+      eventId: 'event-3',
+      seq: 1,
+      actorRole: 'shooter',
+      type: 'input',
+      control: 'aim',
+      value: 0.25,
+      serverAt: timestamp - 500,
+    });
+    assert.equal(JSON.stringify(femaleView.shared.arcade.events).includes(players.maleId), false);
+    const hiddenPeerInput = femaleView.actions.find((entry) => entry.type === 'arcade-input' && entry.actorId === players.maleId);
+    assert.equal(hiddenPeerInput.hidden, true);
+    assert.equal('payload' in hiddenPeerInput, false);
+
+    const strategyGame = buildArcadeFallbackGame({ match_id: 'arcade-strategy-match', messages: [] }, '专属小游戏', {
+      prompt: '做一个九宫格策略对抗小游戏',
+    });
+    const strategy = await service.createInvite(players.femaleToken, {
+      templateId: 'custom', seriesId: 'prompt-arcade', prompt: PROMPT,
+      game: strategyGame, idempotencyKey: 'arcade-strategy-invite-key-01',
+    });
+    await service.joinInvite(players.maleToken, strategy.invite.inviteId);
+    await service.gameAction(players.femaleToken, strategy.invite.inviteId, {
+      type: 'arcade-ready', seq: 0, requestId: 'strategy-ready-female-001',
+    });
+    const isolatedBasketball = (await service.getInvite(players.femaleToken, inviteId)).invite;
+    const isolatedStrategy = (await service.getInvite(players.femaleToken, strategy.invite.inviteId)).invite;
+    assert.equal(isolatedBasketball.shared.arcade.events.some((event) => event.actorRole.includes('commander')), false);
+    assert.equal(isolatedStrategy.shared.arcade.events.length, 1);
+    assert.equal(isolatedStrategy.shared.arcade.events[0].actorRole, 'coral-commander');
+
+    for (let index = 2; index < 70; index += 1) {
+      timestamp += 50;
+      await service.gameAction(players.femaleToken, inviteId, {
+        type: 'arcade-tick', seq: index, requestId: `arcade-tick-female-${index}`,
+      });
+    }
+    const bounded = (await service.getInvite(players.femaleToken, inviteId)).invite;
+    assert.equal(bounded.actions.length, 64);
+    assert.equal(bounded.revision > 64, true);
+
+    const persisted = await readFile(join(stateDir, 'carnival-state.json'), 'utf8');
+    assert.match(persisted, /<!doctype html>/);
+    const restored = createCarnivalService({ stateDir, now: () => timestamp });
+    const restoredView = (await restored.getInvite(players.maleToken, inviteId)).invite;
+    assert.equal(restoredView.progress.selfRole, 'shooter');
+    assert.equal(restoredView.game.definition.artifact.document, undefined);
+    assert.equal(restoredView.game.definition.artifact.codeHash, game.artifact.codeHash);
+  }, { now: () => timestamp });
 });
 
 test('accepts persisted v2 custom games and strictly rejects forged v3 runtime fields', async () => {

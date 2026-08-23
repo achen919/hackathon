@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import './arcade.css';
 
 /** Server-owned preset id sent as PairPlay v1 `mode`. */
 export type PairPlayMode =
@@ -127,20 +128,22 @@ function safeCompleteResult(value: unknown): PairPlayCompleteResult | null {
   const score = isRecord(value.score) && hasOnlyKeys(value.score, ['a', 'b', 'shooter', 'keeper', 'primary', 'secondary', 'team'])
     ? value.score
     : null;
-  if (!score || Object.values(score).some((item) => typeof item !== 'number' || !Number.isFinite(item))) return null;
+  if (value.score !== undefined && (!score || Object.values(score).some((item) => typeof item !== 'number' || !Number.isFinite(item)))) return null;
   const explicitOutcome = ['a', 'b', 'draw', 'together'].includes(String(value.outcome))
     ? value.outcome as PairPlayCompleteResult['outcome']
     : null;
-  const left = Number(score.a ?? score.shooter ?? score.primary ?? score.team ?? 0);
-  const right = Number(score.b ?? score.keeper ?? score.secondary ?? score.team ?? 0);
-  const inferredOutcome = score.team !== undefined
+  if (!explicitOutcome && !score) return null;
+  const left = Number(score?.a ?? score?.shooter ?? score?.primary ?? score?.team ?? 0);
+  const right = Number(score?.b ?? score?.keeper ?? score?.secondary ?? score?.team ?? 0);
+  const inferredOutcome = score?.team !== undefined
     ? 'together'
     : left > right
       ? 'a'
       : right > left
         ? 'b'
         : 'draw';
-  const result: PairPlayCompleteResult = { outcome: explicitOutcome ?? inferredOutcome, score: { a: left, b: right } };
+  const result: PairPlayCompleteResult = { outcome: explicitOutcome ?? inferredOutcome };
+  if (score) result.score = { a: left, b: right };
   if (typeof value.headline === 'string' && value.headline.length <= 100) result.headline = value.headline;
   return result;
 }
@@ -180,6 +183,8 @@ export function GeneratedGameSandbox({
   const blockedRef = useRef(false);
   const timeoutRef = useRef<number | null>(null);
   const preflightRef = useRef<AbortController | null>(null);
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
   const runtimeUrl = useMemo(() => safeRuntimeUrl(artifact.runtimePath), [artifact.runtimePath]);
   const validArtifact = /^[a-zA-Z0-9_-]{8,160}$/u.test(artifact.artifactId) && /^[a-f0-9]{64}$/u.test(artifact.codeHash);
   const resolvedPlayMode = playMode ?? (state === undefined || state === null ? 'preview' : 'network');
@@ -198,8 +203,8 @@ export function GeneratedGameSandbox({
     setVerifiedRuntimeUrl(null);
     setStatus('error');
     setErrorMessage(message);
-    onError?.(message);
-  }, [onError]);
+    onErrorRef.current?.(message);
+  }, []);
 
   const post = useCallback((type: string, payload: Record<string, unknown> = {}) => {
     const target = iframeRef.current?.contentWindow;

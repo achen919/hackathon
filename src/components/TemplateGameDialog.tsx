@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { TemplateGameStage, type DeepDiveTopic, type TemplateGameResult, type TwoChoiceQuestion } from './TemplateGameStage';
-import type { GameDefinition, MatchPayload, ParticipantId } from '../types';
-import { profileKeywords } from '../game/catalog';
+import type { GameDefinition, MatchPayload, ParticipantId, ProfileRiddleChoiceGroup } from '../types';
 
 interface TemplateGameDialogProps {
   open: boolean;
@@ -72,7 +71,15 @@ export function TemplateGameDialog({
   }, [open]);
 
   if (game.templateId === 'custom') return null;
-  const generatedKeywords = game.mechanics.kind === 'profile-riddle' ? game.mechanics.keywordOptions : [];
+  const generatedChoiceGroups: ProfileRiddleChoiceGroup[] = game.mechanics.kind === 'profile-riddle'
+    ? game.mechanics.choiceGroups ?? game.questions.slice(0, 3).map((question) => ({
+        id: question.id,
+        options: question.options.slice(0, 3) as [string, string, string],
+      }))
+    : [];
+  const generatedChoiceGroupsByTarget = game.mechanics.kind === 'profile-riddle'
+    ? game.mechanics.choiceGroupsByTarget ?? { a: generatedChoiceGroups, b: generatedChoiceGroups }
+    : { a: generatedChoiceGroups, b: generatedChoiceGroups };
   const deepDiveTopics: DeepDiveTopic[] = game.mechanics.kind === 'keyword-wheel'
     ? game.mechanics.segments.map((segment) => ({
         id: segment.id,
@@ -105,8 +112,8 @@ export function TemplateGameDialog({
           label={game.gameType}
           viewer={viewer}
           players={{
-            a: { nickname: match.user_a.nickname, profileKeywords: profileKeywords(match.user_a.profile, generatedKeywords) },
-            b: { nickname: match.user_b.nickname, profileKeywords: profileKeywords(match.user_b.profile, generatedKeywords) },
+            a: { nickname: match.user_a.nickname, profileKeywords: generatedChoiceGroupsByTarget.a.flatMap((group) => group.options), profileChoiceGroups: generatedChoiceGroupsByTarget.a },
+            b: { nickname: match.user_b.nickname, profileKeywords: generatedChoiceGroupsByTarget.b.flatMap((group) => group.options), profileChoiceGroups: generatedChoiceGroupsByTarget.b },
           }}
           deepDiveTopics={deepDiveTopics}
           twoChoiceQuestions={twoChoiceQuestions}

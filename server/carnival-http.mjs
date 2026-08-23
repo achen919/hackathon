@@ -1,4 +1,10 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import {
+  ARCADE_GAME_ENGINE,
+  ARCADE_GAME_SCHEMA_VERSION,
+  arcadeScriptCspSources,
+  assertArcadeGameDefinition,
+} from './arcade-game.mjs';
 import { createAiCapacityGate } from './ai-capacity.mjs';
 import { createAiGameService } from './ai-game.mjs';
 import { buildCarnivalFallbackGame, carnivalMatchFromState } from './carnival-games.mjs';
@@ -41,6 +47,33 @@ function sendJson(response, status, body, requestId, headers = {}) {
 
 function methodNotAllowed(response, requestId, allow) {
   sendJson(response, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED', request_id: requestId }, requestId, { Allow: allow });
+}
+
+function sendArcadeDocument(response, request, artifact, requestId) {
+  const body = request.method === 'HEAD' ? '' : artifact.document;
+  const scriptSources = arcadeScriptCspSources(artifact.document).join(' ');
+  response.statusCode = 200;
+  response.setHeader('Content-Type', 'text/html; charset=utf-8');
+  response.setHeader('Cache-Control', 'no-store');
+  response.setHeader('X-Content-Type-Options', 'nosniff');
+  response.setHeader('Referrer-Policy', 'no-referrer');
+  response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  response.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+  response.setHeader('Origin-Agent-Cluster', '?1');
+  response.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  response.setHeader('X-Request-Id', requestId);
+  response.setHeader('X-Arcade-Code-Hash', artifact.codeHash);
+  response.setHeader(
+    'Content-Security-Policy',
+    `default-src 'none'; script-src ${scriptSources}; script-src-attr 'none'; style-src 'unsafe-inline'; img-src 'none'; ` +
+      "font-src 'none'; media-src 'none'; connect-src 'none'; object-src 'none'; frame-src 'none'; " +
+      "child-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none'; frame-ancestors 'self'; sandbox allow-scripts",
+  );
+  response.setHeader(
+    'Permissions-Policy',
+    'accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), sync-xhr=(), usb=()',
+  );
+  response.end(body);
 }
 
 function pathFor(request) {
@@ -133,11 +166,59 @@ function participant(value) {
   return { participantId: value.id, nickname: value.nickname, gender: value.gender };
 }
 
+function publicGeneratedGame(game) {
+  const projected = structuredClone(game);
+  if (
+    projected?.schemaVersion === ARCADE_GAME_SCHEMA_VERSION &&
+    projected?.engine === ARCADE_GAME_ENGINE &&
+    projected.artifact
+  ) {
+    projected.artifact = {
+      artifactId: projected.artifact.artifactId,
+      codeHash: projected.artifact.codeHash,
+      runtimePath: `/api/carnival/games/runtime/${projected.artifact.artifactId}`,
+    };
+  }
+  return projected;
+}
+
 function roleMap(state) {
   return new Map([
     [state.self.id, 'a'],
     [state.peer.id, 'b'],
   ]);
+}
+
+const PROFILE_GROUP_FALLBACKS = Object.freeze([
+  '睡醒再决定安排', '约好一件事就够', '喜欢把一天排满',
+  '先看评价再选店', '想吃什么当场定', '会为一家店绕路',
+  '先列几个选项再定', '听完建议马上决定', '容易当场改变主意',
+]);
+
+function publicProfileChoiceGroups(mechanics, targetKey) {
+  const targetGroups = mechanics?.choiceGroupsByTarget?.[targetKey];
+  if (Array.isArray(targetGroups) && targetGroups.length === 3) {
+    const groups = targetGroups.map((group) => ({
+      id: group.id,
+      options: Array.isArray(group.options) ? group.options.slice(0, 3) : [],
+    }));
+    if (groups.every((group) => group.options.length === 3)) return groups;
+  }
+  if (Array.isArray(mechanics?.choiceGroups) && mechanics.choiceGroups.length === 3) {
+    const groups = mechanics.choiceGroups.map((group) => ({
+      id: group.id,
+      options: Array.isArray(group.options) ? group.options.slice(0, 3) : [],
+    }));
+    if (groups.every((group) => group.options.length === 3)) return groups;
+  }
+  const candidates = [...new Set([
+    ...(Array.isArray(mechanics?.keywordOptions) ? mechanics.keywordOptions : []),
+    ...PROFILE_GROUP_FALLBACKS,
+  ])];
+  return [0, 1, 2].map((index) => ({
+    id: `legacy-profile-group-${index + 1}`,
+    options: candidates.slice(index * 3, index * 3 + 3),
+  }));
 }
 
 function networkGameState(rawInvite, state, serverNowMs) {
@@ -158,6 +239,8 @@ function networkGameState(rawInvite, state, serverNowMs) {
     generatedBy: game.generatedBy,
   };
   if (rawInvite.templateId === 'profile-riddle') {
+    const targetKey = state.peer.id === rawInvite.creatorId ? 'a' : 'b';
+    const choiceGroups = publicProfileChoiceGroups(game.mechanics, targetKey);
     const answerFor = (personId) => {
       const value = rawInvite.reveal?.answers?.[personId];
       if (!value?.keywords) return undefined;
@@ -168,7 +251,7 @@ function networkGameState(rawInvite, state, serverNowMs) {
         author,
         target,
         keywords,
-        sentence: value.sentence || `我觉得 TA 是一个${keywords[0]}、${keywords[1]}，而且很${keywords[2]}的人。`,
+        sentence: value.sentence || `我觉得TA是一个${keywords[0]}、${keywords[1]}，而且${keywords[2]}的人。`,
       };
     };
     const revealedA = answerFor(state.self.id);
@@ -177,7 +260,8 @@ function networkGameState(rawInvite, state, serverNowMs) {
       ...base,
       phase: revealed ? 'revealed' : 'collecting',
       target: { participantId: 'b', nickname: state.peer.nickname },
-      keywordOptions: game.mechanics.keywordOptions,
+      choiceGroups,
+      keywordOptions: choiceGroups.flatMap((group) => group.options),
       submitted: {
         a: Boolean(rawInvite.progress?.selfSubmitted),
         b: Boolean(rawInvite.progress?.peerSubmitted),
@@ -215,6 +299,30 @@ function networkGameState(rawInvite, state, serverNowMs) {
       followUpIndex: 0,
       lastSpunBy: lastSpin ? roles.get(lastSpin.actorId) : undefined,
       canSpin: true,
+    };
+  }
+  if (
+    rawInvite.templateId === 'custom' &&
+    game.schemaVersion === ARCADE_GAME_SCHEMA_VERSION &&
+    game.engine === ARCADE_GAME_ENGINE
+  ) {
+    const arcade = rawInvite.shared?.arcade ?? {};
+    return {
+      ...base,
+      engine: ARCADE_GAME_ENGINE,
+      seriesId: rawInvite.seriesId,
+      phase: arcade.phase ?? 'waiting',
+      arcade: structuredClone(game.arcade),
+      artifact: structuredClone(game.artifact),
+      self: structuredClone(arcade.self ?? rawInvite.privateState ?? {}),
+      peer: structuredClone(arcade.peer ?? {}),
+      frame: structuredClone(arcade.frame ?? {}),
+      events: structuredClone(arcade.events ?? []),
+      eventCursor: Number(arcade.eventCursor ?? 0),
+      countdownEndsAtMs: arcade.countdownEndsAt ?? undefined,
+      startedAtMs: arcade.startedAt ?? undefined,
+      deadlineAtMs: arcade.deadlineAt ?? undefined,
+      outcome: structuredClone(arcade.outcome ?? null),
     };
   }
   if (rawInvite.templateId === 'custom') {
@@ -505,9 +613,11 @@ export function createCarnivalHttpHandler({
   const takeInviteRate = createRateLimiter(8, 10 * 60_000);
   const takePreviewRate = createRateLimiter(8, 10 * 60_000);
   const takeActionRate = createRateLimiter(180, 10 * 60_000);
+  const takeArcadeActionRate = createRateLimiter(6_000, 10 * 60_000);
   const capacityGate = aiGate ?? createAiCapacityGate();
   const inFlightInvites = new Map();
   const gamePreviews = new Map();
+  const previewArtifacts = new Map();
 
   async function gameTypesAndConfig() {
     try {
@@ -539,13 +649,31 @@ export function createCarnivalHttpHandler({
 
   function pruneGamePreviews(timestamp = currentTimestamp()) {
     for (const [previewToken, preview] of gamePreviews) {
-      if (preview.expiresAt <= timestamp) gamePreviews.delete(previewToken);
+      if (preview.expiresAt <= timestamp) {
+        gamePreviews.delete(previewToken);
+        if (preview.artifactId) previewArtifacts.delete(preview.artifactId);
+      }
     }
     while (gamePreviews.size >= MAX_GAME_PREVIEWS) {
       const oldest = gamePreviews.keys().next().value;
       if (!oldest) break;
+      const evicted = gamePreviews.get(oldest);
       gamePreviews.delete(oldest);
+      if (evicted?.artifactId) previewArtifacts.delete(evicted.artifactId);
     }
+  }
+
+  async function runtimeArtifact(artifactId) {
+    pruneGamePreviews();
+    const previewArtifact = previewArtifacts.get(artifactId);
+    if (previewArtifact) {
+      return {
+        artifactId,
+        codeHash: previewArtifact.codeHash,
+        document: previewArtifact.document,
+      };
+    }
+    return service.getArcadeArtifact(artifactId);
   }
 
   function allocatePreviewToken() {
@@ -594,6 +722,16 @@ export function createCarnivalHttpHandler({
   }
 
   function assertPreviewGameMatchesSelection(game, prepared) {
+    if (prepared.series?.seriesId === 'prompt-arcade') {
+      assertArcadeGameDefinition(game, { hasUnsafeText: hasUnsafeGameText });
+      if (
+        game.templateId !== prepared.selected.id ||
+        game.seriesId !== prepared.series.seriesId
+      ) {
+        throw new Error('Arcade game does not match the selected prompt-arcade series');
+      }
+      return;
+    }
     assertPromptGameDefinition(game, { hasUnsafeText: hasUnsafeGameText });
     if (
       game.templateId !== prepared.selected.id ||
@@ -676,11 +814,19 @@ export function createCarnivalHttpHandler({
       game: structuredClone(game),
       expiresAt,
       consumedBy: null,
+      artifactId: game.artifact?.artifactId ?? null,
     });
+    if (game.artifact?.artifactId && game.artifact?.document) {
+      previewArtifacts.set(game.artifact.artifactId, {
+        codeHash: game.artifact.codeHash,
+        document: game.artifact.document,
+        expiresAt,
+      });
+    }
     return {
       previewToken,
       expiresAt: new Date(expiresAt).toISOString(),
-      game: structuredClone(game),
+      game: publicGeneratedGame(game),
     };
   }
 
@@ -772,9 +918,23 @@ export function createCarnivalHttpHandler({
 
   return async function handleCarnival(request, response) {
     const path = pathFor(request);
-    if (!knownPaths.has(path)) return false;
+    const runtimeMatch = path.match(/^\/api\/carnival\/games\/runtime\/(artifact_[A-Za-z0-9_-]{32,80})$/);
+    if (!knownPaths.has(path) && !runtimeMatch) return false;
     const requestId = randomUUID();
     try {
+      if (runtimeMatch) {
+        if (!['GET', 'HEAD'].includes(request.method ?? 'GET')) {
+          methodNotAllowed(response, requestId, 'GET, HEAD');
+        } else {
+          sendArcadeDocument(
+            response,
+            request,
+            await runtimeArtifact(runtimeMatch[1]),
+            requestId,
+          );
+        }
+        return true;
+      }
       if (path === '/api/carnival/join') {
         if (request.method !== 'POST') methodNotAllowed(response, requestId, 'POST');
         else if (requireMutation(request, response, requestId)) {
@@ -875,17 +1035,18 @@ export function createCarnivalHttpHandler({
       } else if (path === '/api/carnival/games/action') {
         if (request.method !== 'POST') methodNotAllowed(response, requestId, 'POST');
         else if (requireMutation(request, response, requestId)) {
-          const rate = takeActionRate(tokenKey(token));
+          const body = await readJson(request, 8_000);
+          if (!isRecord(body) || typeof body.inviteId !== 'string' || typeof body.action !== 'string') {
+            throw new CarnivalError('INVALID_ACTION', 'Invalid carnival game action', 400);
+          }
+          const arcadeAction = body.action.startsWith('arcade.');
+          const rate = (arcadeAction ? takeArcadeActionRate : takeActionRate)(tokenKey(token));
           if (!rate.allowed) sendJson(response, 429, { error: 'Too many game actions', code: 'RATE_LIMITED', request_id: requestId }, requestId, { 'Retry-After': String(rate.retryAfter) });
           else {
-            const body = await readJson(request, 8_000);
-            if (!isRecord(body) || typeof body.inviteId !== 'string' || typeof body.action !== 'string') {
-              throw new CarnivalError('INVALID_ACTION', 'Invalid carnival game action', 400);
-            }
             const payload = isRecord(body.payload) ? body.payload : {};
             let result;
             if (body.action === 'join') result = await service.joinInvite(token, body.inviteId);
-            else if (body.action === 'profile-riddle.submit') result = await service.gameAction(token, body.inviteId, { type: 'profile-submit', keywords: payload.keywords, sentence: payload.sentence });
+            else if (body.action === 'profile-riddle.submit') result = await service.gameAction(token, body.inviteId, { type: 'profile-submit', keywords: payload.keywords });
             else if (body.action === 'keyword-wheel.spin') result = await service.gameAction(token, body.inviteId, { type: 'wheel-spin' });
             else if (body.action === 'keyword-wheel.next-follow-up' || body.action.endsWith('.confirm-reveal')) result = await service.getInvite(token, body.inviteId);
             else if (body.action === 'rapid-choice.answer') result = await service.gameAction(token, body.inviteId, { type: 'rapid-answer', questionId: payload.questionId, answer: payload.answer });
@@ -909,6 +1070,23 @@ export function createCarnivalHttpHandler({
               questionId: payload.questionId,
               requestId: payload.requestId,
               expectedRevision: payload.expectedRevision,
+            });
+            else if (body.action === 'arcade.ready') result = await service.gameAction(token, body.inviteId, {
+              type: 'arcade-ready',
+              seq: payload.seq,
+              requestId: payload.requestId,
+            });
+            else if (body.action === 'arcade.input') result = await service.gameAction(token, body.inviteId, {
+              type: 'arcade-input',
+              seq: payload.seq,
+              control: payload.control,
+              value: payload.value,
+              requestId: payload.requestId,
+            });
+            else if (body.action === 'arcade.tick') result = await service.gameAction(token, body.inviteId, {
+              type: 'arcade-tick',
+              seq: payload.seq,
+              requestId: payload.requestId,
             });
             else throw new CarnivalError('INVALID_ACTION', 'Unsupported carnival game action', 400);
             const rawState = result.state ?? await service.getState(token);

@@ -1,7 +1,22 @@
 import { createHash, randomBytes, randomInt as cryptoRandomInt, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { hasUnsafeContactOrLink, hasUnsafeGameText } from './game-templates.mjs';
+import {
+  ARCADE_GAME_ENGINE,
+  ARCADE_GAME_SCHEMA_VERSION,
+  advanceArcadeSession,
+  applyArcadeAction,
+  arcadeSessionProjection,
+  assertArcadeGameDefinition,
+  createArcadeSession,
+  isArcadeGameDefinitionCandidate,
+} from './arcade-game.mjs';
+import {
+  PROFILE_RIDDLE_DIRECTION_IDS,
+  hasUnsafeContactOrLink,
+  hasUnsafeGameText,
+  isProfileRiddleBehaviorLabel,
+} from './game-templates.mjs';
 import { exclusiveSeriesForId, requireExclusiveSeries } from './exclusive-series.mjs';
 import {
   PROMPT_GAME_ENGINE,
@@ -25,6 +40,8 @@ const OPAQUE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{20,200}$/;
 const NON_VISIBLE_GAME_KEYS = new Set([
   'id', 'templateId', 'matchId', 'gameId', 'questionId', 'segmentId',
   'createdAt', 'updatedAt', 'generatedAt', 'expiresAt', 'generatedBy',
+  'artifactId', 'codeHash',
+  'document',
 ]);
 const SAFE_TOPICS = [
   '博物馆', '逛展', '徒步', '爬山', '露营', '骑行', '跑步', '健身', '做饭', '摄影',
@@ -40,11 +57,28 @@ const TEMPLATE_LABELS = Object.freeze({
 });
 
 const TEMPLATE_PROMPTS = Object.freeze({
-  'profile-riddle': '生成三个中性、非敏感的关键词选择组，让双方各选三个词描述对方；答案在双方都提交前必须保密。',
+  'profile-riddle': '生成三个不同生活场景，每组恰好三个口语化行为候选；双方每组各选一个，猜测在双方都提交前必须保密。',
   'keyword-wheel': '生成三到八个来自公开聊天共同点的安全转盘话题，每个话题附一条轻松追问。',
   'rapid-choice': '生成三到五道五秒二选一，选项没有优劣；双方独立完成后，再一起查看答案并讨论为什么选择 A 或 B。',
   custom: '从稳定专属系列生成三轮轮流猜答；每轮由一方私密作答、另一方猜测，猜测锁定后才揭晓本轮。',
 });
+
+const PROFILE_RIDDLE_DIRECTION_CATEGORIES = Object.freeze({
+  'profile-social-state': 'interaction',
+  'profile-communication': 'interaction',
+  'profile-weekend': 'planning',
+  'profile-travel': 'planning',
+  'profile-food': 'lifestyle',
+  'profile-interest': 'lifestyle',
+  'profile-life-pace': 'planning',
+  'profile-decision': 'planning',
+  'profile-date': 'interaction',
+  'profile-emotion': 'interaction',
+});
+
+function profileRiddleSentence(targetName, keywords) {
+  return `我觉得${targetName}是一个${keywords[0]}、${keywords[1]}，而且${keywords[2]}的人。`;
+}
 
 const DEFAULT_LIMITS = Object.freeze({
   maxParticipants: 500,
@@ -53,7 +87,7 @@ const DEFAULT_LIMITS = Object.freeze({
   maxMessagesPerRoom: 200,
   maxInvitesPerRoom: 20,
   maxActionsPerInvite: 100,
-  maxGameBytes: 32_000,
+  maxGameBytes: 96_000,
   queueTtlMs: 15 * 60_000,
   roomTtlMs: 24 * 60 * 60_000,
   inviteTtlMs: 6 * 60 * 60_000,
@@ -175,6 +209,12 @@ function exclusiveActionRequestFingerprint(input) {
   return hashToken(JSON.stringify([input?.type ?? null, questionId]));
 }
 
+function arcadeActionRequestFingerprint(input) {
+  const control = typeof input?.control === 'string' ? input.control.trim() : null;
+  const value = input?.value === undefined ? null : input.value;
+  return hashToken(JSON.stringify([input?.type ?? null, input?.seq ?? null, control, value]));
+}
+
 function emptyState() {
   return {
     version: STATE_VERSION,
@@ -210,7 +250,7 @@ function clonePublic(value) {
 
 function safeJsonClone(value, maxBytes) {
   let nodes = 0;
-  const walk = (item, depth) => {
+  const walk = (item, depth, parentKey = '') => {
     nodes += 1;
     if (nodes > 1_000 || depth > 8) fail('INVALID_GAME', 'game definition is too complex', 400);
     if (item === null || typeof item === 'boolean') return item;
@@ -219,14 +259,15 @@ function safeJsonClone(value, maxBytes) {
       return item;
     }
     if (typeof item === 'string') {
-      if (item.length > 2_000 || CONTROL_CHARACTERS.test(item)) {
+      const maxStringLength = parentKey === 'document' ? 50_000 : 2_000;
+      if (item.length > maxStringLength || CONTROL_CHARACTERS.test(item)) {
         fail('INVALID_GAME', 'game definition contains an invalid string', 400);
       }
       return item;
     }
     if (Array.isArray(item)) {
       if (item.length > 100) fail('INVALID_GAME', 'game definition contains an oversized array', 400);
-      return item.map((entry) => walk(entry, depth + 1));
+      return item.map((entry) => walk(entry, depth + 1, parentKey));
     }
     if (!isRecord(item)) fail('INVALID_GAME', 'game definition must contain JSON values only', 400);
     const keys = Object.keys(item);
@@ -236,7 +277,7 @@ function safeJsonClone(value, maxBytes) {
       if (key.length > 80 || ['__proto__', 'prototype', 'constructor'].includes(key)) {
         fail('INVALID_GAME', 'game definition contains an invalid field', 400);
       }
-      result[key] = walk(item[key], depth + 1);
+      result[key] = walk(item[key], depth + 1, key);
     }
     return result;
   };
@@ -293,11 +334,52 @@ function validateCarnivalGameDefinition(templateId, seriesId, value, limits) {
 
   if (templateId === 'profile-riddle') {
     if (game.mechanics?.kind !== 'profile-riddle') fail('INVALID_GAME', 'profile game mechanics are required', 400);
-    uniqueStrings(game.mechanics.keywordOptions, 'game.mechanics.keywordOptions', {
+    const keywordOptions = uniqueStrings(game.mechanics.keywordOptions, 'game.mechanics.keywordOptions', {
       minItems: 6,
       maxItems: 12,
       maxLength: 60,
     });
+    const validateChoiceGroups = (groups, field, requireFlatOptions = true) => {
+      if (!Array.isArray(groups) || groups.length !== 3) {
+        fail('INVALID_GAME', 'profile game must contain exactly three choice groups', 400);
+      }
+      const ids = new Set();
+      const groupedOptions = [];
+      for (const [index, group] of groups.entries()) {
+        if (!isRecord(group)) fail('INVALID_GAME', `profile choice group ${index} is invalid`, 400);
+        const id = normalizeId(group.id, `${field}[${index}].id`);
+        if (!PROFILE_RIDDLE_DIRECTION_IDS.includes(id) || ids.has(id)) {
+          fail('INVALID_GAME', 'profile choice group ids must be distinct supported directions', 400);
+        }
+        ids.add(id);
+        const options = uniqueStrings(group.options, `${field}[${index}].options`, {
+          minItems: 3,
+          maxItems: 3,
+          maxLength: 60,
+        });
+        if (!options.every(isProfileRiddleBehaviorLabel)) {
+          fail('INVALID_GAME', 'profile choice groups must use scene-based behavior labels', 400);
+        }
+        groupedOptions.push(...options);
+      }
+      if (new Set([...ids].map((id) => PROFILE_RIDDLE_DIRECTION_CATEGORIES[id])).size < 2) {
+        fail('INVALID_GAME', 'profile choice groups must cover at least two scene categories', 400);
+      }
+      if (new Set(groupedOptions).size !== 9 || (requireFlatOptions && groupedOptions.some((option) => !keywordOptions.includes(option)))) {
+        fail('INVALID_GAME', 'profile choice groups must contain nine distinct allowed options', 400);
+      }
+    };
+    if (game.mechanics.choiceGroups !== undefined) {
+      validateChoiceGroups(game.mechanics.choiceGroups, 'game.mechanics.choiceGroups');
+    }
+    if (game.mechanics.choiceGroupsByTarget !== undefined) {
+      const byTarget = game.mechanics.choiceGroupsByTarget;
+      if (!isRecord(byTarget) || Object.keys(byTarget).length !== 2 || !('a' in byTarget) || !('b' in byTarget)) {
+        fail('INVALID_GAME', 'profile game target groups must contain only a and b', 400);
+      }
+      validateChoiceGroups(byTarget.a, 'game.mechanics.choiceGroupsByTarget.a', false);
+      validateChoiceGroups(byTarget.b, 'game.mechanics.choiceGroupsByTarget.b', false);
+    }
   } else if (templateId === 'keyword-wheel') {
     if (game.mechanics?.kind !== 'keyword-wheel') fail('INVALID_GAME', 'wheel game mechanics are required', 400);
     const segments = game.mechanics.segments;
@@ -336,6 +418,21 @@ function validateCarnivalGameDefinition(templateId, seriesId, value, limits) {
     }
   } else if (templateId === 'custom') {
     const series = requireExclusiveSeries(seriesId);
+    if (isArcadeGameDefinitionCandidate(game)) {
+      if (
+        series.seriesId !== 'prompt-arcade' ||
+        game.schemaVersion !== ARCADE_GAME_SCHEMA_VERSION ||
+        game.engine !== ARCADE_GAME_ENGINE
+      ) {
+        fail('INVALID_GAME', 'arcade-v1 is only valid for the prompt-arcade series', 400);
+      }
+      try {
+        assertArcadeGameDefinition(game, { hasUnsafeText: hasUnsafeGameText });
+      } catch {
+        fail('INVALID_GAME', 'custom arcade game does not match the safe arcade-v1 schema', 400);
+      }
+      return game;
+    }
     if (
       game.mechanics?.kind !== 'exclusive-series' ||
       game.mechanics?.seriesId !== series.seriesId ||
@@ -434,6 +531,24 @@ function exclusiveSharedState(invite) {
   return invite.shared.exclusive;
 }
 
+function isArcadeInvite(invite) {
+  return invite?.templateId === 'custom' &&
+    invite.game?.schemaVersion === ARCADE_GAME_SCHEMA_VERSION &&
+    invite.game?.engine === ARCADE_GAME_ENGINE;
+}
+
+function publicArcadeDefinition(game) {
+  const definition = clonePublic(game);
+  if (definition?.artifact) {
+    definition.artifact = {
+      artifactId: definition.artifact.artifactId,
+      codeHash: definition.artifact.codeHash,
+      runtimePath: `/api/carnival/games/runtime/${definition.artifact.artifactId}`,
+    };
+  }
+  return definition;
+}
+
 function exclusiveRound(invite, room) {
   const shared = exclusiveSharedState(invite);
   const question = invite.game.questions[shared.roundIndex] ?? null;
@@ -471,11 +586,18 @@ function startRapidQuestions(privateState, timestamp) {
 
 function publicAction(action, invite, participantId) {
   const privateAction = action.type === 'profile-submit' || action.type === 'rapid-answer' ||
-    action.type === 'exclusive-answer' || action.type === 'exclusive-guess';
+    action.type === 'exclusive-answer' || action.type === 'exclusive-guess' ||
+    action.type === 'arcade-input';
   const exclusiveRevealed = action.type.startsWith('exclusive-') && action.payload?.questionId
     ? Boolean(exclusiveRevealedResult(invite, action.payload.questionId))
     : false;
-  if (privateAction && invite.status !== 'revealed' && !exclusiveRevealed && action.actorId !== participantId) {
+  const alwaysPrivate = action.type === 'arcade-input';
+  if (
+    privateAction &&
+    (alwaysPrivate || invite.status !== 'revealed') &&
+    !exclusiveRevealed &&
+    action.actorId !== participantId
+  ) {
     return {
       id: action.id,
       actorId: action.actorId,
@@ -486,11 +608,18 @@ function publicAction(action, invite, participantId) {
   }
   const result = clonePublic(action);
   delete result.requestFingerprint;
+  delete result.requestId;
   return result;
 }
 
 function buildReveal(invite, room) {
   if (invite.status !== 'revealed') return null;
+  if (isArcadeInvite(invite)) {
+    return {
+      revealedAt: invite.revealedAt,
+      outcome: clonePublic(invite.shared?.arcade?.outcome ?? null),
+    };
+  }
   if (invite.templateId === 'custom') {
     return {
       revealedAt: invite.revealedAt,
@@ -517,6 +646,10 @@ function publicInviteStatus(status) {
 }
 
 function inviteRevision(invite) {
+  if (isArcadeInvite(invite) && Number.isSafeInteger(invite.arcadeRevision)) {
+    return (Array.isArray(invite.joinedParticipantIds) ? invite.joinedParticipantIds.length : 0) +
+      invite.arcadeRevision;
+  }
   return (Array.isArray(invite.joinedParticipantIds) ? invite.joinedParticipantIds.length : 0) +
     (Array.isArray(invite.actions) ? invite.actions.length : 0);
 }
@@ -525,6 +658,9 @@ function scopedInvite(invite, room, participantId) {
   const privateState = invitePrivateStateForView(invite, participantId);
   const peer = peerMember(room, participantId);
   const peerPrivate = peer ? invitePrivateStateForView(invite, peer.id) : null;
+  const arcadeView = isArcadeInvite(invite)
+    ? arcadeSessionProjection(invite.game, invite.shared.arcade, participantId)
+    : null;
   const progress = invite.templateId === 'profile-riddle'
     ? {
         selfSubmitted: Boolean(privateState.profileKeywords),
@@ -538,6 +674,15 @@ function scopedInvite(invite, room, participantId) {
           peerAnswered: Object.keys(peerPrivate?.rapidAnswers ?? {}).length,
           totalQuestions: invite.game.questions.length,
         }
+      : arcadeView
+        ? {
+            phase: arcadeView.phase,
+            selfRole: arcadeView.self.role,
+            peerRole: arcadeView.peer.role,
+            selfReady: arcadeView.self.ready,
+            peerReady: arcadeView.peer.ready,
+            tick: arcadeView.frame.tick,
+          }
       : invite.templateId === 'custom'
         ? (() => {
             const round = exclusiveRound(invite, room);
@@ -571,6 +716,8 @@ function scopedInvite(invite, room, participantId) {
           questionStartedAt: privateState.rapidQuestionStartedAt,
           deadlineAt: privateState.rapidQuestionDeadlineAt,
         }
+      : arcadeView
+        ? clonePublic(arcadeView.self)
       : invite.templateId === 'custom'
         ? {
             answers: clonePublic(privateState.exclusiveAnswers),
@@ -578,7 +725,7 @@ function scopedInvite(invite, room, participantId) {
           }
       : null;
 
-  const definition = clonePublic(invite.game);
+  const definition = arcadeView ? publicArcadeDefinition(invite.game) : clonePublic(invite.game);
   const status = publicInviteStatus(invite.status);
 
   return {
@@ -608,7 +755,7 @@ function scopedInvite(invite, room, participantId) {
     joinedParticipantIds: [...invite.joinedParticipantIds],
     progress,
     privateState: ownPrivateState,
-    shared: clonePublic(invite.shared),
+    shared: arcadeView ? { arcade: arcadeView } : clonePublic(invite.shared),
     reveal: buildReveal(invite, room),
     actions: invite.actions.map((action) => publicAction(action, invite, participantId)),
   };
@@ -831,6 +978,33 @@ export function createCarnivalService(options = {}) {
     return invite;
   }
 
+  function advanceRoomArcades(room, timestamp) {
+    let changed = false;
+    for (const invite of room.invites) {
+      if (
+        !isArcadeInvite(invite) ||
+        !invite.shared?.arcade ||
+        invite.joinedParticipantIds.length !== room.members.length ||
+        !['countdown', 'playing'].includes(invite.shared.arcade.phase)
+      ) continue;
+      const beforePhase = invite.shared.arcade.phase;
+      const beforeTick = Number(invite.shared.arcade.frame?.tick ?? 0);
+      advanceArcadeSession(invite.game, invite.shared.arcade, timestamp);
+      const advanced = beforePhase !== invite.shared.arcade.phase ||
+        beforeTick !== Number(invite.shared.arcade.frame?.tick ?? 0);
+      if (!advanced) continue;
+      invite.arcadeRevision = Number(invite.arcadeRevision ?? 0) + 1;
+      invite.updatedAt = timestamp;
+      if (invite.shared.arcade.phase === 'finished' && invite.status !== 'revealed') {
+        invite.status = 'revealed';
+        invite.revealedAt = invite.shared.arcade.outcome?.completedAt ?? timestamp;
+      }
+      room.updatedAt = timestamp;
+      changed = true;
+    }
+    return changed;
+  }
+
   function transact(operation) {
     const run = chain.then(async () => {
       await load();
@@ -911,9 +1085,11 @@ export function createCarnivalService(options = {}) {
   }
 
   async function getState(token) {
-    return transact(() => {
+    return transact((timestamp) => {
       const participant = participantForToken(token);
-      return { changed: false, result: () => stateForParticipant(state, participant) };
+      const room = participant.status === 'matched' ? state.rooms[participant.roomId] : null;
+      const changed = room?.status === 'active' ? advanceRoomArcades(room, timestamp) : false;
+      return { changed, result: () => stateForParticipant(state, participant) };
     });
   }
 
@@ -961,7 +1137,10 @@ export function createCarnivalService(options = {}) {
       const seriesLine = series
         ? `\n\n专属系列：${series.title}（${series.seriesId}）\n${series.generationBrief}`
         : '';
-      const prompt = `请为这两位游园会搭子生成一局「${TEMPLATE_LABELS[templateId]}」。\n\n当前双方已经交换 ${room.textMessageCount} 条文字消息；只围绕公开聊天中的「${topicLine}」展开。\n\n${TEMPLATE_PROMPTS[templateId]}${seriesLine}\n\n不要引用联系方式、住址、收入、健康或其他敏感信息，不评价匹配度，所有答案都没有优劣。`;
+      const templatePrompt = seriesId === 'prompt-arcade'
+        ? '生成一局真正可操作的双人小游戏；从五种服务端权威引擎中选择，代码只负责隔离画面和 PairPlay 输入，不能决定角色、比分、胜负或联网。'
+        : TEMPLATE_PROMPTS[templateId];
+      const prompt = `请为这两位游园会搭子生成一局「${TEMPLATE_LABELS[templateId]}」。\n\n当前双方已经交换 ${room.textMessageCount} 条文字消息；只围绕公开聊天中的「${topicLine}」展开。\n\n${templatePrompt}${seriesLine}\n\n不要引用联系方式、住址、收入、健康或其他敏感信息，不评价匹配度，所有答案都没有优劣。`;
       return {
         changed: false,
         result: () => ({
@@ -969,7 +1148,7 @@ export function createCarnivalService(options = {}) {
           templateId,
           seriesId,
           label: TEMPLATE_LABELS[templateId],
-          description: TEMPLATE_PROMPTS[templateId],
+          description: templatePrompt,
           prompt,
           maxLength: 1_500,
         }),
@@ -1031,8 +1210,18 @@ export function createCarnivalService(options = {}) {
         joinedParticipantIds: [participant.id],
         privateByParticipant: {},
         shared: templateId === 'custom'
-          ? { exclusive: { starterId: participant.id, roundIndex: 0, revealedRounds: [] } }
+          ? isArcadeGameDefinitionCandidate(game)
+            ? {
+                arcade: createArcadeSession(
+                  game,
+                  room.members.map((member) => member.id),
+                  participant.id,
+                  timestamp,
+                ),
+              }
+            : { exclusive: { starterId: participant.id, roundIndex: 0, revealedRounds: [] } }
           : null,
+        ...(isArcadeGameDefinitionCandidate(game) ? { arcadeRevision: 0 } : {}),
         actions: [],
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -1100,12 +1289,13 @@ export function createCarnivalService(options = {}) {
   }
 
   async function getInvite(token, inviteId) {
-    return transact(() => {
+    return transact((timestamp) => {
       const participant = participantForToken(token);
       const room = activeRoomFor(participant);
+      const changed = advanceRoomArcades(room, timestamp);
       const invite = inviteFor(room, inviteId);
       return {
-        changed: false,
+        changed,
         result: () => ({ revision: state.revision, invite: scopedInvite(invite, room, participant.id) }),
       };
     });
@@ -1158,7 +1348,8 @@ export function createCarnivalService(options = {}) {
     requestId = null,
     requestFingerprint = null,
   ) {
-    if (invite.actions.length >= limits.maxActionsPerInvite) {
+    const arcade = isArcadeInvite(invite);
+    if (!arcade && invite.actions.length >= limits.maxActionsPerInvite) {
       fail('ACTION_LIMIT', 'Carnival invite action limit has been reached', 429);
     }
     const action = {
@@ -1170,7 +1361,9 @@ export function createCarnivalService(options = {}) {
       ...(requestFingerprint ? { requestFingerprint } : {}),
       createdAt: timestamp,
     };
+    if (arcade && invite.actions.length >= 64) invite.actions.shift();
     invite.actions.push(action);
+    if (arcade) invite.arcadeRevision = Number(invite.arcadeRevision ?? 0) + 1;
     invite.updatedAt = timestamp;
     return action;
   }
@@ -1187,22 +1380,25 @@ export function createCarnivalService(options = {}) {
         fail('INVITE_NOT_JOINED', 'Both participants must join this invite first', 409);
       }
       const exclusiveAction = input.type === 'exclusive-answer' || input.type === 'exclusive-guess' || input.type === 'exclusive-next';
+      const arcadeAction = input.type === 'arcade-ready' || input.type === 'arcade-input' || input.type === 'arcade-tick';
+      const sequencedAction = exclusiveAction || arcadeAction;
       let exclusiveRequestId = null;
       let exclusiveRequestFingerprint = null;
-      if (exclusiveAction) {
+      if (sequencedAction) {
         exclusiveRequestId = normalizeString(input.requestId, 'requestId', { min: 8, max: 120 });
         if (!/^[A-Za-z0-9_-]+$/.test(exclusiveRequestId)) {
           fail('INVALID_ACTION', 'requestId must be base64url text', 400);
         }
-        exclusiveRequestFingerprint = exclusiveActionRequestFingerprint(input);
+        exclusiveRequestFingerprint = arcadeAction
+          ? arcadeActionRequestFingerprint(input)
+          : exclusiveActionRequestFingerprint(input);
         const replay = invite.actions.find(
           (item) => item.actorId === participant.id && item.requestId === exclusiveRequestId,
         );
         if (replay) {
-          const replayFingerprint = replay.requestFingerprint ?? exclusiveActionRequestFingerprint({
-            type: replay.type,
-            ...replay.payload,
-          });
+          const replayFingerprint = replay.requestFingerprint ?? (arcadeAction
+            ? arcadeActionRequestFingerprint({ type: replay.type, ...replay.payload })
+            : exclusiveActionRequestFingerprint({ type: replay.type, ...replay.payload }));
           if (replayFingerprint !== exclusiveRequestFingerprint) {
             fail('IDEMPOTENCY_CONFLICT', 'requestId was already used for another game action', 409);
           }
@@ -1216,7 +1412,7 @@ export function createCarnivalService(options = {}) {
             }),
           };
         }
-        if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision !== inviteRevision(invite)) {
+        if (exclusiveAction && (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision !== inviteRevision(invite))) {
           fail('REVISION_CONFLICT', 'Carnival state changed; refresh before retrying this action', 409);
         }
       }
@@ -1231,14 +1427,17 @@ export function createCarnivalService(options = {}) {
           maxLength: 60,
           errorCode: 'INVALID_ACTION',
         });
-        const sentence = normalizeString(input.sentence, 'sentence', { min: 5, max: 200 });
-        if (hasUnsafeContactOrLink(sentence)) {
-          fail('INVALID_ACTION', 'Profile sentence must not contain contact details or links', 400);
-        }
-        const allowed = new Set(invite.game.mechanics.keywordOptions);
-        if (keywords.some((keyword) => !allowed.has(keyword))) {
+        const target = peerMember(room, participant.id);
+        if (!target) fail('ROOM_NOT_FOUND', 'Matched peer is unavailable', 409);
+        const targetKey = target.id === invite.creatorId ? 'a' : 'b';
+        const groups = invite.game.mechanics.choiceGroupsByTarget?.[targetKey] ?? invite.game.mechanics.choiceGroups;
+        const allowedBySlot = Array.isArray(groups) && groups.length === 3
+          ? keywords.every((keyword, index) => Array.isArray(groups[index]?.options) && groups[index].options.includes(keyword))
+          : keywords.every((keyword) => invite.game.mechanics.keywordOptions.includes(keyword));
+        if (!allowedBySlot) {
           fail('INVALID_ACTION', 'Profile answer contains a keyword outside this game', 400);
         }
+        const sentence = profileRiddleSentence(target.nickname, keywords);
         const privateState = invitePrivateState(invite, participant.id);
         if (privateState.profileKeywords) fail('ALREADY_SUBMITTED', 'Profile answer was already submitted', 409);
         privateState.profileKeywords = keywords;
@@ -1304,6 +1503,29 @@ export function createCarnivalService(options = {}) {
           (member) => Object.keys(invitePrivateState(invite, member.id).rapidAnswers).length === totalQuestions,
         );
         if (complete) {
+          invite.status = 'revealed';
+          invite.revealedAt = timestamp;
+        }
+      } else if (arcadeAction) {
+        if (!isArcadeInvite(invite)) fail('INVALID_ACTION', 'Action does not match the game engine', 400);
+        const applied = applyArcadeAction(
+          invite.game,
+          invite.shared.arcade,
+          participant.id,
+          input,
+          timestamp,
+        );
+        if (!applied.ok) fail(applied.code, applied.message, applied.status);
+        action = appendAction(
+          invite,
+          participant.id,
+          input.type,
+          applied.payload,
+          timestamp,
+          exclusiveRequestId,
+          exclusiveRequestFingerprint,
+        );
+        if (applied.completed || invite.shared.arcade.phase === 'finished') {
           invite.status = 'revealed';
           invite.revealedAt = timestamp;
         }
@@ -1430,6 +1652,35 @@ export function createCarnivalService(options = {}) {
     });
   }
 
+  async function getArcadeArtifact(artifactId) {
+    const normalized = normalizeString(artifactId, 'artifactId', { min: 41, max: 89 });
+    if (!/^artifact_[A-Za-z0-9_-]{32,80}$/.test(normalized)) {
+      fail('ARCADE_ARTIFACT_NOT_FOUND', 'Arcade runtime was not found', 404);
+    }
+    return transact(() => {
+      for (const room of Object.values(state.rooms)) {
+        const invite = room.invites.find((item) =>
+          isArcadeInvite(item) && item.game.artifact?.artifactId === normalized,
+        );
+        if (!invite) continue;
+        try {
+          assertArcadeGameDefinition(invite.game, { hasUnsafeText: hasUnsafeGameText });
+        } catch {
+          fail('STATE_CORRUPT', 'Persisted arcade runtime is invalid', 500);
+        }
+        return {
+          changed: false,
+          result: () => ({
+            artifactId: normalized,
+            codeHash: invite.game.artifact.codeHash,
+            document: invite.game.artifact.document,
+          }),
+        };
+      }
+      fail('ARCADE_ARTIFACT_NOT_FOUND', 'Arcade runtime was not found', 404);
+    });
+  }
+
   async function leave(token) {
     return transact((timestamp) => {
       const participant = participantForToken(token);
@@ -1468,6 +1719,7 @@ export function createCarnivalService(options = {}) {
     joinInvite,
     gameAction,
     submitAction: gameAction,
+    getArcadeArtifact,
     leave,
   };
 }

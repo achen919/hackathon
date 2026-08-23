@@ -62,7 +62,7 @@ function safeGameTypes(value: unknown): GameTypeOption[] {
 }
 
 function sessionSummary(result: TemplateGameResult) {
-  if (result.type === 'profile-riddle') return '双方眼中的三个关键词已经一起揭晓';
+  if (result.type === 'profile-riddle') return '双方眼中的三个生活小猜测已经一起揭晓';
   if (result.type === 'keyword-wheel') return `转盘抽到了「${result.topic.label}」，可以顺着这个关键词继续聊`;
   const same = result.questions.filter((_, index) => (
     result.answers.a[index] !== 'timeout' && result.answers.a[index] === result.answers.b[index]
@@ -71,7 +71,7 @@ function sessionSummary(result: TemplateGameResult) {
 }
 
 function templateSteps(templateId: GameTemplateId, questionLabels: string[]) {
-  if (templateId === 'profile-riddle') return ['选择三个关键词', '交换聊天视角', '一起揭晓印象'];
+  if (templateId === 'profile-riddle') return ['完成三个小猜测', '交换聊天视角', '一起揭晓回应'];
   if (templateId === 'keyword-wheel') return ['转动关键词转盘', '抽中一条追问', '把话题带回聊天'];
   if (templateId === 'rapid-choice') return questionLabels.length > 0 ? questionLabels : ['五秒凭直觉选择', '交换视角作答', '一起查看答案'];
   return questionLabels.length > 0 ? questionLabels : ['修改专属 Prompt', '试玩三种交互', '收下续聊话题'];
@@ -457,7 +457,12 @@ export default function App() {
       if (!response.ok || !isGameDefinition(payload.game) || payload.game.matchId !== match.match_id || payload.game.templateId !== selectedOption.id) throw new Error(payload.code ?? `HTTP ${response.status}`);
       if (runVersion !== generationVersionRef.current) return;
       setAiStatus((current) => ({ configured: true, model: current?.model ?? null, gameTypes: current?.gameTypes ?? gameTypes }));
-      launchGame(payload.game, 'ready', payload.cached ? '已取回同一份 Prompt 生成的专属题面。' : `AI 已生成「${payload.game.gameType}」：${payload.game.whyItFits}`);
+      const readyNotice = payload.cached
+        ? '已取回同一份 Prompt 生成的专属题面。'
+        : payload.game.templateId === 'profile-riddle'
+          ? `AI 已为「${payload.game.gameType}」准备好三组生活小猜测。`
+          : `AI 已生成「${payload.game.gameType}」：${payload.game.whyItFits}`;
+      launchGame(payload.game, 'ready', readyNotice);
     } catch (error) {
       if (runVersion !== generationVersionRef.current) return;
       const code = error instanceof Error ? error.message : '';
@@ -580,7 +585,7 @@ export default function App() {
   }
 
   const firstStepNote: Record<GameTemplateId, string> = {
-    'profile-riddle': '双方分别选词，揭晓前彼此不可见',
+    'profile-riddle': '双方分别完成猜测，揭晓前彼此不可见',
     'keyword-wheel': '转盘从公开话题中随机抽取一个追问',
     'rapid-choice': '双方分别作答，答案不会提前暴露',
     custom: '在当前接口案例中本地试玩，不进入真实匹配',

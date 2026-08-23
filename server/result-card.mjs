@@ -7,9 +7,15 @@ function endpointFor(baseUrl, suffix) {
   return `${base.origin}${pathname}/v1${suffix}`;
 }
 
-async function providerText(response) {
+function imageEndpointFor(config) {
+  return `${config.imageApiBaseUrl.replace(/\/+$/, '')}/${config.imageApiRoute.replace(/^\/+/, '')}`;
+}
+
+async function providerText(response, maxBytes = 2_000_000) {
+  const contentLength = Number(response.headers.get('content-length') ?? 0);
+  if (contentLength > maxBytes) throw new Error('AI provider response is too large');
   const text = await response.text();
-  if (text.length > 2_000_000) throw new Error('AI provider response is too large');
+  if (Buffer.byteLength(text, 'utf8') > maxBytes) throw new Error('AI provider response is too large');
   return text;
 }
 
@@ -88,18 +94,35 @@ export function createGameResultService({ fetchImpl = globalThis.fetch, timeoutM
   }
 
   async function generateBackground(config, card) {
-    if (!config.apiKey || !config.imageModel) return card;
-    const response = await fetchImpl(endpointFor(config.apiBaseUrl, '/images/generations'), {
+    if (!config.imageApiKey || !config.imageModel) return card;
+    const arkProtocol = config.imageProtocol === 'ark:image-generations';
+    const requestBody = arkProtocol
+      ? {
+          model: config.imageModel,
+          prompt: card.backgroundPrompt,
+          size: '2K',
+          output_format: 'png',
+          response_format: 'b64_json',
+          watermark: false,
+        }
+      : {
+          model: config.imageModel,
+          prompt: card.backgroundPrompt,
+          size: '1024x1024',
+          response_format: 'b64_json',
+          n: 1,
+        };
+    const response = await fetchImpl(imageEndpointFor(config), {
       method: 'POST', redirect: 'error',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey}`, 'User-Agent': 'liangpei-hackathon/1.0' },
-      body: JSON.stringify({ model: config.imageModel, prompt: card.backgroundPrompt, size: '1024x1024', response_format: 'b64_json', n: 1 }),
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${config.imageApiKey}`, 'User-Agent': 'liangpei-hackathon/1.0' },
+      body: JSON.stringify(requestBody),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    const raw = await providerText(response);
+    const raw = await providerText(response, 12_000_000);
     if (!response.ok) throw providerError(response.status, raw);
     const payload = JSON.parse(raw);
     const item = payload?.data?.[0];
-    if (typeof item?.b64_json === 'string' && item.b64_json.length < 8_000_000) return { ...card, backgroundUrl: `data:image/png;base64,${item.b64_json}` };
+    if (typeof item?.b64_json === 'string' && item.b64_json.length < 12_000_000) return { ...card, backgroundUrl: `data:image/png;base64,${item.b64_json}` };
     if (typeof item?.url === 'string' && item.url.length < 4_000) return { ...card, backgroundUrl: item.url };
     throw new Error('AI provider returned no image');
   }
