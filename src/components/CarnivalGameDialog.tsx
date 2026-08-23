@@ -339,7 +339,6 @@ export function CarnivalGameDialog({
       >
         <header className="carnival-game-header">
           <div>
-            <p className="carnival-game-kicker">双端实时小游戏 · {invite.inviteId.slice(-6)}</p>
             <h2 id={titleId}>{gameState?.title ?? '等待游戏开始'}</h2>
           </div>
           <button className="carnival-game-close" type="button" onClick={onClose} aria-label="关闭游戏">

@@ -117,7 +117,7 @@ function ProfileDetailCard({
               <span>02</span>
               <h4>关于自己</h4>
             </div>
-            <small>系统整理 · {user.memories_self.length} 条</small>
+            <small>{user.memories_self.length} 条</small>
           </div>
           <MemoryList items={user.memories_self} />
         </section>
@@ -128,7 +128,7 @@ function ProfileDetailCard({
               <span>03</span>
               <h4>期待对方</h4>
             </div>
-            <small>系统整理 · {user.memories_ideal.length} 条</small>
+            <small>{user.memories_ideal.length} 条</small>
           </div>
           <MemoryList items={user.memories_ideal} />
         </section>
@@ -230,11 +230,6 @@ export function ProfileExplorer({
             </button>
           </div>
         </header>
-
-        <div className="profile-explorer__notice">
-          <span aria-hidden="true">◇</span>
-          <p><strong>资料可用于选题，不等于可以跨侧披露。</strong>游戏应优先使用双方已经在聊天中公开的话题。</p>
-        </div>
 
         <div className="profile-explorer__grid">
           <ProfileDetailCard match={match} participant="a" viewer={viewer} onViewerChange={onViewerChange} />

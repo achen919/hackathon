@@ -276,24 +276,9 @@ p {
   font-size: 10px;
 }
 
-.sidebar-note {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 8px 10px;
-  margin-top: 22px;
-  padding: 0 10px;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.sidebar-note p {
-  margin-bottom: 0;
-  line-height: 1.5;
-}
-
-.sidebar-note button {
-  grid-column: 2;
+.sidebar-match-button {
   width: max-content;
+  margin: 22px 10px 0;
   padding: 0;
   border: 0;
   background: transparent;
@@ -301,6 +286,11 @@ p {
   font-size: 11px;
   font-weight: 700;
   cursor: pointer;
+}
+
+.sidebar-match-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .source-dot {
@@ -766,8 +756,7 @@ p {
 }
 
 .pair-profile-preview,
-.round-card,
-.safety-note {
+.round-card {
   padding: 20px;
   border: 1px solid #ebe4de;
   border-radius: 22px;
@@ -1009,27 +998,6 @@ p {
   line-height: 1.4;
 }
 
-.safety-note {
-  display: flex;
-  gap: 11px;
-  margin-top: 14px;
-  background: #f1f7f4;
-}
-
-.safety-note > span {
-  color: var(--green);
-}
-
-.safety-note strong {
-  font-size: 11px;
-}
-
-.safety-note p {
-  margin: 5px 0 0;
-  color: #688078;
-  font-size: 9px;
-  line-height: 1.55;
-}
 
 .game-backdrop {
   position: fixed;
@@ -1192,28 +1160,6 @@ p {
   padding: 8px 11px;
 }
 
-.profile-explorer__notice {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 14px 24px 0;
-  padding: 10px 12px;
-  border: 1px solid #d8e9e2;
-  border-radius: 14px;
-  background: #edf7f3;
-  color: #54756a;
-}
-
-.profile-explorer__notice > span {
-  color: var(--green);
-  font-size: 16px;
-}
-
-.profile-explorer__notice p {
-  margin: 0;
-  font-size: 9px;
-  line-height: 1.55;
-}
 
 .profile-explorer__grid {
   display: grid;
@@ -1928,10 +1874,6 @@ p {
     flex: 0 0 44px;
   }
 
-  .profile-explorer__notice {
-    margin: 12px calc(15px + env(safe-area-inset-right)) 0 calc(15px + env(safe-area-inset-left));
-  }
-
   .profile-explorer__grid {
     grid-template-columns: 1fr;
     padding:
@@ -2094,11 +2036,6 @@ p {
   .profile-explorer__grid {
     padding-right: calc(12px + env(safe-area-inset-right));
     padding-left: calc(12px + env(safe-area-inset-left));
-  }
-
-  .profile-explorer__notice {
-    margin-right: calc(12px + env(safe-area-inset-right));
-    margin-left: calc(12px + env(safe-area-inset-left));
   }
 
   .profile-fact {

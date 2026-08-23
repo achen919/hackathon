@@ -76,13 +76,12 @@ export function CasePromptGameDialog({
         tabIndex={-1}
       >
         <header className="carnival-modal__header">
-          <div><span>API 案例试玩</span><h2 id="case-prompt-game-title">Prompt 已变成可玩游戏</h2></div>
+          <div><h2 id="case-prompt-game-title">Prompt 已变成可玩游戏</h2></div>
           <button type="button" onClick={onClose} aria-label="收起游戏，返回案例聊天">×</button>
         </header>
         <PromptGamePreviewCard
           preview={preview}
           expired={false}
-          footerNote="接口案例本地试玩 · 无需登录，不会进入真实匹配"
           onComplete={onComplete}
           onRestart={onRestart}
         />

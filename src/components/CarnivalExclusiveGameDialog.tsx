@@ -385,11 +385,6 @@ export function CarnivalExclusiveGameDialog({
   const selfJoined = invite.participants[participant].joined;
   const series = exclusiveSeriesById(gameState?.seriesId ?? invite.seriesId);
   const visual = safePresentation(gameState?.presentation, series?.tone ?? 'violet');
-  const generatedByLabel = gameState?.generatedBy === 'ai'
-    ? 'AI 生成'
-    : gameState?.generatedBy === 'fallback'
-      ? '安全离线生成'
-      : null;
   const stateMismatch = Boolean(gameState && (
     gameState.inviteId !== invite.inviteId ||
     gameState.templateId !== 'custom' ||
@@ -410,7 +405,6 @@ export function CarnivalExclusiveGameDialog({
       >
         <header className="carnival-game-header">
           <div>
-            <p className="carnival-game-kicker">专属小游戏 · {series?.shortTitle ?? '双人局'}{generatedByLabel ? ` · ${generatedByLabel}` : ''} · {invite.inviteId.slice(-6)}</p>
             <h2 id={titleId}>{gameState?.title ?? series?.title ?? '等待游戏开始'}</h2>
           </div>
           <button className="carnival-game-close" type="button" onClick={onClose} aria-label="关闭专属小游戏">×</button>
