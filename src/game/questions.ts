@@ -89,6 +89,27 @@ const rapidQuestions: GameQuestion[] = [
   },
 ];
 
+const customQuestions: GameQuestion[] = [
+  {
+    id: 'prompt-opening', label: '滑卡开场', source: '根据公开聊天主题组合的安全互动',
+    prompt: '用左右滑卡选一个更像你的开场方式。', options: ['先听 TA 说', '先分享自己的'],
+    matchedFollowUp: '你们想从同一边开场。这种方式为什么让你放松？',
+    differentFollowUp: '你们选了不同的开场。各自更看重什么？',
+  },
+  {
+    id: 'prompt-temperature', label: '情绪刻度', source: '只描述当下聊天节奏，不分析人格',
+    prompt: '现在的聊天温度更接近哪一格？', options: ['轻松试探', '有点好奇', '渐入佳境', '想多听一点'],
+    matchedFollowUp: '你们感受很像。是哪个瞬间让聊天升温了？',
+    differentFollowUp: '你们的感受不同。下一句怎样聊会更自然？',
+  },
+  {
+    id: 'prompt-next', label: '星轨选择', source: '从公开话题延伸的低压力续聊方向',
+    prompt: '这局结束后，你最想把聊天带向哪里？', options: ['周末灵感', '最近的小确幸', '一个还没问过的好奇', '先收好这份默契'],
+    matchedFollowUp: '你们想去同一个方向。谁愿意先用一句话开场？',
+    differentFollowUp: '这里出现了两条好走的支线。为什么你更想先聊这一条？',
+  },
+];
+
 function unique(values: string[], maximum = 12) {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))].slice(0, maximum);
 }
@@ -129,7 +150,9 @@ export function buildFallbackGame(
     ? wheelQuestions(topic)
     : templateId === 'rapid-choice'
       ? rapidQuestions
-      : profileQuestions;
+      : templateId === 'custom'
+        ? customQuestions
+        : profileQuestions;
   const gameType = label ?? (
     templateId === 'keyword-wheel' ? '关键词深挖' : templateId === 'rapid-choice' ? '极限2选1' : templateId === 'custom' ? '专属小游戏' : '资料猜谜局'
   );
@@ -137,7 +160,9 @@ export function buildFallbackGame(
     ? unique([topic, '周末', '小确幸', '好奇心'], 4)
     : templateId === 'rapid-choice'
       ? ['周末模式', '情绪节奏', '记录瞬间', '约会灵感']
-      : ['第一感觉', '相处方式', '生活状态'];
+      : templateId === 'custom'
+        ? ['Prompt 生成', '可玩交互', topic]
+        : ['第一感觉', '相处方式', '生活状态'];
 
   return {
     schemaVersion: 2,
@@ -151,7 +176,7 @@ export function buildFallbackGame(
         ? '转一下，把一个话题聊深一点'
         : templateId === 'rapid-choice'
           ? '5 秒凭直觉，看看你们怎么选'
-          : '专属小游戏接入中',
+          : '写一句 Prompt，现场变成游戏',
     eyebrow: `${gameType} · 双人破冰`,
     description: templateId === 'profile-riddle'
       ? '双方根据对方资料各选三个关键词，拼成一句印象描述，完成后一起揭晓。'
@@ -159,7 +184,7 @@ export function buildFallbackGame(
         ? '转盘会从公开聊天线索中抽一个关键词，再给出一条低压力追问。'
         : templateId === 'rapid-choice'
           ? '双方分别完成 3–5 道五秒二选一，最后一起查看答案和可以继续聊的原因。'
-          : '模板接口已经预留，等待团队中的专属小游戏模块接入。',
+          : '在当前案例页编辑 Prompt，生成滑卡、情绪刻度和星轨等三轮可玩互动，无需登录。',
     whyItFits: `从你们已经聊过的「${topic}」开始，不需要准备标准答案。`,
     estimatedMinutes: templateId === 'rapid-choice' ? 4 : 3,
     topics,

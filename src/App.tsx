@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { Avatar } from './components/Avatar';
+import { CasePromptGameDialog } from './components/CasePromptGameDialog';
 import { GamePromptStudio } from './components/GamePromptStudio';
 import { ProfileExplorer } from './components/ProfileExplorer';
 import { RollingGameTitle } from './components/RollingGameTitle';
 import { TemplateGameDialog } from './components/TemplateGameDialog';
 import type { TemplateGameResult } from './components/TemplateGameStage';
+import { normalizeCarnivalExclusiveGame } from './carnival-api';
+import type { CarnivalExclusiveGameDefinition, CarnivalGamePreview } from './carnival-types';
 import { demoMatch } from './data/demoMatch';
 import { buildLocalPromptPreview, DEFAULT_GAME_TYPES } from './game/catalog';
+import { buildDemoPromptGame } from './game/demo-prompt-game';
 import { buildFallbackGame, isGameDefinition } from './game/questions';
 import {
   genderLabel,
@@ -67,7 +71,29 @@ function templateSteps(templateId: GameTemplateId, questionLabels: string[]) {
   if (templateId === 'profile-riddle') return ['选择三个关键词', '交换聊天视角', '一起揭晓印象'];
   if (templateId === 'keyword-wheel') return ['转动关键词转盘', '抽中一条追问', '把话题带回聊天'];
   if (templateId === 'rapid-choice') return questionLabels.length > 0 ? questionLabels : ['五秒凭直觉选择', '交换视角作答', '一起查看答案'];
-  return ['进入双人游园会', '从六种专属玩法里选一局', '双方设备同步揭晓'];
+  return questionLabels.length > 0 ? questionLabels : ['修改专属 Prompt', '试玩三种交互', '收下续聊话题'];
+}
+
+function customGameShell(match: MatchPayload, game: CarnivalExclusiveGameDefinition) {
+  const shell = buildFallbackGame(match, 'custom', '专属小游戏');
+  const topics = [...new Set(game.questions.map((question) => question.label))].slice(0, 3);
+  return {
+    ...shell,
+    title: game.title,
+    description: game.description,
+    topics: topics.length >= 2 ? topics : ['Prompt 生成', '可玩交互', '轻松破冰'],
+    questions: game.questions.map((question) => ({
+      id: question.id,
+      label: question.label,
+      source: question.source,
+      prompt: question.prompt,
+      options: question.options,
+      matchedFollowUp: question.matchedFollowUp ?? '你们选到了同一个方向，为什么它更像你？',
+      differentFollowUp: question.differentFollowUp ?? '你们选了不同方向，各自最看重的是什么？',
+    })),
+    generatedBy: game.generatedBy,
+    generatedAt: new Date().toISOString(),
+  };
 }
 
 export default function App() {
@@ -80,6 +106,8 @@ export default function App() {
   const [drafts, setDrafts] = useState<Record<ParticipantId, string>>({ a: '', b: '' });
   const [profilesOpen, setProfilesOpen] = useState(false);
   const [gameOpen, setGameOpen] = useState(false);
+  const [casePromptOpen, setCasePromptOpen] = useState(false);
+  const [casePromptPreview, setCasePromptPreview] = useState<CarnivalGamePreview | null>(null);
   const [promptStudioOpen, setPromptStudioOpen] = useState(false);
   const [gameTypes, setGameTypes] = useState<GameTypeOption[]>(DEFAULT_GAME_TYPES);
   const [selectedTemplateId, setSelectedTemplateId] = useState<GameTemplateId>('profile-riddle');
@@ -139,10 +167,10 @@ export default function App() {
   }, [messages.length, sessionStatus]);
 
   useEffect(() => {
-    const modalOpen = gameOpen || profilesOpen || promptStudioOpen;
+    const modalOpen = gameOpen || profilesOpen || promptStudioOpen || casePromptOpen;
     document.body.classList.toggle('is-modal-open', modalOpen);
     return () => document.body.classList.remove('is-modal-open');
-  }, [gameOpen, profilesOpen, promptStudioOpen]);
+  }, [casePromptOpen, gameOpen, profilesOpen, promptStudioOpen]);
 
   function resetSession(nextMatch: MatchPayload, templateId: GameTemplateId = selectedTemplateId) {
     const option = gameTypes.find((item) => item.id === templateId) ?? DEFAULT_GAME_TYPES.find((item) => item.id === templateId);
@@ -151,6 +179,8 @@ export default function App() {
     setSessionStatus('idle');
     setCompletedSummary('');
     setGameOpen(false);
+    setCasePromptOpen(false);
+    setCasePromptPreview(null);
     setPromptStudioOpen(false);
     setPromptStatus('idle');
     setPromptText('');
@@ -221,19 +251,11 @@ export default function App() {
   }
 
   function chooseTemplate(templateId: GameTemplateId) {
-    if (templateId === 'custom') {
-      window.location.href = '/carnival';
-      return;
-    }
     setRollingLocked(true);
     selectRollingTemplate(templateId);
   }
 
   async function loadPrompt(templateId: GameTemplateId) {
-    if (templateId === 'custom') {
-      window.location.href = '/carnival';
-      return;
-    }
     const option = visibleGameTypes.find((item) => item.id === templateId) ?? selectedOption;
     const local = buildLocalPromptPreview({ ...match, messages, message_count: messages.length }, option);
     const runVersion = ++promptVersionRef.current;
@@ -250,7 +272,11 @@ export default function App() {
       const response = await fetch('/api/games/prompt', {
         method: 'POST',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contextId: gameContextId, templateId }),
+        body: JSON.stringify({
+          contextId: gameContextId,
+          templateId,
+          ...(templateId === 'custom' ? { seriesId: 'prompt-arcade' } : {}),
+        }),
       });
       const payload = (await response.json()) as Partial<GamePromptPreview> & { code?: string };
       if (!response.ok || payload.templateId !== templateId || typeof payload.prompt !== 'string') throw new Error(payload.code ?? `HTTP ${response.status}`);
@@ -267,11 +293,8 @@ export default function App() {
 
   function openPromptStudio(templateId: GameTemplateId = selectedTemplateId) {
     if (!gameEligible) return;
-    if (templateId === 'custom') {
-      window.location.href = '/carnival';
-      return;
-    }
     setGameOpen(false);
+    setCasePromptOpen(false);
     setPromptStudioOpen(true);
     void loadPrompt(templateId);
   }
@@ -288,12 +311,91 @@ export default function App() {
     setGameOpen(true);
   }
 
+  function launchCasePromptGame(
+    game: CarnivalExclusiveGameDefinition,
+    mode: 'ready' | 'fallback',
+    notice: string,
+  ) {
+    const currentMatch = { ...match, messages, message_count: messages.length };
+    const previewToken = `case-${match.match_id}-${Date.now()}`;
+    setActiveGame(customGameShell(currentMatch, game));
+    setCasePromptPreview({
+      previewToken,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+      game,
+    });
+    setGameGeneration(mode);
+    setGameNotice(notice);
+    setSessionStatus('playing');
+    setCompletedSummary('');
+    setSessionKey(previewToken);
+    setPromptStudioOpen(false);
+    setPromptStatus('editing');
+    setGameOpen(false);
+    setCasePromptOpen(true);
+  }
+
   async function generateAndStart() {
+    if (!selectedOption.available || promptText.trim().length < 20 || promptStatus === 'generating') return;
     if (selectedOption.id === 'custom') {
-      window.location.href = '/carnival';
+      const currentMatch = { ...match, messages, message_count: messages.length };
+      const fallback = buildDemoPromptGame(currentMatch, promptText);
+      if (aiStatus?.configured === false || !gameContextId) {
+        launchCasePromptGame(
+          fallback,
+          'fallback',
+          aiStatus?.configured === false
+            ? 'AI 尚未在管理后台可用，已按你的 Prompt 用安全本地引擎生成三轮可玩游戏。'
+            : '当前是本地演示案例，已按你的 Prompt 生成三轮可玩游戏。',
+        );
+        return;
+      }
+      const runVersion = ++generationVersionRef.current;
+      setPromptStatus('generating');
+      setPromptError(null);
+      setGameGeneration('loading');
+      setGameNotice('AI 正在把 Prompt 组合成场景、交互和三轮题面…');
+      try {
+        const response = await fetch('/api/games/generate', {
+          method: 'POST',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contextId: gameContextId,
+            templateId: 'custom',
+            seriesId: 'prompt-arcade',
+            prompt: promptText,
+            fresh: sessionStatus === 'complete' && activeGame.templateId === 'custom',
+          }),
+        });
+        const payload = (await response.json()) as { game?: unknown; cached?: boolean; code?: string };
+        if (!response.ok || !payload.game) throw new Error(payload.code ?? `HTTP ${response.status}`);
+        const game = normalizeCarnivalExclusiveGame(payload.game);
+        if (runVersion !== generationVersionRef.current) return;
+        if (game.generatedBy === 'ai') {
+          setAiStatus((current) => ({ configured: true, model: current?.model ?? null, gameTypes: current?.gameTypes ?? gameTypes }));
+        }
+        launchCasePromptGame(
+          game,
+          game.generatedBy === 'ai' ? 'ready' : 'fallback',
+          game.generatedBy === 'ai'
+            ? payload.cached
+              ? '已取回这份 Prompt 对应的同一局可玩游戏。'
+              : `AI 已生成「${game.title}」，可以直接在案例页试玩。`
+            : '在线服务已用安全引擎生成同一套三轮交互。',
+        );
+      } catch (error) {
+        if (runVersion !== generationVersionRef.current) return;
+        const code = error instanceof Error ? error.message : '';
+        if (code === 'AI_NOT_CONFIGURED') setAiStatus({ configured: false, model: null, gameTypes });
+        const notice = code === 'AI_AUTH_FAILED'
+          ? 'AI 密钥或模型暂不可用，已按你的 Prompt 切换到安全本地引擎。'
+          : code === 'AI_REFRESH_LIMIT'
+            ? '本案例智能换题次数已用完，已用安全本地引擎生成。'
+            : 'AI 此刻没有及时返回，已按你的 Prompt 生成本地可玩版。';
+        launchCasePromptGame(fallback, 'fallback', notice);
+      }
       return;
     }
-    if (!selectedOption.available || promptText.trim().length < 20 || promptStatus === 'generating') return;
     const fallback = buildFallbackGame({ ...match, messages, message_count: messages.length }, selectedOption.id, selectedOption.label);
     if (aiStatus?.configured === false || !gameContextId) {
       launchGame(fallback, 'fallback', aiStatus?.configured === false ? 'AI 尚未在管理后台配置，本局使用同一交互模板和安全题库。' : '当前是本地演示案例，本局使用同一交互模板和安全题库。');
@@ -335,12 +437,9 @@ export default function App() {
 
   function startOrResumeGame() {
     if (!gameEligible || gameGeneration === 'loading') return;
-    if (selectedOption.id === 'custom') {
-      window.location.href = '/carnival';
-      return;
-    }
     if (sessionStatus === 'playing') {
-      setGameOpen(true);
+      if (activeGame.templateId === 'custom' && casePromptPreview) setCasePromptOpen(true);
+      else setGameOpen(true);
       return;
     }
     openPromptStudio(selectedOption.id);
@@ -355,6 +454,16 @@ export default function App() {
   function completeGame(result: TemplateGameResult) {
     setSessionStatus('complete');
     setCompletedSummary(sessionSummary(result));
+  }
+
+  function completeCasePromptGame() {
+    setSessionStatus('complete');
+    setCompletedSummary('三轮 Prompt-to-Game 试玩已完成 · 可以顺着结尾问句继续聊');
+  }
+
+  function restartCasePromptGame() {
+    setSessionStatus('playing');
+    setCompletedSummary('');
   }
 
   function closePromptStudio() {
@@ -388,13 +497,13 @@ export default function App() {
     'profile-riddle': '双方各选 3 个词 · 一起揭晓',
     'keyword-wheel': '转一次 · 把话题自然聊深',
     'rapid-choice': `${displayGame.questions.length} 题 · 每题 5 秒 · 一起揭晓`,
-    custom: 'AI 工坊 + 5 个系列 · 游园会双端同步',
+    custom: '3 轮 Prompt-to-Game · 案例页无需登录',
   };
   const firstStepNote: Record<GameTemplateId, string> = {
     'profile-riddle': '双方分别选词，揭晓前彼此不可见',
     'keyword-wheel': '转盘从公开话题中随机抽取一个追问',
     'rapid-choice': '双方分别作答，答案不会提前暴露',
-    custom: '进入游园会后选择系列并编辑 Prompt',
+    custom: '在当前接口案例中本地试玩，不进入真实匹配',
   };
   const gameCardStatus = gameGeneration === 'loading'
     ? 'AI 正在按 Prompt 临场出题…'
@@ -456,7 +565,7 @@ export default function App() {
           <article className={`game-invite ${sessionStatus !== 'idle' ? 'is-active' : ''} ${!gameEligible ? 'is-ineligible' : ''}`} aria-busy={gameGeneration === 'loading'}>
             <div className="game-invite__glow" aria-hidden="true">✦</div>
             <div className="game-invite__topline"><span className="game-label">上下文双人破冰</span><span>{gameEligible ? gameCardStatus : '此刻不推荐发起'}</span></div>
-            {gameEligible ? (sessionStatus === 'playing' || sessionStatus === 'complete' ? <h2>{activeGame.title}</h2> : <RollingGameTitle items={visibleGameTypes} activeId={selectedOption.id} paused={rollingLocked || promptStudioOpen || gameOpen} onActiveChange={selectRollingTemplate} />) : <h2>尊重结束，也是一种认真</h2>}
+            {gameEligible ? (sessionStatus === 'playing' || sessionStatus === 'complete' ? <h2>{activeGame.title}</h2> : <RollingGameTitle items={visibleGameTypes} activeId={selectedOption.id} paused={rollingLocked || promptStudioOpen || gameOpen || casePromptOpen} onActiveChange={selectRollingTemplate} />) : <h2>尊重结束，也是一种认真</h2>}
             <p>{gameEligible ? (sessionStatus === 'idle' ? selectedOption.description : activeGame.description) : '最近对话里出现了明确的结束信号。此时不应该用游戏重新施压，系统会安静收起邀请。'}</p>
             {gameEligible && sessionStatus === 'idle' && <div className="game-template-picker" aria-label="选择游戏类型">{visibleGameTypes.map((option) => <button key={option.id} className={`${option.id === selectedOption.id ? 'is-active' : ''} ${!option.available ? 'is-waiting' : ''}`} type="button" aria-pressed={option.id === selectedOption.id} onClick={() => chooseTemplate(option.id)}>{option.label}</button>)}</div>}
             {gameEligible && sessionStatus !== 'idle' && <div className="topic-chips" aria-label="游戏话题">{activeGame.topics.map((topic) => <span key={topic}>{topic}</span>)}</div>}
@@ -486,7 +595,7 @@ export default function App() {
         </section>
 
         <section className="round-card">
-          <div className="section-heading"><div><span className="eyebrow">{displayGame.generatedBy === 'ai' ? 'AI 专属题面' : '固定玩法模板'}</span><h2>{displayGame.gameType}</h2></div><span className="round-count">{sessionStatus === 'complete' ? '完成' : sessionStatus === 'playing' ? '进行中' : '待开始'}</span></div>
+          <div className="section-heading"><div><span className="eyebrow">{displayGame.templateId === 'custom' ? displayGame.generatedBy === 'ai' ? 'AI 专属游戏' : 'PROMPT 安全引擎' : displayGame.generatedBy === 'ai' ? 'AI 专属题面' : '固定玩法模板'}</span><h2>{displayGame.gameType}</h2></div><span className="round-count">{sessionStatus === 'complete' ? '完成' : sessionStatus === 'playing' ? '进行中' : '待开始'}</span></div>
           <ol className="round-list">{steps.map((step, index) => <li className={sessionStatus === 'complete' ? 'is-done' : sessionStatus === 'playing' && index === 0 ? 'is-current' : ''} key={`${displayGame.templateId}-${step}`}><span>{sessionStatus === 'complete' ? '✓' : index + 1}</span><div><strong>{step}</strong><small>{index === 0 ? firstStepNote[displayGame.templateId] : '玩法内会提示下一步'}</small></div></li>)}</ol>
         </section>
 
@@ -494,6 +603,7 @@ export default function App() {
       </aside>
 
       <GamePromptStudio open={promptStudioOpen} options={visibleGameTypes} selectedId={selectedOption.id} prompt={promptText} status={promptStatus} error={promptError} usesAi={aiStatus?.configured !== false && Boolean(gameContextId)} onSelect={(templateId) => void loadPrompt(templateId)} onPromptChange={(value) => { setPromptText(value); setPromptStatus('editing'); setPromptError(null); }} onStart={() => void generateAndStart()} onClose={closePromptStudio} />
+      {casePromptPreview && <CasePromptGameDialog key={sessionKey} open={casePromptOpen} preview={casePromptPreview} onComplete={completeCasePromptGame} onRestart={restartCasePromptGame} onClose={() => setCasePromptOpen(false)} />}
       <TemplateGameDialog open={gameOpen} game={activeGame} match={{ ...match, messages, message_count: messages.length }} viewer={viewer} sessionKey={sessionKey} onViewerChange={setViewer} onFollowUp={bringFollowUpToChat} onComplete={completeGame} onRestart={() => { setSessionStatus('playing'); setCompletedSummary(''); }} onClose={() => setGameOpen(false)} />
       <ProfileExplorer open={profilesOpen} match={match} viewer={viewer} onViewerChange={setViewer} onClose={() => setProfilesOpen(false)} />
     </div>

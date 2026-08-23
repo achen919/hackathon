@@ -251,7 +251,7 @@ function exclusiveQuestion(value: unknown, index: number) {
   };
 }
 
-function generatedGame(value: unknown): CarnivalExclusiveGameDefinition {
+export function normalizeCarnivalExclusiveGame(value: unknown): CarnivalExclusiveGameDefinition {
   const source = isObject(value) && isObject(value.definition) ? value.definition : value;
   if (!isObject(source)) throw new CarnivalApiError('可玩预览缺少游戏内容。', 0, 'CARNIVAL_BAD_RESPONSE');
   if (source.schemaVersion !== 3 || source.templateId !== 'custom' || source.engine !== 'exclusive-choice-v1') {
@@ -296,7 +296,7 @@ function gamePreview(value: unknown): CarnivalGamePreview {
   if (!previewToken || !expiresAt) {
     throw new CarnivalApiError('可玩预览缺少版本令牌。', 0, 'CARNIVAL_BAD_RESPONSE');
   }
-  return { previewToken, expiresAt, game: generatedGame(value.game) };
+  return { previewToken, expiresAt, game: normalizeCarnivalExclusiveGame(value.game) };
 }
 
 async function requestJson(
