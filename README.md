@@ -89,6 +89,8 @@ Base URL、请求路由、协议、模型和生图 Key 都可在管理后台修�
 
 两套 Key 都只在 HTTPS 保存请求中提交一次，使用 AES-256-GCM 分别加密到仓库外的状态目录；管理接口只返回 `apiKeyConfigured` / `imageApiKeyConfigured`，不会返回任何 Key。本地 `.env`、生产 `/etc/hackathon-chat.env`、状态目录和管理员会话都不会进入前端包。
 
+管理端还可以编辑结果卡生图 Prompt。服务端会把该基础 Prompt 与最近公开对话状态、本局游戏和结果组合后再请求生图模型；只使用 A/B 说话方标识，并限制条数与长度、过滤联系方式和链接，不会把昵称或原始私密资料发送给生图上游。
+
 公开生成接口默认最多触发 20 次真实模型调用/小时，同一个 15 分钟案例上下文最多强制换题 2 次；相同请求会复用缓存与进行中的调用。
 
 管理员采用独立 scrypt 密码、服务端 opaque session、`Secure + HttpOnly + SameSite=Strict` Cookie、精确 Origin 与 CSRF token。生产首次部署可在服务器执行：

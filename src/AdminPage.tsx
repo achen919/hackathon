@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import './admin.css';
 
 interface AdminSession { authenticated: boolean; csrfToken?: string; }
-interface AdminConfig { apiBaseUrl: string; apiKeyConfigured: boolean; model: string; imageApiBaseUrl: string; imageApiRoute: string; imageApiKeyConfigured: boolean; imageProtocol: 'ark:image-generations' | 'openai:image-generations'; imageModel: string; systemPrompt: string; gameTypes: AdminGameType[]; updatedAt: string | null; }
+interface AdminConfig { apiBaseUrl: string; apiKeyConfigured: boolean; model: string; imageApiBaseUrl: string; imageApiRoute: string; imageApiKeyConfigured: boolean; imageProtocol: 'ark:image-generations' | 'openai:image-generations'; imageModel: string; resultCardImagePrompt: string; systemPrompt: string; gameTypes: AdminGameType[]; updatedAt: string | null; }
 interface AdminGameType { id: 'profile-riddle' | 'keyword-wheel' | 'rapid-choice' | 'custom'; label: string; enabled: boolean; generationPrompt: string; }
 interface ApiErrorBody { error?: string; code?: string; }
 
@@ -34,6 +34,7 @@ export default function AdminPage() {
   const [imageApiKey, setImageApiKey] = useState('');
   const [imageProtocol, setImageProtocol] = useState<AdminConfig['imageProtocol']>('ark:image-generations');
   const [imageModel, setImageModel] = useState('seedream-5.0-pro');
+  const [resultCardImagePrompt, setResultCardImagePrompt] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [gameTypes, setGameTypes] = useState<AdminGameType[]>([]);
   const [models, setModels] = useState<string[]>([]);
@@ -49,7 +50,7 @@ export default function AdminPage() {
   }
   useEffect(() => { const onPopState = () => setActiveSection(sectionFromPath(window.location.pathname)); window.addEventListener('popstate', onPopState); return () => window.removeEventListener('popstate', onPopState); }, []);
 
-  function applyConfig(next: AdminConfig) { setConfig(next); setApiBaseUrl(next.apiBaseUrl); setModel(next.model); setImageApiBaseUrl(next.imageApiBaseUrl ?? 'https://tokendance.space/gateway/ark/v3'); setImageApiRoute(next.imageApiRoute ?? '/images/generations'); setImageProtocol(next.imageProtocol ?? 'ark:image-generations'); setImageModel(next.imageModel ?? 'seedream-5.0-pro'); setSystemPrompt(next.systemPrompt); setGameTypes(next.gameTypes.map((item) => ({ ...item }))); }
+  function applyConfig(next: AdminConfig) { setConfig(next); setApiBaseUrl(next.apiBaseUrl); setModel(next.model); setImageApiBaseUrl(next.imageApiBaseUrl ?? 'https://tokendance.space/gateway/ark/v3'); setImageApiRoute(next.imageApiRoute ?? '/images/generations'); setImageProtocol(next.imageProtocol ?? 'ark:image-generations'); setImageModel(next.imageModel ?? 'seedream-5.0-pro'); setResultCardImagePrompt(next.resultCardImagePrompt ?? '为双人游戏结果卡生成无文字背景图。'); setSystemPrompt(next.systemPrompt); setGameTypes(next.gameTypes.map((item) => ({ ...item }))); }
   async function loadConfig() { const response = await fetch('/api/admin/config', { credentials: 'same-origin' }); applyConfig(await readApi<AdminConfig>(response)); setPageError(null); }
   function handleFailure(error: unknown, fallback: string) { const message = error instanceof Error ? error.message : fallback; if (error instanceof ApiRequestError && error.status === 401) { setSession({ authenticated: false }); setConfig(null); setNotice({ tone: 'error', text: '管理会话已过期，请重新登录。' }); return; } setNotice({ tone: 'error', text: message }); }
 
@@ -72,7 +73,7 @@ export default function AdminPage() {
     if (!gameTypes.some((item) => item.enabled)) { setNotice({ tone: 'error', text: '至少保留一种启用中的游戏类型。' }); return; }
     setBusy('save'); setNotice(null);
     try {
-      const response = await fetch('/api/admin/config', { method: 'PUT', credentials: 'same-origin', headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken }, body: JSON.stringify({ apiBaseUrl, apiKey, clearApiKey: options.clearApiKey === true, model, imageApiBaseUrl, imageApiRoute, imageApiKey, clearImageApiKey: options.clearImageApiKey === true, imageProtocol, imageModel, systemPrompt, gameTypes }) });
+      const response = await fetch('/api/admin/config', { method: 'PUT', credentials: 'same-origin', headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken }, body: JSON.stringify({ apiBaseUrl, apiKey, clearApiKey: options.clearApiKey === true, model, imageApiBaseUrl, imageApiRoute, imageApiKey, clearImageApiKey: options.clearImageApiKey === true, imageProtocol, imageModel, resultCardImagePrompt, systemPrompt, gameTypes }) });
       const next = await readApi<AdminConfig>(response); applyConfig(next); setApiKey(''); setImageApiKey(''); setModels([]); setNotice({ tone: 'success', text: options.clearApiKey ? '文本模型 Key 已清除，前台将使用安全题卡。' : options.clearImageApiKey ? '生图 Key 已清除，结果卡将保留文字样式。' : '配置已加密保存，修改立即生效。' });
     } catch (error) { handleFailure(error, '保存失败'); } finally { setBusy(null); }
   }
@@ -123,7 +124,7 @@ export default function AdminPage() {
         {notice && <p className={`admin-notice admin-notice--floating is-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}>{notice.text}</p>}
         <form className="admin-config-form" onSubmit={(event) => { event.preventDefault(); void saveConfig(); }}>
           {activeSection === 'overview' && <OverviewPage config={config} gameTypes={gameTypes} onNavigate={navigate} />}
-          {activeSection === 'provider' && <ProviderPage config={config} apiBaseUrl={apiBaseUrl} apiKey={apiKey} model={model} imageApiBaseUrl={imageApiBaseUrl} imageApiRoute={imageApiRoute} imageApiKey={imageApiKey} imageProtocol={imageProtocol} imageModel={imageModel} models={models} busy={busy} setApiBaseUrl={setApiBaseUrl} setApiKey={setApiKey} setModel={setModel} setImageApiBaseUrl={setImageApiBaseUrl} setImageApiRoute={setImageApiRoute} setImageApiKey={setImageApiKey} setImageProtocol={setImageProtocol} setImageModel={setImageModel} loadModels={loadModels} />}
+          {activeSection === 'provider' && <ProviderPage config={config} apiBaseUrl={apiBaseUrl} apiKey={apiKey} model={model} imageApiBaseUrl={imageApiBaseUrl} imageApiRoute={imageApiRoute} imageApiKey={imageApiKey} imageProtocol={imageProtocol} imageModel={imageModel} resultCardImagePrompt={resultCardImagePrompt} models={models} busy={busy} setApiBaseUrl={setApiBaseUrl} setApiKey={setApiKey} setModel={setModel} setImageApiBaseUrl={setImageApiBaseUrl} setImageApiRoute={setImageApiRoute} setImageApiKey={setImageApiKey} setImageProtocol={setImageProtocol} setImageModel={setImageModel} setResultCardImagePrompt={setResultCardImagePrompt} loadModels={loadModels} />}
           {activeSection === 'game-types' && <GameTypesPage gameTypes={gameTypes} setGameTypes={setGameTypes} />}
           {activeSection === 'prompt' && <PromptPage systemPrompt={systemPrompt} setSystemPrompt={setSystemPrompt} />}
           {activeSection === 'flow' && <FlowPage onNavigate={navigate} />}
@@ -157,6 +158,7 @@ interface ProviderPageProps {
   imageApiKey: string;
   imageProtocol: AdminConfig['imageProtocol'];
   imageModel: string;
+  resultCardImagePrompt: string;
   models: string[];
   busy: string | null;
   setApiBaseUrl: (value: string) => void;
@@ -167,11 +169,12 @@ interface ProviderPageProps {
   setImageApiKey: (value: string) => void;
   setImageProtocol: (value: AdminConfig['imageProtocol']) => void;
   setImageModel: (value: string) => void;
+  setResultCardImagePrompt: (value: string) => void;
   loadModels: () => void;
 }
 
 function ProviderPage(props: ProviderPageProps) {
-  const { config, apiBaseUrl, apiKey, model, imageApiBaseUrl, imageApiRoute, imageApiKey, imageProtocol, imageModel, models, busy, setApiBaseUrl, setApiKey, setModel, setImageApiBaseUrl, setImageApiRoute, setImageApiKey, setImageProtocol, setImageModel, loadModels } = props;
+  const { config, apiBaseUrl, apiKey, model, imageApiBaseUrl, imageApiRoute, imageApiKey, imageProtocol, imageModel, resultCardImagePrompt, models, busy, setApiBaseUrl, setApiKey, setModel, setImageApiBaseUrl, setImageApiRoute, setImageApiKey, setImageProtocol, setImageModel, setResultCardImagePrompt, loadModels } = props;
   return <div className="admin-content"><section className="admin-panel admin-panel--wide"><div className="admin-panel__heading"><div><span>01</span><h2>模型接口</h2></div><small>更新于 {formatUpdatedAt(config.updatedAt)}</small></div><p className="admin-panel__intro">游戏内容模型与结果卡生图模型分别配置。两个 Key 都只在服务端加密保存，浏览器只会看到“是否已配置”。</p>
     <div className="admin-provider-block"><div className="admin-provider-block__heading"><div><strong>游戏内容模型</strong><small>OpenAI Chat Completions</small></div><em>{config.apiKeyConfigured ? '已连接' : '待配置'}</em></div>
       <div className="admin-form-grid"><label className="admin-field"><span>API Base URL</span><input type="url" value={apiBaseUrl} onChange={(event) => setApiBaseUrl(event.target.value)} required /><small>填写服务根地址，或以 /v1 结尾的地址。</small></label><label className="admin-field"><span>文本 API Key <em>{config.apiKeyConfigured ? '已安全配置' : '尚未配置'}</em></span><input type="password" name="api-key" autoComplete="new-password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={config.apiKeyConfigured ? '留空即可保留当前 Key' : '粘贴文本模型 API Key'} /><small>保存后输入框立即清空，不会把已保存的 Key 返回页面。</small></label></div>
@@ -181,6 +184,7 @@ function ProviderPage(props: ProviderPageProps) {
       <div className="admin-form-grid"><label className="admin-field"><span>生图 Base URL</span><input type="url" value={imageApiBaseUrl} onChange={(event) => setImageApiBaseUrl(event.target.value)} required /><small>Seedream Ark 默认：https://tokendance.space/gateway/ark/v3</small></label><label className="admin-field"><span>生图 API Key <em>{config.imageApiKeyConfigured ? '已安全配置' : '尚未配置'}</em></span><input type="password" name="image-api-key" autoComplete="new-password" value={imageApiKey} onChange={(event) => setImageApiKey(event.target.value)} placeholder={config.imageApiKeyConfigured ? '留空即可保留当前 Key' : '粘贴 TokenDance API Key'} /><small>与文本 Key 独立加密保存，绝不会写入前端包。</small></label></div>
       <div className="admin-form-grid"><label className="admin-field"><span>请求路由</span><input value={imageApiRoute} onChange={(event) => setImageApiRoute(event.target.value)} required pattern="/.*" placeholder="/images/generations" /><small>最终请求地址为 Base URL + 请求路由。</small></label><label className="admin-field"><span>协议</span><select value={imageProtocol} onChange={(event) => setImageProtocol(event.target.value as AdminConfig['imageProtocol'])}><option value="ark:image-generations">Ark Image Generations</option><option value="openai:image-generations">OpenAI Image Generations</option></select><small>Seedream 5.0 Pro 使用 ark:image-generations。</small></label></div>
       <label className="admin-field"><span>生图模型</span><input value={imageModel} onChange={(event) => setImageModel(event.target.value)} required placeholder="seedream-5.0-pro" /><small>默认使用 seedream-5.0-pro；也可以填写 TokenDance 模型列表中的其他生图模型 ID。</small></label>
+      <label className="admin-field"><span>结果卡生图 Prompt</span><textarea value={resultCardImagePrompt} onChange={(event) => setResultCardImagePrompt(event.target.value)} rows={7} minLength={20} maxLength={6000} required /><small>服务端会在此 Prompt 后自动追加最近公开对话状态和本局结果；联系方式、链接、昵称和私密资料不会传给生图模型。</small></label>
     </div>
     <div className="admin-security-strip"><span>✓ 两套 Key 分别加密</span><span>✓ 仅后端调用</span><span>✓ 生图上游拒绝重定向</span></div>{models.length > 0 && <div className="admin-model-results"><strong>文本模型可用列表</strong>{models.map((item) => <button type="button" key={item} onClick={() => setModel(item)}>{item}</button>)}</div>}
   </section></div>;

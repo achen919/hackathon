@@ -524,7 +524,15 @@ export default function App() {
     void fetch('/api/games/result-card', {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ game: inputGame, result, players }),
+      body: JSON.stringify({
+        game: inputGame,
+        result,
+        players,
+        conversation: messages
+          .filter((message) => message.type === 'text' && message.content.trim())
+          .slice(-20)
+          .map((message) => ({ speaker: message.from, content: message.content.slice(0, 500) })),
+      }),
     }).then(async (response) => {
       const payload = (await response.json().catch(() => ({}))) as { card?: GameResultCard };
       if (!response.ok || !payload.card) throw new Error('Result card request failed');

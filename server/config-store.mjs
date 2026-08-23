@@ -20,6 +20,8 @@ export const DEFAULT_SYSTEM_PROMPT = `你是良配的双人破冰游戏设计师
 6. source 只能概括公开聊天线索，不得声称读心或暴露私密资料。
 7. matchedFollowUp 与 differentFollowUp 都应自然、简短、可由本人修改后发送。`;
 
+export const DEFAULT_RESULT_CARD_IMAGE_PROMPT = `为一张双人破冰小游戏结果卡生成竖版背景图。画面应结合两人此前公开对话的主题和本局游戏结果，用抽象场景、色彩、光影和象征性物件表达当下氛围；整体温暖、轻松、有庆祝感，适合在上方叠加结果卡文字。不要生成任何文字、数字、标志、二维码、联系方式、真人脸或可识别身份。`;
+
 export const DEFAULT_GAME_TYPES = [
   { id: 'profile-riddle', label: '资料猜谜局', enabled: true, generationPrompt: templateGuidance('profile-riddle') },
   { id: 'keyword-wheel', label: '关键词深挖', enabled: true, generationPrompt: templateGuidance('keyword-wheel') },
@@ -45,6 +47,7 @@ export const DEFAULT_AI_CONFIG = Object.freeze({
   imageApiKey: '',
   imageProtocol: 'ark:image-generations',
   imageModel: 'seedream-5.0-pro',
+  resultCardImagePrompt: DEFAULT_RESULT_CARD_IMAGE_PROMPT,
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   gameTypes: DEFAULT_GAME_TYPES,
   updatedAt: null,
@@ -179,6 +182,11 @@ export function normalizeConfigInput(
       value.imageProtocol ?? current.imageProtocol ?? DEFAULT_AI_CONFIG.imageProtocol,
     ),
     imageModel: normalizeString(value.imageModel ?? current.imageModel ?? DEFAULT_AI_CONFIG.imageModel, 'imageModel', { max: 120 }),
+    resultCardImagePrompt: normalizeString(
+      value.resultCardImagePrompt ?? current.resultCardImagePrompt ?? DEFAULT_AI_CONFIG.resultCardImagePrompt,
+      'resultCardImagePrompt',
+      { min: 20, max: 6_000 },
+    ),
     systemPrompt: normalizeString(value.systemPrompt, 'systemPrompt', { min: 80, max: 20_000 }),
     gameTypes: normalizeGameTypes(value.gameTypes),
     updatedAt: new Date().toISOString(),
@@ -205,6 +213,7 @@ export function publicConfig(config) {
     imageApiKeyConfigured: Boolean(config.imageApiKey),
     imageProtocol: config.imageProtocol,
     imageModel: config.imageModel,
+    resultCardImagePrompt: config.resultCardImagePrompt,
     systemPrompt: config.systemPrompt,
     gameTypes: cloneGameTypes(config.gameTypes),
     updatedAt: config.updatedAt,
@@ -259,6 +268,7 @@ function storedConfig(config, key) {
     imageApiKeyEncrypted: encryptSecret(config.imageApiKey, key),
     imageProtocol: config.imageProtocol,
     imageModel: config.imageModel,
+    resultCardImagePrompt: config.resultCardImagePrompt,
     systemPrompt: config.systemPrompt,
     gameTypes: config.gameTypes,
     updatedAt: config.updatedAt,
@@ -277,6 +287,7 @@ function loadedConfig(value, key, allowedOrigins, imageAllowedOrigins) {
       imageApiKey: decryptSecret(value.imageApiKeyEncrypted, key),
       imageProtocol: value.imageProtocol ?? DEFAULT_AI_CONFIG.imageProtocol,
       imageModel: value.imageModel ?? DEFAULT_AI_CONFIG.imageModel,
+      resultCardImagePrompt: value.resultCardImagePrompt ?? DEFAULT_AI_CONFIG.resultCardImagePrompt,
       systemPrompt: value.systemPrompt,
       gameTypes: value.gameTypes,
     },

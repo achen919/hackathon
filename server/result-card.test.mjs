@@ -16,7 +16,11 @@ const input = {
     questions: [{ id: 'q1' }],
     answers: { a: [0], b: [1] },
   },
-  players: { a: { nickname: 'A' }, b: { nickname: 'B' } },
+  players: { a: { nickname: '小明' }, b: { nickname: '小红' } },
+  conversation: [
+    { speaker: 'a', content: '小明和小红周末都想去看海，也喜欢傍晚散步。' },
+    { speaker: 'b', content: '加我微信 vx-secret 或打开 https://evil.example' },
+  ],
 };
 
 test('result service returns a local card when AI is not configured', async () => {
@@ -55,6 +59,7 @@ test('result service evaluates text and generates a base64 background with confi
     imageApiKey: 'image-secret',
     imageProtocol: 'ark:image-generations',
     imageModel: 'seedream-5.0-pro',
+    resultCardImagePrompt: '使用纸雕与柔和电影光影，生成一张有共同回忆感的结果卡背景。',
   }, input);
   assert.equal(card.generatedBy, 'ai');
   assert.equal(card.status, 'ready');
@@ -71,6 +76,11 @@ test('result service evaluates text and generates a base64 background with confi
   assert.equal(requests[1].body.response_format, 'b64_json');
   assert.equal(requests[1].body.watermark, false);
   assert.equal('n' in requests[1].body, false);
+  assert.match(requests[1].body.prompt, /纸雕与柔和电影光影/);
+  assert.match(requests[1].body.prompt, /周末都想去看海/);
+  assert.match(requests[1].body.prompt, /rapid-choice/);
+  assert.doesNotMatch(requests[1].body.prompt, /vx-secret|evil\.example/);
+  assert.doesNotMatch(requests[1].body.prompt, /\"nickname\"|小明|小红/);
 });
 
 test('image errors do not remove the evaluated text card', async () => {
