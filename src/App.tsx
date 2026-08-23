@@ -374,7 +374,7 @@ export default function App() {
     setActiveGame(customGameShell(currentMatch, game));
     setCasePromptPreview({
       previewToken,
-      expiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+      expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
       game,
     });
     setCaseLocalArcade(null);
