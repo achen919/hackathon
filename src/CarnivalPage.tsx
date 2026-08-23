@@ -108,6 +108,7 @@ function readCarnivalResultCards(roomId: string): GameResultCard[] {
     if (!Array.isArray(parsed)) return [];
     return parsed.filter((item): item is GameResultCard => Boolean(
       item && typeof item === 'object' && typeof item.id === 'string' &&
+      item.templateId !== 'profile-riddle' &&
       typeof item.gameId === 'string' && typeof item.gameTitle === 'string' &&
       typeof item.headline === 'string' && typeof item.summary === 'string',
     ));
@@ -993,6 +994,7 @@ export default function CarnivalPage({
   }, [api, applyState, clearLocalSession, invalidateGamePreview, makeController, releaseController, token]);
 
   function handleCarnivalGameComplete(completion: CarnivalGameCompletion) {
+    if (completion.invitation.templateId === 'profile-riddle') return;
     const cardKey = completion.invitation.inviteId;
     if (resultCardIdsRef.current.has(cardKey)) return;
     resultCardIdsRef.current.add(cardKey);

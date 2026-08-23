@@ -34,6 +34,31 @@ test('result service returns a local card when AI is not configured', async () =
   assert.equal(card.score, 80);
 });
 
+test('result service rejects profile-riddle before fallback or AI evaluation', async () => {
+  let calls = 0;
+  const service = createGameResultService({
+    fetchImpl: async () => {
+      calls += 1;
+      throw new Error('profile-riddle must not call a provider');
+    },
+  });
+  const profileInput = {
+    ...input,
+    game: { ...input.game, templateId: 'profile-riddle' },
+    result: { type: 'profile-riddle', guesses: { a: ['一', '二', '三'], b: ['四', '五', '六'] } },
+  };
+
+  await assert.rejects(
+    () => service.create({ apiKey: 'text-secret', imageApiKey: 'image-secret', imageModel: 'image-model' }, profileInput),
+    (error) => error?.code === 'RESULT_CARD_UNSUPPORTED' && error?.status === 400,
+  );
+  await assert.rejects(
+    () => service.evaluate({ apiKey: '' }, profileInput),
+    (error) => error?.code === 'RESULT_CARD_UNSUPPORTED' && error?.status === 400,
+  );
+  assert.equal(calls, 0);
+});
+
 test('result service evaluates text and generates a base64 background with configured models', async () => {
   const requests = [];
   const service = createGameResultService({

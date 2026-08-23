@@ -413,6 +413,34 @@ test('checks direct restatement against the correct target profile and authored 
   );
 });
 
+test('rejects exact and prefix-wrapped non-allowlisted chat facts without crossing target boundaries', async () => {
+  const potteryMatch = {
+    ...match,
+    user_a: { ...match.user_a, profile: '' },
+    user_b: { ...match.user_b, profile: '' },
+    messages: [
+      { from: 'a', type: 'text', content: '我周末固定去陶艺工坊。', sent_at: '2026-08-22 10:00' },
+    ],
+  };
+  const generate = (payload) => createAiGameService({
+    fetchImpl: async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify(payload) } }],
+    }), { status: 200 }),
+  }).generate(config, potteryMatch, { templateId: 'profile-riddle' });
+
+  await assert.rejects(
+    () => generate(profilePayloadWithOption('a', '周末固定去陶艺')),
+    /directly restated a known profile signal/,
+  );
+  await assert.rejects(
+    () => generate(profilePayloadWithOption('a', '平时周末固定去陶艺')),
+    /directly restated a known profile signal/,
+  );
+  await assert.doesNotReject(
+    () => generate(profilePayloadWithOption('b', '平时周末固定去陶艺')),
+  );
+});
+
 test('rejects malformed generated games before they reach the browser', () => {
   assert.equal(isGeneratedGamePayload({ ...validPayload, questions: [] }), false);
   assert.equal(isGeneratedGamePayload({ ...validPayload, topics: ['重复', '重复'] }), false);
@@ -566,6 +594,11 @@ test('enforces the three built-in template shapes', () => {
   assert.equal(isTemplateShapeValid(replaceProfileA(
     (question) => ({ options: ['周末安排比较随性', ...question.options.slice(1)] }),
   ), 'profile-riddle'), false);
+  for (const broadLabel of ['乐观开朗大方', '温柔善良靠谱', '做事认真负责']) {
+    assert.equal(isTemplateShapeValid(replaceProfileA(
+      (question) => ({ options: [broadLabel, ...question.options.slice(1)] }),
+    ), 'profile-riddle'), false, broadLabel);
+  }
   assert.equal(isTemplateShapeValid(replaceProfileA(
     (question) => ({ options: ['看到有趣小店会停', ...question.options.slice(1)] }),
   ), 'profile-riddle'), true);
