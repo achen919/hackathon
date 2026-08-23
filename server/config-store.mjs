@@ -7,7 +7,7 @@ import {
   templateGuidance,
 } from './game-templates.mjs';
 
-export const DEFAULT_SYSTEM_PROMPT = `你是良配的双人破冰游戏设计师。请基于公开聊天与服务端提炼的非敏感资料信号，设计一局只属于这两个人的轻量双人游戏。
+export const DEFAULT_SYSTEM_PROMPT = `你是心近的双人破冰游戏设计师。请基于公开聊天与服务端提炼的非敏感资料信号，设计一局只属于这两个人的轻量双人游戏。
 
 设计目标：降低初次聊天压力、增加双方自我披露与互相理解，并自然产生下一轮聊天话题。
 

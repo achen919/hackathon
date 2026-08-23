@@ -622,7 +622,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <aside className="brand-rail" aria-label="主导航">
-        <div className="brand-mark" aria-label="良配心动局">良</div>
+        <div className="brand-mark" aria-label="心近心动局">心</div>
         <nav className="rail-nav">
           <button className="rail-button is-active" type="button" aria-label="聊天">◌</button>
           <button className="rail-button" type="button" aria-label="我也要聊，进入游园会真实匹配" onClick={() => { window.location.href = '/carnival'; }}>♡</button>
