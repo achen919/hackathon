@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +7,7 @@ import test from 'node:test';
 import { buildArcadeFallbackGame } from './arcade-game.mjs';
 import { createCarnivalService } from './carnival-service.mjs';
 import { buildExclusiveFallbackGame } from './exclusive-series.mjs';
+import { attachFallbackGeneratedTemplateRenderer } from './generated-template-game.mjs';
 
 const PROMPT = '请根据双方公开聊天中的共同兴趣，生成一局轻松、安全、没有标准答案的双人破冰小游戏。';
 
@@ -68,20 +70,29 @@ function wheelGame() {
     mechanics: {
       kind: 'keyword-wheel',
       segments: [
-        { id: 's1', keyword: '周末', prompt: '理想周末是什么样？', followUp: '最近一次是什么时候？' },
-        { id: 's2', keyword: '摄影', prompt: '最近拍过什么照片？', followUp: '为什么想记录它？' },
-        { id: 's3', keyword: '旅行', prompt: '最想重游哪里？', followUp: '那里最吸引你的是什么？' },
+        {
+          id: 's1', keyword: '周末', prompt: '理想周末是什么样？', followUp: '最近一次是什么时候？',
+          followUps: ['理想周末是什么样？', '最近一次是什么时候？', '如果两个人一起，你想加什么安排？'],
+        },
+        {
+          id: 's2', keyword: '摄影', prompt: '最近拍过什么照片？', followUp: '为什么想记录它？',
+          followUps: ['最近拍过什么照片？', '为什么想记录它？', '如果互相拍一张，你会选什么场景？'],
+        },
+        {
+          id: 's3', keyword: '旅行', prompt: '最想重游哪里？', followUp: '那里最吸引你的是什么？',
+          followUps: ['最想重游哪里？', '那里最吸引你的是什么？', '你会带对方先去哪个角落？'],
+        },
       ],
     },
   };
 }
 
-function rapidGame(questionCount = 3) {
+function rapidGame(questionCount = 3, roundSeconds = 8) {
   return {
     schemaVersion: 2,
     templateId: 'rapid-choice',
-    title: '五秒直觉二选一',
-    mechanics: { kind: 'rapid-choice', roundSeconds: 5 },
+    title: `${roundSeconds} 秒直觉二选一`,
+    mechanics: { kind: 'rapid-choice', roundSeconds },
     questions: Array.from({ length: questionCount }, (_, index) => ({
       id: `q${index + 1}`,
       prompt: `第 ${index + 1} 题，你会选择哪一种周末安排？`,
@@ -233,6 +244,77 @@ test('serializes concurrent independent invites and deduplicates mobile retries 
     assert.equal(retried.state.messageCount, 10);
     assert.equal(retried.state.messages.filter((item) => item.type === 'invite').length, 2);
     assert.equal(retried.state.room.messages.length, 10);
+  });
+});
+
+test('persists generated-template artifacts, exposes only runtime metadata, and rejects forged renderers', async () => {
+  await withStateDir(async (stateDir, service) => {
+    const players = await pair(service);
+    await unlock(service, players);
+    const generatedGame = attachFallbackGeneratedTemplateRenderer(groupedProfileGame());
+    const artifact = generatedGame.renderer.artifact;
+    const created = await service.createInvite(players.maleToken, {
+      templateId: 'profile-riddle', prompt: PROMPT, game: generatedGame,
+    });
+    assert.equal(created.invite.game.definition.renderer.artifact.document, undefined);
+    assert.deepEqual(
+      Object.keys(created.invite.game.definition.renderer.artifact).sort(),
+      ['artifactId', 'codeHash', 'runtimePath'],
+    );
+    assert.equal(JSON.stringify(created.invite).includes('<!doctype html>'), false);
+    assert.deepEqual(await service.getGameArtifact(artifact.artifactId), {
+      artifactId: artifact.artifactId,
+      codeHash: artifact.codeHash,
+      document: artifact.document,
+    });
+
+    const restored = createCarnivalService({ stateDir });
+    const restoredInvite = (await restored.getInvite(players.femaleToken, created.invite.inviteId)).invite;
+    assert.equal(restoredInvite.game.definition.renderer.artifact.codeHash, artifact.codeHash);
+    assert.equal(restoredInvite.game.definition.renderer.artifact.document, undefined);
+    assert.equal((await restored.getGameArtifact(artifact.artifactId)).document, artifact.document);
+
+    const unsafeDocument = artifact.document.replace("'use strict';", "'use strict';setTimeout(()=>{},1);");
+    const forgedGames = [
+      {
+        ...generatedGame,
+        renderer: { ...generatedGame.renderer, generatedBy: 'ai' },
+      },
+      {
+        ...generatedGame,
+        renderer: {
+          ...generatedGame.renderer,
+          artifact: { ...generatedGame.renderer.artifact, codeHash: '0'.repeat(64) },
+        },
+      },
+      {
+        ...generatedGame,
+        renderer: {
+          ...generatedGame.renderer,
+          artifact: {
+            ...generatedGame.renderer.artifact,
+            document: unsafeDocument,
+            codeHash: createHash('sha256').update(unsafeDocument).digest('hex'),
+          },
+        },
+      },
+    ];
+    for (const game of forgedGames) {
+      await assert.rejects(
+        () => restored.createInvite(players.maleToken, {
+          templateId: 'profile-riddle', prompt: PROMPT, game,
+        }),
+        hasCode('INVALID_GAME'),
+      );
+    }
+    await assert.rejects(
+      () => restored.createInvite(players.maleToken, {
+        templateId: 'keyword-wheel',
+        prompt: PROMPT,
+        game: { ...wheelGame(), renderer: generatedGame.renderer },
+      }),
+      hasCode('INVALID_GAME'),
+    );
   });
 });
 
@@ -397,16 +479,40 @@ test('shares a server-selected wheel result with both participants', async () =>
       templateId: 'keyword-wheel', prompt: PROMPT, game: wheelGame(),
     });
     await service.joinInvite(players.femaleToken, created.invite.inviteId);
+    await assert.rejects(
+      () => service.gameAction(players.maleToken, created.invite.inviteId, { type: 'wheel-next-follow-up' }),
+      hasCode('WHEEL_NOT_SPUN'),
+    );
     await service.gameAction(players.maleToken, created.invite.inviteId, { type: 'wheel-spin' });
 
-    const peerView = (await service.getInvite(players.femaleToken, created.invite.inviteId)).invite;
+    let peerView = (await service.getInvite(players.femaleToken, created.invite.inviteId)).invite;
     assert.equal(peerView.shared.lastSpin.segment.id, 's2');
     assert.equal(peerView.shared.lastSpin.segment.keyword, '摄影');
+    assert.equal(peerView.shared.followUpIndex, 0);
     assert.deepEqual(peerView.actions.at(-1).payload, { segmentId: 's2' });
+
+    const secondQuestion = await service.gameAction(players.maleToken, created.invite.inviteId, {
+      type: 'wheel-next-follow-up',
+    });
+    assert.equal(secondQuestion.invite.shared.followUpIndex, 1);
+    assert.deepEqual(secondQuestion.action.payload, { segmentId: 's2', followUpIndex: 1 });
+    const thirdQuestion = await service.gameAction(players.femaleToken, created.invite.inviteId, {
+      type: 'wheel-next-follow-up',
+    });
+    assert.equal(thirdQuestion.invite.shared.followUpIndex, 2);
+    const wrappedQuestion = await service.gameAction(players.femaleToken, created.invite.inviteId, {
+      type: 'wheel-next-follow-up',
+    });
+    assert.equal(wrappedQuestion.invite.shared.followUpIndex, 0);
+
+    await service.gameAction(players.maleToken, created.invite.inviteId, { type: 'wheel-next-follow-up' });
+    await service.gameAction(players.maleToken, created.invite.inviteId, { type: 'wheel-spin' });
+    peerView = (await service.getInvite(players.femaleToken, created.invite.inviteId)).invite;
+    assert.equal(peerView.shared.followUpIndex, 0);
   }, { randomInt: () => 1 });
 });
 
-test('auto-starts five-second rapid rounds, times out late choices, and hides peer answers until completion', async () => {
+test('auto-starts authoritative eight-second rapid rounds, times out after grace, and hides peer answers until completion', async () => {
   let timestamp = 50_000;
   await withStateDir(async (_stateDir, service) => {
     const players = await pair(service);
@@ -417,16 +523,17 @@ test('auto-starts five-second rapid rounds, times out late choices, and hides pe
     const inviteId = created.invite.inviteId;
     const joined = await service.joinInvite(players.femaleToken, inviteId);
     assert.equal(joined.invite.privateState.currentQuestionId, 'q1');
-    assert.equal(joined.invite.privateState.deadlineAt, timestamp + 5_000);
+    assert.equal(joined.invite.privateState.deadlineAt, timestamp + 8_000);
     const maleStarted = (await service.getInvite(players.maleToken, inviteId)).invite;
     assert.equal(maleStarted.privateState.currentQuestionId, 'q1');
 
-    timestamp += 5_751;
+    timestamp += 8_751;
     const late = await service.gameAction(players.maleToken, inviteId, {
       type: 'rapid-answer', questionId: 'q1', answer: 0,
     });
     assert.equal(late.action.payload.answer, 'timeout');
     assert.equal(late.action.payload.late, true);
+    assert.equal(late.action.payload.nextDeadlineAt, timestamp + 8_000);
     await service.gameAction(players.maleToken, inviteId, {
       type: 'rapid-answer', questionId: 'q2', answer: 1,
     });
@@ -456,6 +563,27 @@ test('auto-starts five-second rapid rounds, times out late choices, and hides pe
     assert.equal(completed.invite.reveal.answers[players.maleId].answers.q1, 'timeout');
     assert.equal(completed.invite.reveal.answers[players.femaleId].answers.q3, 1);
   }, { now: () => timestamp });
+});
+
+test('accepts only server-authoritative rapid round lengths from three through fifteen seconds', async () => {
+  await withStateDir(async (_stateDir, service) => {
+    const players = await pair(service);
+    await unlock(service, players);
+    for (const roundSeconds of [3, 15]) {
+      const created = await service.createInvite(players.maleToken, {
+        templateId: 'rapid-choice', prompt: PROMPT, game: rapidGame(3, roundSeconds),
+      });
+      assert.equal(created.invite.game.definition.mechanics.roundSeconds, roundSeconds);
+    }
+    for (const roundSeconds of [2, 16, 8.5]) {
+      await assert.rejects(
+        () => service.createInvite(players.maleToken, {
+          templateId: 'rapid-choice', prompt: PROMPT, game: rapidGame(3, roundSeconds),
+        }),
+        hasCode('INVALID_GAME'),
+      );
+    }
+  });
 });
 
 test('runs custom series as a private alternating three-round server state machine', async () => {

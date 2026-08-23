@@ -23,7 +23,7 @@ export const GAME_TEMPLATE_CATALOG = Object.freeze([
     id: 'rapid-choice',
     defaultLabel: '极限2选1',
     available: true,
-    description: '双方分别在五秒内完成二选一，最后一起对照答案并顺势继续聊。',
+    description: '双方默认在八秒内完成二选一（可安全定制为三至十五秒），最后一起对照答案并顺势继续聊。',
   }),
   Object.freeze({
     id: 'custom',
@@ -77,9 +77,9 @@ const TEMPLATE_GUIDANCE = Object.freeze({
   'keyword-wheel': `严格生成“关键词深挖”：
 - 生成 3-5 个来自公开聊天共同点的安全话题，每轮代表转盘抽中的一个关键词。
 - 问题从事实偏好逐步过渡到轻量感受，不追问创伤、收入、健康、住址或联系方式。
-- 每轮给 2-4 个无优劣选项，并提供一句可自然继续聊的追问。`,
+- prompt、matchedFollowUp 与 differentFollowUp 必须是同一关键词下三个明显不同角度的自然追问，供双方同步“换一个问题”。`,
   'rapid-choice': `严格生成“极限2选1”：
-- 生成 3-5 道题，每题必须且只能有两个短选项，适合五秒内凭直觉选择。
+- 生成 3-5 道题，每题必须且只能有两个短选项；roundSeconds 必须是 3-15 的整数，默认使用 8 秒。
 - 从轻松日常到相处偏好逐步深入，不设置正确答案，不把不同选择解释为不合适。
 - matchedFollowUp / differentFollowUp 都要明确邀请双方聊“为什么我或对方选择 A / B”。`,
   custom: `严格生成“专属小游戏”：
@@ -331,11 +331,16 @@ export function buildTemplateMechanics(game, templateId, seriesId) {
         keyword: question.label || game.topics[index % game.topics.length],
         prompt: question.prompt,
         followUp: question.differentFollowUp,
+        followUps: uniqueStrings([question.prompt, question.matchedFollowUp, question.differentFollowUp], 3),
       })),
     };
   }
   if (templateId === 'rapid-choice') {
-    return { kind: 'rapid-choice', roundSeconds: 5 };
+    const requested = Number(game.roundSeconds);
+    return {
+      kind: 'rapid-choice',
+      roundSeconds: Number.isSafeInteger(requested) ? Math.max(3, Math.min(15, requested)) : 8,
+    };
   }
   if (templateId === 'custom') return buildExclusiveMechanics(requireExclusiveSeries(seriesId).seriesId);
   return { kind: 'custom' };

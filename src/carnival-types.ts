@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { CarnivalExclusiveSeriesId } from './carnival-exclusive';
+import type { GameDefinition, GeneratedTemplateRenderer, StableGameTemplateId } from './types';
 
 export type CarnivalGender = 'female' | 'male';
 export type CarnivalSessionStatus = 'queued' | 'matched';
@@ -204,11 +205,15 @@ export interface CarnivalArcadeGameDefinition {
 
 export type CarnivalPromptGameDefinition =
   | CarnivalExclusiveGameDefinition
-  | CarnivalArcadeGameDefinition;
+  | CarnivalArcadeGameDefinition
+  | (Omit<GameDefinition, 'templateId' | 'renderer'> & {
+      templateId: StableGameTemplateId;
+      renderer: GeneratedTemplateRenderer;
+    });
 
 export interface CarnivalGamePreviewInput {
-  templateId: 'custom';
-  seriesId: CarnivalExclusiveSeriesId;
+  templateId: StableGameTemplateId | 'custom';
+  seriesId?: CarnivalExclusiveSeriesId;
   prompt: string;
 }
 

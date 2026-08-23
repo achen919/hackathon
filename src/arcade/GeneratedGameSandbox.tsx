@@ -1,22 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import type { GeneratedGameArtifact } from '../types';
 import './arcade.css';
 
-/** Server-owned preset id sent as PairPlay v1 `mode`. */
+/** Server-owned arcade preset or stable-template id sent as PairPlay v1 `mode`. */
 export type PairPlayMode =
   | 'dash-duel'
   | 'tandem-rescue'
   | 'basketball-duel'
   | 'relic-expedition'
-  | 'grid-command';
-export type PairPlayValue = number | boolean | string | null | { x: number; y: number };
-
-export interface GeneratedGameArtifact {
-  artifactId: string;
-  /** SHA-256 hex. The preview token and invitation must reference this exact hash. */
-  codeHash: string;
-  /** High-entropy, same-origin endpoint serving a CSP-constrained HTML document. */
-  runtimePath: string;
-}
+  | 'grid-command'
+  | 'profile-riddle'
+  | 'keyword-wheel'
+  | 'rapid-choice';
+export type PairPlayValue = number | boolean | string | null
+  | { x: number; y: number }
+  | { slot: number; optionIndex: number }
+  | { selections: [number, number, number] }
+  | { questionId: string; answer: 0 | 1 }
+  | { questionId: string }
+  | Record<string, never>;
 
 export interface PairPlayInput {
   control: string;
@@ -43,6 +45,7 @@ export interface GeneratedGameSandboxProps {
   remoteEvents?: readonly unknown[];
   allowedControls: readonly string[];
   paused?: boolean;
+  reducedMotion?: boolean;
   timeoutMs?: number;
   title?: string;
   className?: string;
@@ -55,6 +58,7 @@ export interface GeneratedGameSandboxProps {
   onComplete?: (result: PairPlayCompleteResult, meta: { trusted: false; source: 'sandbox' }) => void;
   onReady?: () => void;
   onError?: (message: string) => void;
+  onEscape?: () => void;
 }
 
 type SandboxStatus = 'verifying' | 'loading' | 'ready' | 'error' | 'stopped';
@@ -106,19 +110,45 @@ function safeRuntimeUrl(runtimePath: string) {
   }
 }
 
-function safePairPlayValue(value: unknown): PairPlayValue | undefined {
+function safeArcadePairPlayValue(value: unknown): PairPlayValue | undefined {
   if (value === undefined) return undefined;
   if (value === null || typeof value === 'boolean') return value;
   if (typeof value === 'number') return Number.isFinite(value) && Math.abs(value) <= 1_000_000 ? value : undefined;
   if (typeof value === 'string') return value.length <= 80 ? value : undefined;
   if (!isRecord(value)) return undefined;
   const keys = Object.keys(value);
-  if (keys.length !== 2 || !keys.includes('x') || !keys.includes('y')) return undefined;
-  const { x, y } = value;
-  return typeof x === 'number' && Number.isFinite(x) && Math.abs(x) <= 1_000_000 &&
-    typeof y === 'number' && Number.isFinite(y) && Math.abs(y) <= 1_000_000
-    ? { x, y }
-    : undefined;
+  if (keys.length === 2 && keys.includes('x') && keys.includes('y')) {
+    const { x, y } = value;
+    return typeof x === 'number' && Number.isFinite(x) && Math.abs(x) <= 1_000_000 &&
+      typeof y === 'number' && Number.isFinite(y) && Math.abs(y) <= 1_000_000
+      ? { x, y }
+      : undefined;
+  }
+  return undefined;
+}
+
+function safeGeneratedTemplateValue(control: string, value: unknown): PairPlayValue | undefined {
+  if (value === undefined) return ['profile.submit', 'wheel.spin', 'wheel.next'].includes(control) ? undefined : undefined;
+  if (!isRecord(value)) return undefined;
+  const keys = Object.keys(value);
+  if ((control === 'wheel.spin' || control === 'wheel.next') && keys.length === 0) return {};
+  if (control === 'profile.select' && keys.length === 2 && keys.includes('slot') && keys.includes('optionIndex') &&
+    Number.isSafeInteger(value.slot) && Number(value.slot) >= 0 && Number(value.slot) <= 2 &&
+    Number.isSafeInteger(value.optionIndex) && Number(value.optionIndex) >= 0 && Number(value.optionIndex) <= 2) {
+    return { slot: Number(value.slot), optionIndex: Number(value.optionIndex) };
+  }
+  if (control === 'profile.submit' && keys.length === 1 && Array.isArray(value.selections) && value.selections.length === 3 &&
+    value.selections.every((item) => Number.isSafeInteger(item) && Number(item) >= 0 && Number(item) <= 2)) {
+    return { selections: value.selections.map(Number) as [number, number, number] };
+  }
+  if ((control === 'rapid.answer' || control === 'rapid.timeout') &&
+    typeof value.questionId === 'string' && /^[A-Za-z0-9_-]{1,40}$/u.test(value.questionId)) {
+    if (control === 'rapid.timeout' && keys.length === 1) return { questionId: value.questionId };
+    if (control === 'rapid.answer' && keys.length === 2 && keys.includes('answer') && (value.answer === 0 || value.answer === 1)) {
+      return { questionId: value.questionId, answer: value.answer };
+    }
+  }
+  return undefined;
 }
 
 function safeCompleteResult(value: unknown): PairPlayCompleteResult | null {
@@ -163,6 +193,7 @@ export function GeneratedGameSandbox({
   remoteEvents = [],
   allowedControls,
   paused = false,
+  reducedMotion = false,
   timeoutMs = 8_000,
   title = 'AI 生成的双人小游戏',
   className = '',
@@ -171,6 +202,7 @@ export function GeneratedGameSandbox({
   onComplete,
   onReady,
   onError,
+  onEscape,
 }: GeneratedGameSandboxProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -184,6 +216,7 @@ export function GeneratedGameSandbox({
   const frameLoadCountRef = useRef(0);
   const bootstrapSeenRef = useRef(false);
   const initSentRef = useRef(false);
+  const lastSyncSignatureRef = useRef<string | null>(null);
   const timeoutRef = useRef<number | null>(null);
   const preflightRef = useRef<AbortController | null>(null);
   const onErrorRef = useRef(onError);
@@ -191,9 +224,19 @@ export function GeneratedGameSandbox({
   const runtimeUrl = useMemo(() => safeRuntimeUrl(artifact.runtimePath), [artifact.runtimePath]);
   const validArtifact = /^[a-zA-Z0-9_-]{8,160}$/u.test(artifact.artifactId) && /^[a-f0-9]{64}$/u.test(artifact.codeHash);
   const resolvedPlayMode = playMode ?? (state === undefined || state === null ? 'preview' : 'network');
-  const controls = useMemo(() => new Set(allowedControls.filter((control) => /^[a-z][a-z0-9._-]{0,39}$/u.test(control)).slice(0, 32)), [allowedControls]);
+  const controlList = useMemo(() => [...new Set(allowedControls.filter((control) => /^[a-z][a-z0-9._-]{0,39}$/u.test(control)))].slice(0, 32), [allowedControls]);
+  const controls = useMemo(() => new Set(controlList), [controlList]);
   const stateSnapshot = useMemo(() => safeJsonClone(state), [state]);
   const eventSnapshot = useMemo(() => safeJsonClone(remoteEvents.slice(-MAX_REMOTE_EVENTS), MAX_SYNC_BYTES), [remoteEvents]);
+  const syncPayload = useMemo(() => ({
+    playMode: resolvedPlayMode,
+    state: stateSnapshot,
+    events: eventSnapshot,
+    paused,
+    reducedMotion,
+    controls: controlList,
+  }), [controlList, eventSnapshot, paused, reducedMotion, resolvedPlayMode, stateSnapshot]);
+  const syncSignature = useMemo(() => JSON.stringify(syncPayload), [syncPayload]);
 
   const reportError = useCallback((message: string) => {
     preflightRef.current?.abort();
@@ -225,13 +268,14 @@ export function GeneratedGameSandbox({
       codeHash: artifact.codeHash,
       role: role.slice(0, 40),
       mode,
-      playMode: resolvedPlayMode,
       seed: Number.isFinite(seed) ? Math.trunc(seed) : 0,
-      state: stateSnapshot,
-      events: eventSnapshot,
-      paused,
+      ...syncPayload,
     });
-  }, [artifact.artifactId, artifact.codeHash, eventSnapshot, mode, paused, post, resolvedPlayMode, role, seed, stateSnapshot]);
+    // host.init already carries the same public state as host.sync. Remember
+    // its semantic payload so parent polling/re-renders cannot make generated
+    // games rebuild an unchanged interface and steal focus from the player.
+    lastSyncSignatureRef.current = syncSignature;
+  }, [artifact.artifactId, artifact.codeHash, mode, post, role, seed, syncPayload, syncSignature]);
 
   useEffect(() => {
     if (!runtimeUrl || !validArtifact) {
@@ -248,6 +292,7 @@ export function GeneratedGameSandbox({
     frameLoadCountRef.current = 0;
     bootstrapSeenRef.current = false;
     initSentRef.current = false;
+    lastSyncSignatureRef.current = null;
     const boundedTimeout = Math.max(3_000, Math.min(20_000, timeoutMs));
     const verificationTimer = window.setTimeout(() => {
       if (disposed) return;
@@ -337,10 +382,16 @@ export function GeneratedGameSandbox({
         if (!hasOnlyKeys(data, ['pairplay', 'type', 'channel', 'control', 'value'])) return;
         if (typeof data.control !== 'string' || !controls.has(data.control)) return;
         const hasValue = Object.prototype.hasOwnProperty.call(data, 'value');
-        const value = safePairPlayValue(data.value);
-        if (hasValue && value === undefined) return;
+        const generatedTemplateMode = mode === 'profile-riddle' || mode === 'keyword-wheel' || mode === 'rapid-choice';
+        const value = generatedTemplateMode
+          ? safeGeneratedTemplateValue(data.control, data.value)
+          : safeArcadePairPlayValue(data.value);
+        const optionalTemplateValue = generatedTemplateMode && data.value === undefined &&
+          ['profile.submit', 'wheel.spin', 'wheel.next'].includes(data.control);
+        if (hasValue && value === undefined && !optionalTemplateValue) return;
+        if (!hasValue && generatedTemplateMode && !['profile.submit', 'wheel.spin', 'wheel.next'].includes(data.control)) return;
         const input: PairPlayInput = { control: data.control, sequence: ++sequenceRef.current };
-        if (hasValue) input.value = value;
+        if (hasValue && value !== undefined) input.value = value;
         try {
           const pending = onInput(input);
           if (pending && typeof pending.then === 'function') void pending.catch(() => reportError('操作同步失败，请检查网络后重试。'));
@@ -354,16 +405,21 @@ export function GeneratedGameSandbox({
       } else if (data.type === 'game.error') {
         if (!hasOnlyKeys(data, ['pairplay', 'type', 'channel', 'message'])) return;
         if (typeof data.message === 'string' && data.message.length <= 200) reportError(data.message);
+      } else if (data.type === 'game.escape') {
+        if (!hasOnlyKeys(data, ['pairplay', 'type', 'channel'])) return;
+        onEscape?.();
       }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [controls, onComplete, onInput, onReady, reportError, sendInit, status]);
+  }, [controls, mode, onComplete, onEscape, onInput, onReady, reportError, sendInit, status]);
 
   useEffect(() => {
     if (status !== 'ready') return;
-    post('host.sync', { playMode: resolvedPlayMode, state: stateSnapshot, events: eventSnapshot });
-  }, [eventSnapshot, post, resolvedPlayMode, stateSnapshot, status]);
+    if (lastSyncSignatureRef.current === syncSignature) return;
+    lastSyncSignatureRef.current = syncSignature;
+    post('host.sync', syncPayload);
+  }, [post, status, syncPayload, syncSignature]);
 
   useEffect(() => {
     if (status !== 'ready') return;
@@ -380,6 +436,7 @@ export function GeneratedGameSandbox({
     frameLoadCountRef.current = 0;
     bootstrapSeenRef.current = false;
     initSentRef.current = false;
+    lastSyncSignatureRef.current = null;
     setErrorMessage(null);
     setVerifiedRuntimeUrl(null);
     setStatus('verifying');

@@ -11,7 +11,7 @@ export const DEFAULT_GAME_TYPES: GameTypeOption[] = [
   },
   {
     id: 'rapid-choice', templateId: 'rapid-choice', label: '极限2选1', enabled: true, available: true,
-    description: '双方分别在五秒内完成二选一，最后一起对照答案并继续聊。',
+    description: '双方分别在默认八秒内完成二选一，最后一起对照答案并继续聊。',
   },
   {
     id: 'custom', templateId: 'custom', label: '专属小游戏', enabled: true, available: true,
@@ -34,7 +34,7 @@ export function buildLocalPromptPreview(match: MatchPayload, option: GameTypeOpt
     : option.id === 'keyword-wheel'
       ? '生成 3–5 个公开聊天关键词作为转盘扇区，每个关键词配一条轻量追问。'
       : option.id === 'rapid-choice'
-        ? '生成 3–5 道五秒二选一，每题严格两个短选项，结束后引导双方解释为什么选择 A 或 B。'
+        ? '生成 3–5 道二选一，默认每题八秒（可在 3–15 秒内定制），每题严格两个短选项，结束后引导双方解释为什么选择 A 或 B。'
         : '生成一个真正可操作的双人小游戏：可以是投篮攻防、实时对抗、合作冒险或策略玩法。AI 需要编写完整 HTML/CSS/JavaScript，并通过 PairPlay v1 接收双方操作；试玩时由 AI 接管另一方。';
   return {
     templateId: option.id,

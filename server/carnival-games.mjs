@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { buildArcadeFallbackGame } from './arcade-game.mjs';
 import { buildExclusiveFallbackGame } from './exclusive-series.mjs';
+import { attachFallbackGeneratedTemplateRenderer } from './generated-template-game.mjs';
 
 const PUBLIC_TOPICS = [
   '博物馆', '逛展', '徒步', '爬山', '露营', '骑行', '跑步', '健身', '做饭', '摄影',
@@ -261,10 +262,11 @@ export function buildCarnivalFallbackGame(match, templateId, label, selection = 
             keyword: question.label,
             prompt: question.prompt,
             followUp: question.differentFollowUp,
+            followUps: [question.prompt, question.matchedFollowUp, question.differentFollowUp],
           })),
         }
-      : { kind: 'rapid-choice', roundSeconds: 5 };
-  return {
+      : { kind: 'rapid-choice', roundSeconds: 8 };
+  const game = {
     schemaVersion: 2,
     id: randomUUID(),
     matchId: match.match_id,
@@ -274,13 +276,13 @@ export function buildCarnivalFallbackGame(match, templateId, label, selection = 
       ? '凭第一感觉，猜 TA 的 3 个小细节'
       : templateId === 'keyword-wheel'
         ? '转一下，把一个话题聊深一点'
-        : '5 秒凭直觉，看看你们怎么选',
+        : '8 秒凭直觉，看看你们怎么选',
     eyebrow: `${gameLabel} · 游园会双人局`,
     description: templateId === 'profile-riddle'
       ? '从三组日常片段中各选一个小猜测，发给 TA 看看哪里挺准、哪里正好聊开。'
       : templateId === 'keyword-wheel'
-        ? '转盘会从公开聊天线索中抽一个关键词，再给出一条低压力追问。'
-        : '双方分别完成四道五秒二选一，最后一起查看答案和可以继续聊的原因。',
+        ? '转盘会从公开聊天线索中抽一个关键词，再给出三条可同步切换的低压力追问。'
+        : '双方分别完成四道八秒二选一，最后一起查看答案和可以继续聊的原因。',
     whyItFits: templateId === 'profile-riddle'
       ? '三个小猜测都来自轻松日常，猜反了也能自然接着聊。'
       : `从你们已经聊过的「${topic}」开始，不需要准备标准答案。`,
@@ -291,4 +293,5 @@ export function buildCarnivalFallbackGame(match, templateId, label, selection = 
     generatedBy: 'fallback',
     generatedAt: new Date().toISOString(),
   };
+  return attachFallbackGeneratedTemplateRenderer(game);
 }

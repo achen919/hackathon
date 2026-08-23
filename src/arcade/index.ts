@@ -22,10 +22,10 @@ export type {
   ArcadePlayer,
 } from './types';
 export type {
-  GeneratedGameArtifact,
   GeneratedGameSandboxProps,
   PairPlayCompleteResult,
   PairPlayInput,
   PairPlayMode,
   PairPlayValue,
 } from './GeneratedGameSandbox';
+export type { GeneratedGameArtifact } from '../types';

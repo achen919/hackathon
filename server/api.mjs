@@ -21,6 +21,13 @@ import {
 import { buildExclusiveFallbackGame, requireExclusiveSeries } from './exclusive-series.mjs';
 import { isPromptGameDefinition } from './prompt-game.mjs';
 import { createGameResultService } from './result-card.mjs';
+import { buildCarnivalFallbackGame } from './carnival-games.mjs';
+import {
+  assertGeneratedTemplateRenderer,
+  generatedTemplateArtifact,
+  hasGeneratedTemplateRenderer,
+  publicGeneratedTemplateGame,
+} from './generated-template-game.mjs';
 
 export const DEFAULT_UPSTREAM_URL =
   'https://intellimatch.cn/api/v7/hackathon/match?format=json';
@@ -106,6 +113,7 @@ function sendArcadeDocument(response, request, artifact, requestId) {
   response.setHeader('X-Frame-Options', 'SAMEORIGIN');
   response.setHeader('X-Request-Id', requestId);
   response.setHeader('X-Arcade-Code-Hash', artifact.codeHash);
+  response.setHeader('X-Generated-Code-Hash', artifact.codeHash);
   response.setHeader(
     'Content-Security-Policy',
     `default-src 'none'; script-src ${scriptSources}; script-src-attr 'none'; style-src 'unsafe-inline'; img-src 'none'; ` +
@@ -258,6 +266,12 @@ function safeCustomFallback(match, selection) {
   return game;
 }
 
+function safeGameFallback(match, selection) {
+  return selection.templateId === 'custom'
+    ? safeCustomFallback(match, selection)
+    : buildCarnivalFallbackGame(match, selection.templateId, selection.gameLabel, { prompt: selection.prompt });
+}
+
 function isSafeCustomGame(game, match, selection) {
   if (selection.seriesId === 'prompt-arcade') {
     try {
@@ -322,7 +336,18 @@ export function createApiHandler({
   }
 
   function publicCaseGame(game, expiresAt = Date.now() + 15 * 60_000) {
-    const projected = structuredClone(game);
+    let projected = structuredClone(game);
+    if (hasGeneratedTemplateRenderer(projected)) {
+      const artifact = generatedTemplateArtifact(projected);
+      pruneRuntimeArtifacts();
+      const runtimeExpiresAt = Math.max(expiresAt, Date.now() + 15 * 60_000);
+      runtimeArtifacts.set(artifact.artifactId, {
+        codeHash: artifact.codeHash,
+        document: artifact.document,
+        expiresAt: runtimeExpiresAt,
+      });
+      projected = publicGeneratedTemplateGame(projected, '/api/games/runtime');
+    }
     if (
       projected?.schemaVersion === ARCADE_GAME_SCHEMA_VERSION &&
       projected?.engine === ARCADE_GAME_ENGINE &&
@@ -503,10 +528,6 @@ export function createApiHandler({
       sendJson(response, error.status ?? 400, { error: error.message, code: 'INVALID_GAME_PROMPT', request_id: requestId }, requestId);
       return;
     }
-    if (!config.apiKey && template.id !== 'custom') {
-      sendJson(response, 503, { error: 'AI game service is not configured', code: 'AI_NOT_CONFIGURED', request_id: requestId }, requestId);
-      return;
-    }
     const selection = {
       templateId: configuredType.id,
       gameLabel: configuredType.label,
@@ -525,7 +546,7 @@ export function createApiHandler({
       return;
     }
     if (!config.apiKey) {
-      const game = safeCustomFallback(match, selection);
+      const game = safeGameFallback(match, selection);
       const expiresAt = Date.now() + 15 * 60_000;
       gameCache.set(key, {
         game,
@@ -571,6 +592,12 @@ export function createApiHandler({
       if (template.id === 'custom' && !isSafeCustomGame(game, match, selection)) {
         throw new Error('AI game did not match the selected prompt-game definition');
       }
+      if (template.id !== 'custom') {
+        if (!hasGeneratedTemplateRenderer(game)) {
+          throw new Error('AI game did not include a generated-template-v1 renderer');
+        }
+        assertGeneratedTemplateRenderer(game.renderer, template.id);
+      }
       const expiresAt = Date.now() + 15 * 60_000;
       gameCache.set(key, { game, expiresAt });
       sendJson(response, 200, { game: publicCaseGame(game, expiresAt), cached: false }, requestId);
@@ -584,8 +611,8 @@ export function createApiHandler({
           : status === 429
             ? 'AI_RATE_LIMITED'
             : 'AI_GENERATION_FAILED';
-      if (template.id === 'custom') {
-        const game = safeCustomFallback(match, selection);
+      if (template.id === 'custom' || ['profile-riddle', 'keyword-wheel', 'rapid-choice'].includes(template.id)) {
+        const game = safeGameFallback(match, selection);
         const expiresAt = Date.now() + 15 * 60_000;
         gameCache.set(key, {
           game,
