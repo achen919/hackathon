@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { buildArcadeFallbackGame } from './arcade-game.mjs';
 import { buildExclusiveFallbackGame } from './exclusive-series.mjs';
 
 const PUBLIC_TOPICS = [
@@ -124,6 +125,9 @@ export function carnivalMatchFromState(state) {
 
 export function buildCarnivalFallbackGame(match, templateId, label, selection = {}) {
   if (templateId === 'custom') {
+    if (selection.seriesId === 'prompt-arcade') {
+      return buildArcadeFallbackGame(match, label || '专属小游戏', selection);
+    }
     return buildExclusiveFallbackGame(match, selection.seriesId, label || '专属小游戏', selection);
   }
   const topic = publicTopic(match.messages);

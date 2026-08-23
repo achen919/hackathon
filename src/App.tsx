@@ -7,11 +7,11 @@ import { RollingGameTitle } from './components/RollingGameTitle';
 import { TemplateGameDialog } from './components/TemplateGameDialog';
 import { GameResultCardView } from './components/GameResultCard';
 import type { TemplateGameResult } from './components/TemplateGameStage';
-import { normalizeCarnivalExclusiveGame } from './carnival-api';
-import type { CarnivalExclusiveGameDefinition, CarnivalGamePreview } from './carnival-types';
+import { buildArcadeDefinition } from './arcade';
+import { normalizeCarnivalPromptGame } from './carnival-api';
+import type { CarnivalGamePreview, CarnivalPromptGameDefinition } from './carnival-types';
 import { demoMatch } from './data/demoMatch';
 import { buildLocalPromptPreview, DEFAULT_GAME_TYPES } from './game/catalog';
-import { buildDemoPromptGame } from './game/demo-prompt-game';
 import { buildFallbackResultCard, type ResultCardRequest } from './game-result';
 import { buildFallbackGame, isGameDefinition } from './game/questions';
 import {
@@ -77,8 +77,18 @@ function templateSteps(templateId: GameTemplateId, questionLabels: string[]) {
   return questionLabels.length > 0 ? questionLabels : ['修改专属 Prompt', '试玩三种交互', '收下续聊话题'];
 }
 
-function customGameShell(match: MatchPayload, game: CarnivalExclusiveGameDefinition) {
+function customGameShell(match: MatchPayload, game: CarnivalPromptGameDefinition) {
   const shell = buildFallbackGame(match, 'custom', '专属小游戏');
+  if (game.engine === 'arcade-v1') {
+    return {
+      ...shell,
+      title: game.title,
+      description: game.description,
+      topics: game.topics,
+      generatedBy: game.generatedBy,
+      generatedAt: new Date().toISOString(),
+    };
+  }
   const topics = [...new Set(game.questions.map((question) => question.label))].slice(0, 3);
   return {
     ...shell,
@@ -133,6 +143,7 @@ export default function App() {
   const [gameOpen, setGameOpen] = useState(false);
   const [casePromptOpen, setCasePromptOpen] = useState(false);
   const [casePromptPreview, setCasePromptPreview] = useState<CarnivalGamePreview | null>(null);
+  const [caseLocalArcade, setCaseLocalArcade] = useState<ReturnType<typeof buildArcadeDefinition> | null>(null);
   const [promptStudioOpen, setPromptStudioOpen] = useState(false);
   const [gameTypes, setGameTypes] = useState<GameTypeOption[]>(DEFAULT_GAME_TYPES);
   const [selectedTemplateId, setSelectedTemplateId] = useState<GameTemplateId>('profile-riddle');
@@ -153,7 +164,14 @@ export default function App() {
 
   const visibleGameTypes = useMemo(() => {
     const visible = gameTypes.filter((option) => option.enabled);
-    return visible.length > 0 ? visible : DEFAULT_GAME_TYPES;
+    const options = visible.length > 0 ? visible : DEFAULT_GAME_TYPES;
+    return options.map((option) => option.id === 'custom'
+      ? {
+          ...option,
+          available: true,
+          description: '编辑一句 Prompt，AI 现场编写并运行完整 HTML/CSS/JavaScript 小游戏；案例页直接试玩，无需登录。',
+        }
+      : option);
   }, [gameTypes]);
   const selectedOption = visibleGameTypes.find((option) => option.id === selectedTemplateId) ?? visibleGameTypes[0];
   const peer = otherParticipant(viewer);
@@ -223,6 +241,7 @@ export default function App() {
     setGameOpen(false);
     setCasePromptOpen(false);
     setCasePromptPreview(null);
+    setCaseLocalArcade(null);
     setPromptStudioOpen(false);
     setPromptStatus('idle');
     setPromptText('');
@@ -340,6 +359,8 @@ export default function App() {
   }
 
   function launchGame(game: ReturnType<typeof buildFallbackGame>, mode: 'ready' | 'fallback', notice: string) {
+    setCasePromptPreview(null);
+    setCaseLocalArcade(null);
     setActiveGame(game);
     setGameGeneration(mode);
     setSessionStatus('playing');
@@ -351,7 +372,7 @@ export default function App() {
   }
 
   function launchCasePromptGame(
-    game: CarnivalExclusiveGameDefinition,
+    game: CarnivalPromptGameDefinition,
     mode: 'ready' | 'fallback',
     notice: string,
   ) {
@@ -360,9 +381,10 @@ export default function App() {
     setActiveGame(customGameShell(currentMatch, game));
     setCasePromptPreview({
       previewToken,
-      expiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+      expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
       game,
     });
+    setCaseLocalArcade(null);
     setGameGeneration(mode);
     setSessionStatus('playing');
     setCompletedSummary('');
@@ -373,19 +395,32 @@ export default function App() {
     setCasePromptOpen(true);
   }
 
+  function launchLocalArcade(notice: string) {
+    const currentMatch = { ...match, messages, message_count: messages.length };
+    const publicTopics = [...new Set(messages
+      .filter((item) => item.type === 'text')
+      .flatMap((item) => ['篮球', '运动', '旅行', '电影', '音乐', '游戏', '周末', '美食'].filter((topic) => item.content.includes(topic))))]
+      .slice(0, 5);
+    const game = buildArcadeDefinition(promptText, { topicTokens: publicTopics, seed: Date.now() });
+    const shell = buildFallbackGame(currentMatch, 'custom', '专属小游戏');
+    setActiveGame({ ...shell, title: game.title, description: game.subtitle, topics: game.topicTokens.length >= 2 ? game.topicTokens : ['真实操作', '双人互动', '安全离线'] });
+    setCasePromptPreview(null);
+    setCaseLocalArcade(game);
+    setGameGeneration('fallback');
+    setSessionStatus('playing');
+    setCompletedSummary('');
+    setSessionKey(`case-local-${Date.now()}`);
+    setPromptStudioOpen(false);
+    setPromptStatus('editing');
+    setGameOpen(false);
+    setCasePromptOpen(true);
+  }
+
   async function generateAndStart() {
     if (!selectedOption.available || promptText.trim().length < 20 || promptStatus === 'generating') return;
     if (selectedOption.id === 'custom') {
-      const currentMatch = { ...match, messages, message_count: messages.length };
-      const fallback = buildDemoPromptGame(currentMatch, promptText);
-      if (aiStatus?.configured === false || !gameContextId) {
-        launchCasePromptGame(
-          fallback,
-          'fallback',
-          aiStatus?.configured === false
-            ? 'AI 尚未在管理后台可用，已按你的 Prompt 用安全本地引擎生成三轮可玩游戏。'
-            : '当前是本地演示案例，已按你的 Prompt 生成三轮可玩游戏。',
-        );
+      if (!gameContextId) {
+        launchLocalArcade('当前案例没有服务端上下文，已按 Prompt 打开真实可操作的安全离线游戏。抽取在线案例后可执行 AI 刚生成的代码。');
         return;
       }
       const runVersion = ++generationVersionRef.current;
@@ -406,7 +441,7 @@ export default function App() {
         });
         const payload = (await response.json()) as { game?: unknown; cached?: boolean; code?: string };
         if (!response.ok || !payload.game) throw new Error(payload.code ?? `HTTP ${response.status}`);
-        const game = normalizeCarnivalExclusiveGame(payload.game);
+        const game = normalizeCarnivalPromptGame(payload.game);
         if (runVersion !== generationVersionRef.current) return;
         if (game.generatedBy === 'ai') {
           setAiStatus((current) => ({ configured: true, model: current?.model ?? null, gameTypes: current?.gameTypes ?? gameTypes }));
@@ -417,8 +452,8 @@ export default function App() {
           game.generatedBy === 'ai'
             ? payload.cached
               ? '已取回这份 Prompt 对应的同一局可玩游戏。'
-              : `AI 已生成「${game.title}」，可以直接在案例页试玩。`
-            : '在线服务已用安全引擎生成同一套三轮交互。',
+              : `AI 已写好「${game.title}」的完整代码，可以直接在隔离沙箱试玩。`
+            : 'AI 服务暂不可用，已切换到真实可操作的安全离线游戏代码。',
         );
       } catch (error) {
         if (runVersion !== generationVersionRef.current) return;
@@ -429,7 +464,7 @@ export default function App() {
           : code === 'AI_REFRESH_LIMIT'
             ? '本案例智能换题次数已用完，已用安全本地引擎生成。'
             : 'AI 此刻没有及时返回，已按你的 Prompt 生成本地可玩版。';
-        launchCasePromptGame(fallback, 'fallback', notice);
+        launchLocalArcade(notice);
       }
       return;
     }
@@ -474,7 +509,7 @@ export default function App() {
   function startOrResumeGame() {
     if (!gameEligible || gameGeneration === 'loading') return;
     if (sessionStatus === 'playing') {
-      if (activeGame.templateId === 'custom' && casePromptPreview) setCasePromptOpen(true);
+      if (activeGame.templateId === 'custom' && (casePromptPreview || caseLocalArcade)) setCasePromptOpen(true);
       else setGameOpen(true);
       return;
     }
@@ -543,9 +578,8 @@ export default function App() {
 
   function completeCasePromptGame() {
     setSessionStatus('complete');
-    setCompletedSummary('三轮 Prompt-to-Game 试玩已完成 · 可以顺着结尾问句继续聊');
+    setCompletedSummary('真实小游戏试玩已完成 · 换个角色或 Prompt 还能生成另一局');
     appendResultCard({ type: 'custom', completed: true, gameType: activeGame.gameType });
-    setCasePromptOpen(false);
   }
 
   function restartCasePromptGame() {
@@ -669,13 +703,13 @@ export default function App() {
         </section>
 
         <section className="round-card">
-          <div className="section-heading"><div><span className="eyebrow">{displayGame.templateId === 'custom' ? displayGame.generatedBy === 'ai' ? 'AI 专属游戏' : 'PROMPT 安全引擎' : displayGame.generatedBy === 'ai' ? 'AI 专属题面' : '固定玩法模板'}</span><h2>{displayGame.gameType}</h2></div><span className="round-count">{sessionStatus === 'complete' ? '完成' : sessionStatus === 'playing' ? '进行中' : '待开始'}</span></div>
+          <div className="section-heading"><div><span className="eyebrow">{displayGame.templateId === 'custom' ? displayGame.generatedBy === 'ai' ? 'AI 生成代码' : '隔离代码沙箱' : displayGame.generatedBy === 'ai' ? 'AI 专属题面' : '固定玩法模板'}</span><h2>{displayGame.gameType}</h2></div><span className="round-count">{sessionStatus === 'complete' ? '完成' : sessionStatus === 'playing' ? '进行中' : '待开始'}</span></div>
           <ol className="round-list">{steps.map((step, index) => <li className={sessionStatus === 'complete' ? 'is-done' : sessionStatus === 'playing' && index === 0 ? 'is-current' : ''} key={`${displayGame.templateId}-${step}`}><span>{sessionStatus === 'complete' ? '✓' : index + 1}</span><div><strong>{step}</strong><small>{index === 0 ? firstStepNote[displayGame.templateId] : '玩法内会提示下一步'}</small></div></li>)}</ol>
         </section>
       </aside>
 
       <GamePromptStudio open={promptStudioOpen} options={visibleGameTypes} selectedId={selectedOption.id} prompt={promptText} status={promptStatus} error={promptError} usesAi={aiStatus?.configured !== false && Boolean(gameContextId)} onSelect={(templateId) => void loadPrompt(templateId)} onPromptChange={(value) => { setPromptText(value); setPromptStatus('editing'); setPromptError(null); }} onStart={() => void generateAndStart()} onClose={closePromptStudio} />
-      {casePromptPreview && <CasePromptGameDialog key={sessionKey} open={casePromptOpen} preview={casePromptPreview} onComplete={completeCasePromptGame} onRestart={restartCasePromptGame} onClose={() => setCasePromptOpen(false)} />}
+      {(casePromptPreview || caseLocalArcade) && <CasePromptGameDialog key={sessionKey} open={casePromptOpen} preview={casePromptPreview ?? undefined} localArcade={caseLocalArcade ?? undefined} onComplete={completeCasePromptGame} onRestart={restartCasePromptGame} onClose={() => setCasePromptOpen(false)} />}
       <TemplateGameDialog open={gameOpen} game={activeGame} match={{ ...match, messages, message_count: messages.length }} viewer={viewer} sessionKey={sessionKey} onViewerChange={setViewer} onFollowUp={bringFollowUpToChat} onComplete={completeGame} onRestart={() => { setSessionStatus('playing'); setCompletedSummary(''); }} onClose={() => setGameOpen(false)} />
       <ProfileExplorer open={profilesOpen} match={match} viewer={viewer} onViewerChange={setViewer} onClose={() => setProfilesOpen(false)} />
     </div>

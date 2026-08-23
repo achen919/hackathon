@@ -21,6 +21,10 @@ import type {
   CarnivalTextMessage,
   CarnivalExclusiveGameDefinition,
   CarnivalExclusiveInteraction,
+  CarnivalArcadeGameDefinition,
+  CarnivalArcadeKind,
+  CarnivalArcadePreset,
+  CarnivalPromptGameDefinition,
 } from './carnival-types';
 import { exclusiveSeriesById, type CarnivalExclusiveSeriesId } from './carnival-exclusive';
 
@@ -203,6 +207,19 @@ const PRESENTATION_TONES = new Set(['coral', 'violet', 'mint', 'gold', 'blue']);
 const PRESENTATION_SCENES = new Set(['court', 'archive', 'cinema', 'lab', 'cosmos']);
 const PRESENTATION_MOTIONS = new Set(['pop', 'float', 'slide', 'orbit', 'pulse']);
 const REVEAL_EFFECTS = new Set(['confetti', 'ripple', 'spotlight', 'stars', 'cards']);
+const ARCADE_KINDS = new Set<CarnivalArcadeKind>(['competition', 'cooperation', 'sport', 'adventure', 'strategy']);
+const ARCADE_PRESETS = new Set<CarnivalArcadePreset>([
+  'dash-duel', 'tandem-rescue', 'basketball-duel', 'relic-expedition', 'grid-command',
+]);
+const ARCADE_THEMES = new Set(['sunset', 'neon', 'forest', 'ocean', 'cosmos']);
+const ARCADE_DIFFICULTIES = new Set(['easy', 'normal', 'hard']);
+const ARCADE_PARAM_RANGES = {
+  durationMs: [20_000, 90_000], tickMs: [40, 250], arenaWidth: [600, 1_600],
+  arenaHeight: [320, 900], primarySpeed: [40, 1_500], secondarySpeed: [40, 1_200],
+  gravity: [0, 2_400], targetSize: [20, 280], projectileRadius: [4, 40],
+  targetScore: [1, 20], maxRounds: [1, 30],
+} as const;
+const ARCADE_PARAM_KEYS = Object.keys(ARCADE_PARAM_RANGES) as Array<keyof typeof ARCADE_PARAM_RANGES>;
 
 function enumValue<T extends string>(value: unknown, allowed: Set<string>, fallback: T): T {
   return typeof value === 'string' && allowed.has(value) ? value as T : fallback;
@@ -289,6 +306,109 @@ export function normalizeCarnivalExclusiveGame(value: unknown): CarnivalExclusiv
   };
 }
 
+function arcadeText(value: unknown, fallback: string, maximum: number) {
+  const normalized = text(value, fallback).replace(/[\u0000-\u001F\u007F]/gu, ' ').trim();
+  return (normalized || fallback).slice(0, maximum);
+}
+
+function arcadeRoles(value: unknown) {
+  if (!Array.isArray(value) || value.length !== 2) {
+    throw new CarnivalApiError('AI 游戏缺少双方角色。', 0, 'CARNIVAL_BAD_RESPONSE');
+  }
+  const roles = value.map((item) => {
+    if (!isObject(item) || !Array.isArray(item.controls)) {
+      throw new CarnivalApiError('AI 游戏角色格式错误。', 0, 'CARNIVAL_BAD_RESPONSE');
+    }
+    const controls = item.controls.filter((control): control is string => (
+      typeof control === 'string' && /^[a-z][a-z0-9._-]{0,39}$/u.test(control)
+    ));
+    if (controls.length === 0 || controls.length !== item.controls.length || new Set(controls).size !== controls.length) {
+      throw new CarnivalApiError('AI 游戏包含无法识别的操作。', 0, 'CARNIVAL_BAD_RESPONSE');
+    }
+    const id = arcadeText(item.id, '', 40);
+    if (!/^[a-z][a-z0-9-]{1,39}$/u.test(id)) {
+      throw new CarnivalApiError('AI 游戏角色标识无效。', 0, 'CARNIVAL_BAD_RESPONSE');
+    }
+    return {
+      id,
+      label: arcadeText(item.label, '游戏角色', 40),
+      objective: arcadeText(item.objective, '完成这一局的目标', 100),
+      controls,
+    };
+  });
+  if (new Set(roles.map((role) => role.id)).size !== roles.length) {
+    throw new CarnivalApiError('AI 游戏角色不能重复。', 0, 'CARNIVAL_BAD_RESPONSE');
+  }
+  return roles;
+}
+
+export function normalizeCarnivalArcadeGame(value: unknown): CarnivalArcadeGameDefinition {
+  const source = isObject(value) && isObject(value.definition) ? value.definition : value;
+  if (!isObject(source) || source.schemaVersion !== 4 || source.engine !== 'arcade-v1' ||
+    source.templateId !== 'custom' || source.seriesId !== 'prompt-arcade') {
+    throw new CarnivalApiError('AI 游戏使用了不支持的运行协议。', 0, 'CARNIVAL_BAD_RESPONSE');
+  }
+  if (source.generatedBy !== 'ai' && source.generatedBy !== 'fallback') {
+    throw new CarnivalApiError('AI 游戏缺少生成来源。', 0, 'CARNIVAL_BAD_RESPONSE');
+  }
+  const arcade = isObject(source.arcade) ? source.arcade : null;
+  const artifact = isObject(source.artifact) ? source.artifact : null;
+  if (!arcade || !artifact || !ARCADE_KINDS.has(arcade.kind as CarnivalArcadeKind) ||
+    !ARCADE_PRESETS.has(arcade.preset as CarnivalArcadePreset) ||
+    !ARCADE_THEMES.has(String(arcade.theme)) || !ARCADE_DIFFICULTIES.has(String(arcade.difficulty))) {
+    throw new CarnivalApiError('AI 游戏缺少受支持的玩法。', 0, 'CARNIVAL_BAD_RESPONSE');
+  }
+  const paramsSource = isObject(arcade.params) ? arcade.params : null;
+  if (!paramsSource || ARCADE_PARAM_KEYS.some((key) => {
+    const value = paramsSource[key];
+    const [minimum, maximum] = ARCADE_PARAM_RANGES[key];
+    return typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum || value > maximum;
+  })) {
+    throw new CarnivalApiError('AI 游戏参数格式错误。', 0, 'CARNIVAL_BAD_RESPONSE');
+  }
+  const artifactId = text(artifact.artifactId);
+  const codeHash = text(artifact.codeHash);
+  const runtimePath = text(artifact.runtimePath);
+  if (Object.keys(artifact).some((key) => !['artifactId', 'codeHash', 'runtimePath'].includes(key)) ||
+    !/^artifact_[A-Za-z0-9_-]{32,80}$/u.test(artifactId) || !/^[a-f0-9]{64}$/u.test(codeHash) ||
+    !/^\/api\/(?:carnival\/)?games\/runtime\/artifact_[A-Za-z0-9_-]{32,80}$/u.test(runtimePath)) {
+    throw new CarnivalApiError('AI 游戏代码版本不完整。', 0, 'CARNIVAL_BAD_RESPONSE');
+  }
+  const topics = Array.isArray(source.topics)
+    ? source.topics.filter((item): item is string => typeof item === 'string').map((item) => item.trim().slice(0, 24)).filter(Boolean).slice(0, 4)
+    : [];
+  if (topics.length < 2) throw new CarnivalApiError('AI 游戏缺少主题。', 0, 'CARNIVAL_BAD_RESPONSE');
+  return {
+    schemaVersion: 4,
+    templateId: 'custom',
+    seriesId: 'prompt-arcade',
+    engine: 'arcade-v1',
+    generatedBy: source.generatedBy,
+    title: arcadeText(source.title, 'AI 双人小游戏', 60),
+    eyebrow: arcadeText(source.eyebrow, 'AI GAME', 30),
+    description: arcadeText(source.description, '一局刚刚生成的双人互动游戏。', 200),
+    whyItFits: arcadeText(source.whyItFits, '依据公开聊天主题生成。', 200),
+    estimatedMinutes: Math.max(1, Math.min(3, Math.round(number(source.estimatedMinutes, 2)))),
+    topics,
+    arcade: {
+      kind: arcade.kind as CarnivalArcadeKind,
+      preset: arcade.preset as CarnivalArcadePreset,
+      theme: arcade.theme as CarnivalArcadeGameDefinition['arcade']['theme'],
+      difficulty: arcade.difficulty as CarnivalArcadeGameDefinition['arcade']['difficulty'],
+      params: Object.fromEntries(ARCADE_PARAM_KEYS.map((key) => [key, number(paramsSource[key])])),
+      roles: arcadeRoles(arcade.roles),
+    },
+    artifact: { artifactId, codeHash, runtimePath },
+  };
+}
+
+export function normalizeCarnivalPromptGame(value: unknown): CarnivalPromptGameDefinition {
+  const source = isObject(value) && isObject(value.definition) ? value.definition : value;
+  return isObject(source) && (source.schemaVersion === 4 || source.engine === 'arcade-v1')
+    ? normalizeCarnivalArcadeGame(source)
+    : normalizeCarnivalExclusiveGame(source);
+}
+
 function gamePreview(value: unknown): CarnivalGamePreview {
   if (!isObject(value)) throw new CarnivalApiError('可玩预览响应格式错误。', 0, 'CARNIVAL_BAD_RESPONSE');
   const previewToken = text(value.previewToken);
@@ -296,7 +416,7 @@ function gamePreview(value: unknown): CarnivalGamePreview {
   if (!previewToken || !expiresAt) {
     throw new CarnivalApiError('可玩预览缺少版本令牌。', 0, 'CARNIVAL_BAD_RESPONSE');
   }
-  return { previewToken, expiresAt, game: normalizeCarnivalExclusiveGame(value.game) };
+  return { previewToken, expiresAt, game: normalizeCarnivalPromptGame(value.game) };
 }
 
 async function requestJson(

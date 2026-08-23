@@ -1,4 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import {
+  ARCADE_GAME_ENGINE,
+  ARCADE_GAME_SCHEMA_VERSION,
+  arcadeScriptCspSources,
+  assertArcadeGameDefinition,
+  buildArcadeFallbackGame,
+} from './arcade-game.mjs';
 import { clearSessionCookie, createAdminSessions, sessionCookie, verifyAdminPassword } from './admin-auth.mjs';
 import { createAiCapacityGate } from './ai-capacity.mjs';
 import { compactMatchForAi, createAiGameService } from './ai-game.mjs';
@@ -85,6 +92,31 @@ function sendJson(response, statusCode, payload, requestId, extraHeaders = {}) {
   for (const [name, value] of Object.entries(extraHeaders)) response.setHeader(name, value);
   response.statusCode = statusCode;
   response.end(JSON.stringify(payload));
+}
+
+function sendArcadeDocument(response, request, artifact, requestId) {
+  const scriptSources = arcadeScriptCspSources(artifact.document).join(' ');
+  response.statusCode = 200;
+  response.setHeader('Content-Type', 'text/html; charset=utf-8');
+  response.setHeader('Cache-Control', 'no-store');
+  response.setHeader('X-Content-Type-Options', 'nosniff');
+  response.setHeader('Referrer-Policy', 'no-referrer');
+  response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  response.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+  response.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  response.setHeader('X-Request-Id', requestId);
+  response.setHeader('X-Arcade-Code-Hash', artifact.codeHash);
+  response.setHeader(
+    'Content-Security-Policy',
+    `default-src 'none'; script-src ${scriptSources}; script-src-attr 'none'; style-src 'unsafe-inline'; img-src 'none'; ` +
+      "font-src 'none'; media-src 'none'; connect-src 'none'; object-src 'none'; frame-src 'none'; " +
+      "child-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts",
+  );
+  response.setHeader(
+    'Permissions-Policy',
+    'accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), sync-xhr=(), usb=()',
+  );
+  response.end(request.method === 'HEAD' ? '' : artifact.document);
 }
 
 function requestPath(request) {
@@ -211,6 +243,9 @@ function pruneCache(cache, now = Date.now()) {
 }
 
 function safeCustomFallback(match, selection) {
+  if (selection.seriesId === 'prompt-arcade') {
+    return buildArcadeFallbackGame(match, selection.gameLabel, { prompt: selection.prompt });
+  }
   const game = buildExclusiveFallbackGame(
     match,
     selection.seriesId,
@@ -224,6 +259,14 @@ function safeCustomFallback(match, selection) {
 }
 
 function isSafeCustomGame(game, match, selection) {
+  if (selection.seriesId === 'prompt-arcade') {
+    try {
+      assertArcadeGameDefinition(game, { hasUnsafeText: hasUnsafeGameText });
+      return game.matchId === match.match_id && game.seriesId === selection.seriesId;
+    } catch {
+      return false;
+    }
+  }
   return (
     isPromptGameDefinition(game, { hasUnsafeText: hasUnsafeGameText }) &&
     game.matchId === match.match_id &&
@@ -268,7 +311,39 @@ export function createApiHandler({
   const gameCache = new Map();
   const inFlight = new Map();
   const matchContexts = new Map();
+  const runtimeArtifacts = new Map();
   let activeLogins = 0;
+
+  function pruneRuntimeArtifacts(now = Date.now()) {
+    for (const [artifactId, artifact] of runtimeArtifacts) {
+      if (artifact.expiresAt <= now) runtimeArtifacts.delete(artifactId);
+    }
+    while (runtimeArtifacts.size > 200) runtimeArtifacts.delete(runtimeArtifacts.keys().next().value);
+  }
+
+  function publicCaseGame(game, expiresAt = Date.now() + 15 * 60_000) {
+    const projected = structuredClone(game);
+    if (
+      projected?.schemaVersion === ARCADE_GAME_SCHEMA_VERSION &&
+      projected?.engine === ARCADE_GAME_ENGINE &&
+      projected.artifact?.artifactId &&
+      projected.artifact?.document
+    ) {
+      pruneRuntimeArtifacts();
+      const runtimeExpiresAt = Math.max(expiresAt, Date.now() + 15 * 60_000);
+      runtimeArtifacts.set(projected.artifact.artifactId, {
+        codeHash: projected.artifact.codeHash,
+        document: projected.artifact.document,
+        expiresAt: runtimeExpiresAt,
+      });
+      projected.artifact = {
+        artifactId: projected.artifact.artifactId,
+        codeHash: projected.artifact.codeHash,
+        runtimePath: `/api/games/runtime/${projected.artifact.artifactId}`,
+      };
+    }
+    return projected;
+  }
 
   function storeMatchContext(match) {
     const now = Date.now();
@@ -443,7 +518,7 @@ export function createApiHandler({
     const cached = gameCache.get(key);
     if (!body.fresh && cached?.expiresAt > Date.now()) {
       sendJson(response, 200, {
-        game: cached.game,
+        game: publicCaseGame(cached.game, cached.expiresAt),
         cached: true,
         ...(cached.fallback ? { fallback: true, providerUnavailable: cached.providerUnavailable } : {}),
       }, requestId);
@@ -451,14 +526,15 @@ export function createApiHandler({
     }
     if (!config.apiKey) {
       const game = safeCustomFallback(match, selection);
+      const expiresAt = Date.now() + 15 * 60_000;
       gameCache.set(key, {
         game,
-        expiresAt: Date.now() + 15 * 60_000,
+        expiresAt,
         fallback: true,
         providerUnavailable: 'AI_NOT_CONFIGURED',
       });
       sendJson(response, 200, {
-        game,
+        game: publicCaseGame(game, expiresAt),
         cached: false,
         fallback: true,
         providerUnavailable: 'AI_NOT_CONFIGURED',
@@ -495,8 +571,9 @@ export function createApiHandler({
       if (template.id === 'custom' && !isSafeCustomGame(game, match, selection)) {
         throw new Error('AI game did not match the selected prompt-game definition');
       }
-      gameCache.set(key, { game, expiresAt: Date.now() + 15 * 60_000 });
-      sendJson(response, 200, { game, cached: false }, requestId);
+      const expiresAt = Date.now() + 15 * 60_000;
+      gameCache.set(key, { game, expiresAt });
+      sendJson(response, 200, { game: publicCaseGame(game, expiresAt), cached: false }, requestId);
     } catch (error) {
       const timedOut = error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name);
       const status = error?.status;
@@ -509,14 +586,15 @@ export function createApiHandler({
             : 'AI_GENERATION_FAILED';
       if (template.id === 'custom') {
         const game = safeCustomFallback(match, selection);
+        const expiresAt = Date.now() + 15 * 60_000;
         gameCache.set(key, {
           game,
-          expiresAt: Date.now() + 15 * 60_000,
+          expiresAt,
           fallback: true,
           providerUnavailable: code,
         });
         sendJson(response, 200, {
-          game,
+          game: publicCaseGame(game, expiresAt),
           cached: false,
           fallback: true,
           providerUnavailable: code,
@@ -737,6 +815,7 @@ export function createApiHandler({
       const body = await readJsonBody(request, 128_000);
       const config = await configStore.update(body);
       gameCache.clear();
+      runtimeArtifacts.clear();
       sendJson(response, 200, publicConfig(config), requestId);
     } catch (error) {
       const message = error.message === 'AI configuration encryption key is missing or invalid' ? 'Server encryption is not configured' : error.message;
@@ -767,6 +846,7 @@ export function createApiHandler({
 
   return async function handleApiRequest(request, response) {
     const path = requestPath(request);
+    const runtimeMatch = path.match(/^\/api\/games\/runtime\/(artifact_[A-Za-z0-9_-]{32,80})$/);
     const knownPaths = new Set([
       '/api/health',
       '/api/match',
@@ -778,8 +858,25 @@ export function createApiHandler({
       '/api/admin/config',
       '/api/admin/models',
     ]);
-    if (!knownPaths.has(path)) return false;
+    if (!knownPaths.has(path) && !runtimeMatch) return false;
     const requestId = randomUUID();
+
+    if (runtimeMatch) {
+      if (!['GET', 'HEAD'].includes(request.method ?? 'GET')) {
+        methodNotAllowed(response, requestId, 'GET, HEAD');
+      } else {
+        pruneRuntimeArtifacts();
+        const artifact = runtimeArtifacts.get(runtimeMatch[1]);
+        if (!artifact) {
+          sendJson(response, 404, {
+            error: 'Arcade runtime was not found',
+            code: 'ARCADE_ARTIFACT_NOT_FOUND',
+            request_id: requestId,
+          }, requestId);
+        } else sendArcadeDocument(response, request, artifact, requestId);
+      }
+      return true;
+    }
 
     if (path === '/api/health') {
       if (!['GET', 'HEAD'].includes(request.method ?? 'GET')) methodNotAllowed(response, requestId, 'GET, HEAD');

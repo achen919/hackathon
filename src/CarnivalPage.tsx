@@ -20,7 +20,6 @@ import {
   buildCarnivalExclusivePrompt,
   CARNIVAL_EXCLUSIVE_SERIES,
   exclusiveSeriesById,
-  recommendCarnivalExclusiveSeries,
   summarizeCarnivalTopics,
   type CarnivalExclusiveSeriesId,
 } from './carnival-exclusive';
@@ -70,15 +69,15 @@ const DEFAULT_GAME_TYPES: CarnivalGameType[] = [
   {
     templateId: 'custom',
     label: '专属小游戏',
-    description: '用 AI 游戏工坊现场生成，或从五个三轮双人系列中挑一局。',
+    description: '写一句 Prompt，AI 现场编写并运行一局真正可操作的双人游戏。',
     enabled: true,
     available: true,
   },
 ];
 
-const PROMPT_GAME_STAGES = ['理解你们', '选择玩法', '搭建场景', '试玩检查'] as const;
+const PROMPT_GAME_STAGES = ['理解 Prompt', '设计玩法', '编写代码', '隔离检查'] as const;
 
-const PROMPT_GAME_ESTIMATE_SECONDS = 3;
+const PROMPT_GAME_ESTIMATE_SECONDS = 20;
 
 const REGENERABLE_PREVIEW_ERROR_CODES = new Set([
   'INVALID_GAME_PREVIEW',
@@ -442,6 +441,11 @@ export default function CarnivalPage({
     setGamePreviewError(null);
     setGamePreviewStage(0);
   }, []);
+  const rejectBrokenGamePreview = useCallback((message: string) => {
+    invalidateGamePreview();
+    setGamePreviewStatus('error');
+    setGamePreviewError(`${message} 这份代码不会被发送，请重新生成一版。`);
+  }, [invalidateGamePreview]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -546,7 +550,14 @@ export default function CarnivalPage({
   }, [restoreSession, token]);
 
   const hasState = Boolean(carnivalState);
-  const safePollInterval = Math.max(700, Math.min(5_000, pollIntervalMs));
+  const activeArcade = Boolean(activeInviteId && carnivalState?.room?.invites.some((invitation) => (
+    invitation.inviteId === activeInviteId &&
+    invitation.game?.definition &&
+    typeof invitation.game.definition === 'object' &&
+    'engine' in invitation.game.definition &&
+    invitation.game.definition.engine === 'arcade-v1'
+  )));
+  const safePollInterval = activeArcade ? 200 : Math.max(700, Math.min(5_000, pollIntervalMs));
   useEffect(() => {
     if (!token || !hasState) return undefined;
     let stopped = false;
@@ -608,8 +619,8 @@ export default function CarnivalPage({
       ? {
           ...option,
           available: true,
-          description: !option.description || option.description === '从聊天中挑选最适合你们的五种三轮双人玩法。'
-            ? '用 AI 游戏工坊现场生成，或从五个三轮双人系列中挑一局。'
+          description: !option.description || option.description.includes('三轮')
+            ? '写一句 Prompt，AI 现场编写并运行一局真正可操作的双人游戏。'
             : option.description,
         }
       : option);
@@ -629,23 +640,10 @@ export default function CarnivalPage({
     () => summarizeCarnivalTopics(room?.messages ?? []),
     [room?.messages],
   );
-  const exclusiveRecommendation = useMemo(
-    () => recommendCarnivalExclusiveSeries(room?.messages ?? []),
-    [room?.messages],
-  );
   const exclusiveSeriesOptions = useMemo(() => {
     const promptArcade = CARNIVAL_EXCLUSIVE_SERIES.find((series) => series.id === 'prompt-arcade');
-    const recommended = CARNIVAL_EXCLUSIVE_SERIES.find(
-      (series) => series.id === exclusiveRecommendation.seriesId,
-    );
-    return [
-      ...(promptArcade ? [promptArcade] : []),
-      ...(recommended && recommended.id !== promptArcade?.id ? [recommended] : []),
-      ...CARNIVAL_EXCLUSIVE_SERIES.filter(
-        (series) => series.id !== promptArcade?.id && series.id !== recommended?.id,
-      ),
-    ];
-  }, [exclusiveRecommendation.seriesId]);
+    return promptArcade ? [promptArcade] : [];
+  }, []);
 
   useEffect(() => {
     const previewContext = gamePreviewContextRef.current;
@@ -857,15 +855,7 @@ export default function CarnivalPage({
   function selectGameType(option: CarnivalGameType) {
     if (!option.available) return;
     if (option.templateId === 'custom') {
-      invalidateGamePreview();
-      promptVersionRef.current += 1;
-      promptControllerRef.current?.abort();
-      promptControllerRef.current = null;
-      setSelectedTemplateId(option.templateId);
-      setSelectedSeriesId(null);
-      setPrompt('');
-      setPromptStatus('idle');
-      setPromptError(null);
+      void loadPrompt(option, 'prompt-arcade');
       return;
     }
     void loadPrompt(option);
@@ -1449,7 +1439,7 @@ export default function CarnivalPage({
             <div className="carnival-exclusive-picker__intro">
               <div>
                 <span>专属小游戏 · 从聊天里现做</span>
-                <h3 id="carnival-exclusive-picker-title">这段对话，适合玩哪一局？</h3>
+                <h3 id="carnival-exclusive-picker-title">说一句，现场生成一局真的</h3>
               </div>
             </div>
             <div className="carnival-exclusive-series" role="radiogroup" aria-label="选择专属小游戏系列">
@@ -1466,7 +1456,7 @@ export default function CarnivalPage({
                 >
                   <span className="carnival-exclusive-series__icon" aria-hidden="true">{series.icon}</span>
                   <span className="carnival-exclusive-series__copy">
-                    <span>{series.eyebrow}{series.id === exclusiveRecommendation.seriesId && <em>推荐</em>}</span>
+                    <span>{series.eyebrow}<em>现场生成</em></span>
                     <strong>{series.title}</strong>
                     <small>{series.description}</small>
                     <span className="carnival-exclusive-series__foot"><i>{series.duration}</i><b>选这局 →</b></span>
@@ -1527,6 +1517,7 @@ export default function CarnivalPage({
             key={gamePreview.previewToken}
             preview={gamePreview}
             expired={gamePreviewExpired}
+            onRuntimeError={rejectBrokenGamePreview}
           />
         )}
         <footer className="carnival-game-studio__actions">

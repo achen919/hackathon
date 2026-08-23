@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  FALLBACK_ARCADE_DOCUMENT,
+  isArcadeGamePayload,
+} from './arcade-game.mjs';
+import {
   compactMatchForAi,
   createAiGameService,
   isGeneratedGamePayload,
@@ -10,6 +14,7 @@ import {
   buildPromptPreview,
   isTemplateShapeValid,
   normalizePlayerPrompt,
+  templateGuidance,
 } from './game-templates.mjs';
 
 function gameType(id, label) {
@@ -79,6 +84,21 @@ const validPromptPayload = {
     summary: '同频与不同答案都会成为下一段聊天的入口，这局没有输赢。',
     chatPrompt: '刚才哪一关的答案最让你意外，为什么？',
   },
+};
+
+const validArcadePayload = {
+  title: '默契篮球移动篮筐挑战',
+  eyebrow: 'AI 双人运动',
+  description: '一人控制投篮角度和力度，另一人移动篮筐，在同一个画面里完成即时攻防。',
+  whyItFits: '公开聊天里出现了运动话题，这种分工明确的实时玩法能自然制造配合和笑点。',
+  estimatedMinutes: 1,
+  topics: ['篮球运动', '双人攻防'],
+  kind: 'sport',
+  preset: 'basketball-duel',
+  theme: 'sunset',
+  difficulty: 'normal',
+  tuning: { durationSeconds: 45, speedPercent: 100, targetScore: 5, maxRounds: 10 },
+  document: FALLBACK_ARCADE_DOCUMENT,
 };
 
 test('validates output and keeps renamed labels on the stable profile-riddle mechanics', async () => {
@@ -159,6 +179,45 @@ test('custom AI generation pins series id, guidance, shape, mechanics, and cache
   const firstKey = service.cacheKey(customConfig, match, { templateId: 'custom', seriesId: 'courtside' });
   const secondKey = service.cacheKey(customConfig, match, { templateId: 'custom', seriesId: 'future-trailer' });
   assert.notEqual(firstKey, secondKey);
+});
+
+test('prompt arcade AI returns a hashed isolated code artifact and uses the larger strict schema budget', async () => {
+  let requestBody;
+  const fetchImpl = async (_url, init) => {
+    requestBody = JSON.parse(init.body);
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify(validArcadePayload) } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const arcadeConfig = {
+    ...config,
+    gameTypes: [{
+      ...gameType('custom', '专属小游戏'),
+      generationPrompt: templateGuidance('custom'),
+    }],
+  };
+  const game = await createAiGameService({ fetchImpl }).generate(arcadeConfig, match, {
+    templateId: 'custom',
+    seriesId: 'prompt-arcade',
+    prompt: '生成一局真正能操作的篮球游戏，一人投篮，另一人移动篮筐。',
+  });
+  assert.equal(requestBody.max_tokens, 6_000);
+  assert.equal(requestBody.response_format.json_schema.schema.properties.document.maxLength, 50_000);
+  assert.match(JSON.stringify(requestBody.messages), /PairPlay v1/);
+  assert.match(JSON.stringify(requestBody.messages), /game\.bootstrap-ready/);
+  assert.match(JSON.stringify(requestBody.messages), /playMode.*preview/);
+  assert.match(JSON.stringify(requestBody.messages), /playMode.*network/);
+  assert.match(requestBody.messages.at(-2).content, /PairPlay v1/);
+  assert.doesNotMatch(JSON.stringify(requestBody.messages), /固定三轮/);
+  assert.equal(isArcadeGamePayload(validArcadePayload), true);
+  assert.equal(game.schemaVersion, 4);
+  assert.equal(game.engine, 'arcade-v1');
+  assert.equal(game.arcade.kind, 'sport');
+  assert.equal(game.arcade.preset, 'basketball-duel');
+  assert.match(game.artifact.artifactId, /^artifact_[A-Za-z0-9_-]{32}$/);
+  assert.match(game.artifact.codeHash, /^[a-f0-9]{64}$/);
+  assert.equal(game.artifact.document, FALLBACK_ARCADE_DOCUMENT);
+  assert.equal(game.generatedBy, 'ai');
 });
 
 test('falls back to JSON mode only when structured output is explicitly unsupported', async () => {

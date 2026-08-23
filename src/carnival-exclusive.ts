@@ -38,15 +38,15 @@ export const CARNIVAL_EXCLUSIVE_SERIES: readonly CarnivalExclusiveSeries[] = Obj
   {
     id: 'prompt-arcade',
     templateKey: 'exclusive_game_prompt_arcade_v1',
-    title: 'AI 游戏工坊 · 说一句就开局',
+    title: 'AI 游戏工坊 · 说一句就生成真游戏',
     shortTitle: 'AI 游戏工坊',
     icon: '◇',
     tone: 'blue',
-    eyebrow: 'Prompt 现场生成',
-    description: '写下想玩的主题和感觉，AI 会从安全交互组件中组合一局有专属画面与触感的双人游戏。',
-    duration: '3 关 · 约 3 分钟',
-    tags: ['Prompt 生成', '玩法混搭', '双端同步'],
-    generationBrief: '根据可编辑 Prompt 在 card-grid、swipe-deck、mood-dial、orbit-pick 四种安全交互中选择并组合；只能输出声明式 JSON，不得输出或请求执行 HTML、CSS、JavaScript、URL 或自定义事件规则。',
+    eyebrow: 'Prompt → HTML/CSS/JS',
+    description: '写下篮球、合作冒险或策略等想法，AI 会现场编写完整游戏代码；试玩满意后把同一版本发给 TA。',
+    duration: '实时操作 · 约 1–3 分钟',
+    tags: ['AI 生成代码', '真实操作', '双端同步'],
+    generationBrief: '根据可编辑 Prompt 生成一份自包含 HTML/CSS/JavaScript 游戏，使用 PairPlay v1 接入服务端角色、操作、比分和同步；代码只能在无同源权限、无网络能力的沙箱中执行。',
     matchedEyebrow: '你们触发了同一种反馈',
     matchedTitle: '这一关默契同步',
     differentEyebrow: '游戏解锁一条新分支',
@@ -197,6 +197,15 @@ export function buildCarnivalExclusivePrompt(
   const series = exclusiveSeriesById(seriesId) ?? CARNIVAL_EXCLUSIVE_SERIES[0];
   const topics = summarizeCarnivalTopics(messages);
   const topicLine = topics.length > 0 ? topics.join('、') : '轻松日常、周末安排和聊天节奏';
+  if (series.id === 'prompt-arcade') {
+    return [
+      '请生成一局真正可操作的双人篮球攻防小游戏。',
+      `双方已经公开交换 ${messages.length} 条文字消息；可用的公开主题：${topicLine}。`,
+      '一人拖动调整投篮角度、按住蓄力并松手投篮；另一人实时左右拖动篮筐防守。游戏要有连续动画、轨迹、命中反馈、倒计时和比分。',
+      '请输出完整、自包含的 HTML、CSS 与 JavaScript，并使用 PairPlay v1 接收角色、服务端状态和双方操作；预览模式下由本地 AI 接管另一方。',
+      '代码只能使用页面内绘制与动画，不能联网、跳转、读写存储或请求设备权限。不要输出聊天原文、私密资料、匹配结论或可识别个人的信息。',
+    ].join('\n\n');
+  }
   return [
     `请为我们生成一局「${series.title}」专属双人小游戏。`,
     `双方已经公开交换 ${messages.length} 条文字消息；可以使用的公开主题：${topicLine}。`,

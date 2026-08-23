@@ -107,21 +107,22 @@ const SERIES = [
   },
   {
     seriesId: 'prompt-arcade',
+    // Kept stable so already-persisted v2/v3 prompt-arcade invitations remain playable.
     templateKey: 'exclusive_game_prompt_arcade_v1',
     title: 'AI 游戏工坊 · 说一句就开局',
     shortTitle: 'AI 游戏工坊',
     icon: '◇',
     tone: 'blue',
     eyebrow: 'Prompt 现场生成',
-    description: '写下想玩的主题和感觉，AI 会从安全交互组件中组合一局有专属画面与触感的双人游戏。',
-    duration: '3 关 · 约 3 分钟',
-    tags: ['Prompt 生成', '玩法混搭', '双端同步'],
-    generationBrief: '根据可编辑 Prompt 在 card-grid、swipe-deck、mood-dial、orbit-pick 四种安全交互中选择并组合；只能输出声明式 JSON，不得输出或请求执行 HTML、CSS、JavaScript、URL 或自定义事件规则。',
-    matchedEyebrow: '你们触发了同一种反馈',
-    matchedTitle: '这一关默契同步',
-    differentEyebrow: '游戏解锁一条新分支',
-    differentTitle: '两个选择都让剧情继续',
-    resultUnit: '个专属互动关卡',
+    description: '写下想玩的主题和感觉，AI 会现场编写完整 HTML/CSS/JavaScript，生成有操控、有动画和胜负反馈的双人小游戏。',
+    duration: '实时双人局 · 约 1 分钟',
+    tags: ['AI 生成代码', '真实操控', '双端同步'],
+    generationBrief: '只允许从 competition/dash-duel、cooperation/tandem-rescue、sport/basketball-duel、adventure/relic-expedition、strategy/grid-command 五组固定引擎中选择；篮球主题必须选择 sport/basketball-duel。模型输出严格枚举、展示文案、有界 tuning 和一份自包含 HTML/CSS/JavaScript document；document 只能使用 PairPlay v1，不得联网、引用 URL、读取父页 DOM 或自定权威角色、物理、比分和胜负。playMode=preview 时本地模拟另一角色，playMode=network 时只渲染服务端同步。',
+    matchedEyebrow: '双人操作已经同步',
+    matchedTitle: '这一局配合起来了',
+    differentEyebrow: '对抗产生新的变化',
+    differentTitle: '下一回合还有机会',
+    resultUnit: '局真实双人游戏',
   },
 ];
 
@@ -285,7 +286,7 @@ export function buildExclusiveSeriesPrompt(match, seriesId) {
   const publicTopicLine = topics.filter((topic) => topic.mentions > 0).map((topic) => topic.label).join('、') || '周末安排、日常节奏';
   const count = textMessages(match).length;
   if (series.seriesId === 'prompt-arcade') {
-    return `做一个以「${publicTopicLine}」为灵感的轻松双人小游戏。画面像夜晚星空游乐场，三轮分别用左右滑卡、情绪刻度和星球轨道来选择；节奏轻快，每轮揭晓后给一句自然、没有压力的聊天问题。当前可参考 ${count} 条公开聊天，只使用双方已经聊过的安全话题。`;
+    return `做一个以「${publicTopicLine}」为轻量视觉灵感、真正可以操作的双人街机小游戏。默认选择篮球投篮与移动篮筐的 sport/basketball-duel；如果玩家编辑的偏好明确要求竞技、合作、冒险或策略，再选择对应固定 preset。必须有持续动画、即时操作和清楚反馈，不能做成问答、滑卡或文字选择题。试玩模式由沙箱本地 AI 接管另一角色，正式联机只服从服务端权威状态。当前可参考 ${count} 条公开聊天，只抽象安全主题，不把聊天原文或个人资料写进代码。`;
   }
   return `请生成「${series.title}」专属双人小游戏。\n\n已读取 ${count} 条公开文本聊天；可使用的公开主题：${publicTopicLine}。\n\n系列 ID：${series.seriesId}\n内容模板：${series.generationBrief}\n\n引擎固定为 ${PROMPT_GAME_ENGINE}，固定生成 3 轮。每轮必须选择 card-grid、swipe-deck、mood-dial、orbit-pick 之一：swipe-deck 恰好 2 个选项，mood-dial / orbit-pick 为 3-4 个选项，card-grid 为 2-4 个选项。还要生成受限 presentation token 与 ending 文案。只输出指定 JSON，绝不输出 HTML、CSS、JavaScript、URL、自定义组件或动作规则。只使用公开聊天和服务端允许的非敏感信号，不输出匹配度、输赢或人格结论，不替用户表白、承诺、交换联系方式或自动发送消息。`;
 }

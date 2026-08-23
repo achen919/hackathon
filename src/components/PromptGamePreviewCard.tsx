@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CarnivalGamePreview } from '../carnival-types';
+import { ArcadePromptPreview } from '../arcade';
+import type { CarnivalExclusiveGameDefinition, CarnivalGamePreview } from '../carnival-types';
 import { CarnivalExclusiveChoiceRenderer } from './CarnivalExclusiveGameDialog';
 
 interface PromptGamePreviewCardProps {
@@ -8,6 +9,7 @@ interface PromptGamePreviewCardProps {
   footerNote?: string;
   onComplete?: () => void;
   onRestart?: () => void;
+  onRuntimeError?: (message: string) => void;
 }
 
 function formatClock(value: string) {
@@ -16,13 +18,22 @@ function formatClock(value: string) {
   return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
 }
 
-export function PromptGamePreviewCard({
+type ExclusivePreview = CarnivalGamePreview & { game: CarnivalExclusiveGameDefinition };
+
+export function PromptGamePreviewCard(props: PromptGamePreviewCardProps) {
+  if (props.preview.game.engine === 'arcade-v1') {
+    return <ArcadePromptPreview {...props} preview={{ ...props.preview, game: props.preview.game }} />;
+  }
+  return <ExclusivePromptGamePreviewCard {...props} preview={{ ...props.preview, game: props.preview.game }} />;
+}
+
+function ExclusivePromptGamePreviewCard({
   preview,
   expired,
   footerNote,
   onComplete,
   onRestart,
-}: PromptGamePreviewCardProps) {
+}: Omit<PromptGamePreviewCardProps, 'preview'> & { preview: ExclusivePreview }) {
   const titleRef = useRef<HTMLHeadingElement>(null);
   const completionReportedRef = useRef(false);
   const [roundIndex, setRoundIndex] = useState(0);
