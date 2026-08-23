@@ -441,6 +441,11 @@ export default function CarnivalPage({
     setGamePreviewError(null);
     setGamePreviewStage(0);
   }, []);
+  const rejectBrokenGamePreview = useCallback((message: string) => {
+    invalidateGamePreview();
+    setGamePreviewStatus('error');
+    setGamePreviewError(`${message} 这份代码不会被发送，请重新生成一版。`);
+  }, [invalidateGamePreview]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -1512,6 +1517,7 @@ export default function CarnivalPage({
             key={gamePreview.previewToken}
             preview={gamePreview}
             expired={gamePreviewExpired}
+            onRuntimeError={rejectBrokenGamePreview}
           />
         )}
         <footer className="carnival-game-studio__actions">

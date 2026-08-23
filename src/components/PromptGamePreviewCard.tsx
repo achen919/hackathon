@@ -9,6 +9,7 @@ interface PromptGamePreviewCardProps {
   footerNote?: string;
   onComplete?: () => void;
   onRestart?: () => void;
+  onRuntimeError?: (message: string) => void;
 }
 
 function formatClock(value: string) {

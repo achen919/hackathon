@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CarnivalArcadeGameDefinition, CarnivalGamePreview } from '../carnival-types';
 import { ArcadeGameRuntime } from './ArcadeGameRuntime';
 import { GeneratedGameSandbox } from './GeneratedGameSandbox';
@@ -10,6 +10,7 @@ interface ArcadePromptPreviewProps {
   footerNote?: string;
   onComplete?: () => void;
   onRestart?: () => void;
+  onRuntimeError?: (message: string) => void;
 }
 
 function previewClock(value: string) {
@@ -29,14 +30,21 @@ export function ArcadePromptPreview({
   footerNote,
   onComplete,
   onRestart,
+  onRuntimeError,
 }: ArcadePromptPreviewProps) {
   const { game } = preview;
   const [roleIndex, setRoleIndex] = useState(0);
   const [run, setRun] = useState(0);
   const [useSafeFallback, setUseSafeFallback] = useState(false);
   const completedRef = useRef(false);
+  const onCompleteRef = useRef(onComplete);
+  const onRuntimeErrorRef = useRef(onRuntimeError);
   const fallbackDefinition = useMemo(() => arcadeFallbackFromServerDefinition(game), [game]);
+  const fallbackDefinitionRef = useRef(fallbackDefinition);
   const role = game.arcade.roles[roleIndex] ?? game.arcade.roles[0];
+  onCompleteRef.current = onComplete;
+  onRuntimeErrorRef.current = onRuntimeError;
+  fallbackDefinitionRef.current = fallbackDefinition;
 
   useEffect(() => {
     setRoleIndex(0);
@@ -45,11 +53,18 @@ export function ArcadePromptPreview({
     completedRef.current = false;
   }, [preview.previewToken]);
 
-  const completeOnce = () => {
+  const completeOnce = useCallback(() => {
     if (completedRef.current) return;
     completedRef.current = true;
-    onComplete?.();
-  };
+    onCompleteRef.current?.();
+  }, []);
+  const handleSandboxError = useCallback((message: string) => {
+    if (onRuntimeErrorRef.current) {
+      onRuntimeErrorRef.current(message);
+      return;
+    }
+    setUseSafeFallback(Boolean(fallbackDefinitionRef.current));
+  }, []);
   const restart = () => {
     completedRef.current = false;
     setUseSafeFallback(false);
@@ -113,7 +128,7 @@ export function ArcadePromptPreview({
           title={game.title}
           onInput={() => undefined}
           onComplete={completeOnce}
-          onError={() => setUseSafeFallback(Boolean(fallbackDefinition))}
+          onError={handleSandboxError}
         />
       )}
 

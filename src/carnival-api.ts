@@ -213,10 +213,13 @@ const ARCADE_PRESETS = new Set<CarnivalArcadePreset>([
 ]);
 const ARCADE_THEMES = new Set(['sunset', 'neon', 'forest', 'ocean', 'cosmos']);
 const ARCADE_DIFFICULTIES = new Set(['easy', 'normal', 'hard']);
-const ARCADE_PARAM_KEYS = [
-  'durationMs', 'tickMs', 'arenaWidth', 'arenaHeight', 'primarySpeed',
-  'secondarySpeed', 'gravity', 'targetSize', 'projectileRadius', 'targetScore', 'maxRounds',
-] as const;
+const ARCADE_PARAM_RANGES = {
+  durationMs: [20_000, 90_000], tickMs: [40, 250], arenaWidth: [600, 1_600],
+  arenaHeight: [320, 900], primarySpeed: [40, 1_500], secondarySpeed: [40, 1_200],
+  gravity: [0, 2_400], targetSize: [20, 280], projectileRadius: [4, 40],
+  targetScore: [1, 20], maxRounds: [1, 30],
+} as const;
+const ARCADE_PARAM_KEYS = Object.keys(ARCADE_PARAM_RANGES) as Array<keyof typeof ARCADE_PARAM_RANGES>;
 
 function enumValue<T extends string>(value: unknown, allowed: Set<string>, fallback: T): T {
   return typeof value === 'string' && allowed.has(value) ? value as T : fallback;
@@ -312,7 +315,7 @@ function arcadeRoles(value: unknown) {
   if (!Array.isArray(value) || value.length !== 2) {
     throw new CarnivalApiError('AI 游戏缺少双方角色。', 0, 'CARNIVAL_BAD_RESPONSE');
   }
-  return value.map((item) => {
+  const roles = value.map((item) => {
     if (!isObject(item) || !Array.isArray(item.controls)) {
       throw new CarnivalApiError('AI 游戏角色格式错误。', 0, 'CARNIVAL_BAD_RESPONSE');
     }
@@ -322,13 +325,21 @@ function arcadeRoles(value: unknown) {
     if (controls.length === 0 || controls.length !== item.controls.length || new Set(controls).size !== controls.length) {
       throw new CarnivalApiError('AI 游戏包含无法识别的操作。', 0, 'CARNIVAL_BAD_RESPONSE');
     }
+    const id = arcadeText(item.id, '', 40);
+    if (!/^[a-z][a-z0-9-]{1,39}$/u.test(id)) {
+      throw new CarnivalApiError('AI 游戏角色标识无效。', 0, 'CARNIVAL_BAD_RESPONSE');
+    }
     return {
-      id: arcadeText(item.id, '', 40),
+      id,
       label: arcadeText(item.label, '游戏角色', 40),
       objective: arcadeText(item.objective, '完成这一局的目标', 100),
       controls,
     };
   });
+  if (new Set(roles.map((role) => role.id)).size !== roles.length) {
+    throw new CarnivalApiError('AI 游戏角色不能重复。', 0, 'CARNIVAL_BAD_RESPONSE');
+  }
+  return roles;
 }
 
 export function normalizeCarnivalArcadeGame(value: unknown): CarnivalArcadeGameDefinition {
@@ -348,13 +359,18 @@ export function normalizeCarnivalArcadeGame(value: unknown): CarnivalArcadeGameD
     throw new CarnivalApiError('AI 游戏缺少受支持的玩法。', 0, 'CARNIVAL_BAD_RESPONSE');
   }
   const paramsSource = isObject(arcade.params) ? arcade.params : null;
-  if (!paramsSource || ARCADE_PARAM_KEYS.some((key) => typeof paramsSource[key] !== 'number' || !Number.isFinite(paramsSource[key]))) {
+  if (!paramsSource || ARCADE_PARAM_KEYS.some((key) => {
+    const value = paramsSource[key];
+    const [minimum, maximum] = ARCADE_PARAM_RANGES[key];
+    return typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum || value > maximum;
+  })) {
     throw new CarnivalApiError('AI 游戏参数格式错误。', 0, 'CARNIVAL_BAD_RESPONSE');
   }
   const artifactId = text(artifact.artifactId);
   const codeHash = text(artifact.codeHash);
   const runtimePath = text(artifact.runtimePath);
-  if (!/^artifact_[A-Za-z0-9_-]{32,80}$/u.test(artifactId) || !/^[a-f0-9]{64}$/u.test(codeHash) ||
+  if (Object.keys(artifact).some((key) => !['artifactId', 'codeHash', 'runtimePath'].includes(key)) ||
+    !/^artifact_[A-Za-z0-9_-]{32,80}$/u.test(artifactId) || !/^[a-f0-9]{64}$/u.test(codeHash) ||
     !/^\/api\/(?:carnival\/)?games\/runtime\/artifact_[A-Za-z0-9_-]{32,80}$/u.test(runtimePath)) {
     throw new CarnivalApiError('AI 游戏代码版本不完整。', 0, 'CARNIVAL_BAD_RESPONSE');
   }
