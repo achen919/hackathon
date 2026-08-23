@@ -380,7 +380,7 @@ test('custom template requires a stable series id and forwards it to AI', async 
   );
 });
 
-test('prompt arcade stays playable without an AI key and compiles edited prompts into safe v3 fallbacks', async () => {
+test('prompt arcade stays playable without an AI key and compiles edited prompts into isolated v4 runtimes', async () => {
   const privateMatch = {
     ...validMatch,
     message_count: 2,
@@ -458,12 +458,23 @@ test('prompt arcade stays playable without an AI key and compiles edited prompts
       assert.equal(cosmic.fallback, true);
       assert.equal(cosmic.providerUnavailable, 'AI_NOT_CONFIGURED');
       assert.equal(cosmic.cached, false);
-      assert.equal(isPromptGameDefinition(cosmic.game), true);
-      assert.equal(cosmic.game.presentation.scene, 'cosmos');
-      assert.equal(cosmic.game.questions.every((question) => question.interaction.kind === 'swipe-deck'), true);
+      assert.equal(cosmic.game.schemaVersion, 4);
+      assert.equal(cosmic.game.engine, 'arcade-v1');
+      assert.equal(cosmic.game.arcade.preset, 'basketball-duel');
+      assert.equal(cosmic.game.artifact.document, undefined);
+      assert.match(cosmic.game.artifact.runtimePath, /^\/api\/games\/runtime\/artifact_/);
       assert.equal(JSON.stringify(cosmic.game).includes(cosmicPrompt), false);
       assert.equal(JSON.stringify(cosmic.game).includes('PROFILE-A-7788'), false);
       assert.equal(JSON.stringify(cosmic.game).includes('IDEAL-B-4422'), false);
+
+      const runtime = await fetch(`${baseUrl}${cosmic.game.artifact.runtimePath}`);
+      const runtimeDocument = await runtime.text();
+      assert.equal(runtime.status, 200);
+      assert.match(runtime.headers.get('content-security-policy'), /sandbox allow-scripts/);
+      assert.match(runtime.headers.get('content-security-policy'), /script-src 'sha256-/);
+      assert.doesNotMatch(runtime.headers.get('content-security-policy'), /script-src 'unsafe-inline'/);
+      assert.equal(runtime.headers.get('x-arcade-code-hash'), cosmic.game.artifact.codeHash);
+      assert.match(runtimeDocument, /^<!doctype html>/);
 
       const cachedResponse = await generate(cosmicPrompt);
       const cached = await cachedResponse.json();
@@ -471,14 +482,16 @@ test('prompt arcade stays playable without an AI key and compiles edited prompts
       assert.equal(cached.cached, true);
       assert.equal(cached.fallback, true);
       assert.equal(cached.game.id, cosmic.game.id);
+      const cachedRuntime = await fetch(`${baseUrl}${cached.game.artifact.runtimePath}`);
+      assert.equal(cachedRuntime.status, 200);
+      assert.equal(cachedRuntime.headers.get('x-arcade-code-hash'), cached.game.artifact.codeHash);
 
-      const cinemaPrompt = '做一个电影票根主题，三轮使用卡片宫格来选轻松话题，只参考公开聊天，不给双方关系下结论。';
-      const cinemaResponse = await generate(cinemaPrompt);
-      const cinema = await cinemaResponse.json();
-      assert.equal(cinemaResponse.status, 200);
-      assert.equal(cinema.game.presentation.scene, 'cinema');
-      assert.equal(cinema.game.questions.every((question) => question.interaction.kind === 'card-grid'), true);
-      assert.equal(cinema.game.questions.every((question) => question.interaction.variant === 'tickets'), true);
+      const strategyPrompt = '做一个真正能操作的九宫格策略对抗小游戏，只参考公开聊天，不给双方关系下结论。';
+      const strategyResponse = await generate(strategyPrompt);
+      const strategy = await strategyResponse.json();
+      assert.equal(strategyResponse.status, 200);
+      assert.equal(strategy.game.arcade.kind, 'strategy');
+      assert.equal(strategy.game.arcade.preset, 'grid-command');
 
       const builtIn = await fetch(`${baseUrl}/api/games/generate`, {
         method: 'POST',
@@ -532,8 +545,10 @@ test('prompt arcade falls back on provider authentication failure while built-in
       assert.equal(customResponse.status, 200);
       assert.equal(custom.fallback, true);
       assert.equal(custom.providerUnavailable, 'AI_AUTH_FAILED');
-      assert.equal(isPromptGameDefinition(custom.game), true);
-      assert.equal(custom.game.presentation.scene, 'cosmos');
+      assert.equal(custom.game.schemaVersion, 4);
+      assert.equal(custom.game.engine, 'arcade-v1');
+      assert.equal(custom.game.artifact.document, undefined);
+      assert.equal(custom.game.arcade.preset, 'basketball-duel');
       assert.equal(providerCalls, 1);
 
       const cachedResponse = await generate('custom', { seriesId: 'prompt-arcade', prompt });

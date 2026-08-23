@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { buildArcadeFallbackGame } from './arcade-game.mjs';
 import { createCarnivalService } from './carnival-service.mjs';
 import { buildExclusiveFallbackGame } from './exclusive-series.mjs';
 
@@ -458,6 +459,137 @@ test('runs custom series as a private alternating three-round server state machi
       }
     }
   });
+});
+
+test('runs persisted arcade v4 with isolated roles, concurrent actor sequences, bounded events, and capability runtime', async () => {
+  let timestamp = 100_000;
+  await withStateDir(async (stateDir, service) => {
+    const players = await pair(service);
+    await unlock(service, players);
+    const game = buildArcadeFallbackGame({ match_id: 'arcade-service-match', messages: [] }, '专属小游戏', {
+      prompt: '做一个一人投篮、一人移动篮筐的篮球游戏',
+    });
+    const created = await service.createInvite(players.maleToken, {
+      templateId: 'custom',
+      seriesId: 'prompt-arcade',
+      prompt: PROMPT,
+      game,
+      idempotencyKey: 'arcade-service-invite-key-01',
+    });
+    const inviteId = created.invite.inviteId;
+    assert.equal(created.invite.game.definition.schemaVersion, 4);
+    assert.equal(created.invite.game.definition.engine, 'arcade-v1');
+    assert.equal(created.invite.game.definition.arcade.preset, 'basketball-duel');
+    assert.equal(created.invite.game.definition.artifact.document, undefined);
+    assert.match(created.invite.game.definition.artifact.runtimePath, /^\/api\/carnival\/games\/runtime\/artifact_/);
+    assert.equal(JSON.stringify(created.invite).includes('<!doctype html>'), false);
+
+    const runtime = await service.getArcadeArtifact(game.artifact.artifactId);
+    assert.equal(runtime.codeHash, game.artifact.codeHash);
+    assert.match(runtime.document, /^<!doctype html>/);
+
+    const joined = await service.joinInvite(players.femaleToken, inviteId);
+    assert.equal(joined.invite.progress.selfRole, 'keeper');
+    assert.equal((await service.getInvite(players.maleToken, inviteId)).invite.progress.selfRole, 'shooter');
+
+    await Promise.all([
+      service.gameAction(players.maleToken, inviteId, {
+        type: 'arcade-ready', seq: 0, requestId: 'arcade-ready-male-0001',
+      }),
+      service.gameAction(players.femaleToken, inviteId, {
+        type: 'arcade-ready', seq: 0, requestId: 'arcade-ready-female-01',
+      }),
+    ]);
+    timestamp += 1_001;
+    const beforeInputs = (await service.getInvite(players.maleToken, inviteId)).invite.revision;
+    const [aimed, moved] = await Promise.all([
+      service.gameAction(players.maleToken, inviteId, {
+        type: 'arcade-input', seq: 1, control: 'aim', value: 0.25,
+        requestId: 'arcade-aim-male-000001', expectedRevision: -999,
+      }),
+      service.gameAction(players.femaleToken, inviteId, {
+        type: 'arcade-input', seq: 1, control: 'move', value: -1,
+        requestId: 'arcade-move-female-001', expectedRevision: -999,
+      }),
+    ]);
+    assert.equal(aimed.invite.revision > beforeInputs, true);
+    assert.equal(moved.invite.revision > beforeInputs, true);
+    const shot = await service.gameAction(players.maleToken, inviteId, {
+      type: 'arcade-input', seq: 2, control: 'shoot', value: 1,
+      requestId: 'arcade-shoot-male-0001',
+    });
+    assert.equal(shot.invite.shared.arcade.frame.ball.inFlight, true);
+    const ballAtShot = shot.invite.shared.arcade.frame.ball;
+    timestamp += 500;
+    const polled = (await service.getInvite(players.maleToken, inviteId)).invite;
+    assert.equal(polled.shared.arcade.frame.tick > shot.invite.shared.arcade.frame.tick, true);
+    assert.notDeepEqual(polled.shared.arcade.frame.ball, ballAtShot);
+    const replay = await service.gameAction(players.maleToken, inviteId, {
+      type: 'arcade-input', seq: 1, control: 'aim', value: 0.25,
+      requestId: 'arcade-aim-male-000001', expectedRevision: 0,
+    });
+    assert.equal(replay.reused, true);
+    await assert.rejects(
+      () => service.gameAction(players.maleToken, inviteId, {
+        type: 'arcade-input', seq: 3, control: 'power', value: 0.9,
+        requestId: 'arcade-aim-male-000001',
+      }),
+      hasCode('IDEMPOTENCY_CONFLICT'),
+    );
+
+    const femaleView = (await service.getInvite(players.femaleToken, inviteId)).invite;
+    assert.deepEqual(femaleView.privateState.input, { move: -1 });
+    const peerAimEvent = femaleView.shared.arcade.events.find((event) => event.control === 'aim');
+    assert.deepEqual(peerAimEvent, {
+      cursor: 3,
+      eventId: 'event-3',
+      seq: 1,
+      actorRole: 'shooter',
+      type: 'input',
+      control: 'aim',
+      value: 0.25,
+      serverAt: timestamp - 500,
+    });
+    assert.equal(JSON.stringify(femaleView.shared.arcade.events).includes(players.maleId), false);
+    const hiddenPeerInput = femaleView.actions.find((entry) => entry.type === 'arcade-input' && entry.actorId === players.maleId);
+    assert.equal(hiddenPeerInput.hidden, true);
+    assert.equal('payload' in hiddenPeerInput, false);
+
+    const strategyGame = buildArcadeFallbackGame({ match_id: 'arcade-strategy-match', messages: [] }, '专属小游戏', {
+      prompt: '做一个九宫格策略对抗小游戏',
+    });
+    const strategy = await service.createInvite(players.femaleToken, {
+      templateId: 'custom', seriesId: 'prompt-arcade', prompt: PROMPT,
+      game: strategyGame, idempotencyKey: 'arcade-strategy-invite-key-01',
+    });
+    await service.joinInvite(players.maleToken, strategy.invite.inviteId);
+    await service.gameAction(players.femaleToken, strategy.invite.inviteId, {
+      type: 'arcade-ready', seq: 0, requestId: 'strategy-ready-female-001',
+    });
+    const isolatedBasketball = (await service.getInvite(players.femaleToken, inviteId)).invite;
+    const isolatedStrategy = (await service.getInvite(players.femaleToken, strategy.invite.inviteId)).invite;
+    assert.equal(isolatedBasketball.shared.arcade.events.some((event) => event.actorRole.includes('commander')), false);
+    assert.equal(isolatedStrategy.shared.arcade.events.length, 1);
+    assert.equal(isolatedStrategy.shared.arcade.events[0].actorRole, 'coral-commander');
+
+    for (let index = 2; index < 70; index += 1) {
+      timestamp += 50;
+      await service.gameAction(players.femaleToken, inviteId, {
+        type: 'arcade-tick', seq: index, requestId: `arcade-tick-female-${index}`,
+      });
+    }
+    const bounded = (await service.getInvite(players.femaleToken, inviteId)).invite;
+    assert.equal(bounded.actions.length, 64);
+    assert.equal(bounded.revision > 64, true);
+
+    const persisted = await readFile(join(stateDir, 'carnival-state.json'), 'utf8');
+    assert.match(persisted, /<!doctype html>/);
+    const restored = createCarnivalService({ stateDir, now: () => timestamp });
+    const restoredView = (await restored.getInvite(players.maleToken, inviteId)).invite;
+    assert.equal(restoredView.progress.selfRole, 'shooter');
+    assert.equal(restoredView.game.definition.artifact.document, undefined);
+    assert.equal(restoredView.game.definition.artifact.codeHash, game.artifact.codeHash);
+  }, { now: () => timestamp });
 });
 
 test('accepts persisted v2 custom games and strictly rejects forged v3 runtime fields', async () => {

@@ -163,6 +163,19 @@ export function templateGuidance(templateId, seriesId) {
   if (templateId !== 'custom') return TEMPLATE_GUIDANCE[templateId] ?? TEMPLATE_GUIDANCE.custom;
   if (!seriesId) return TEMPLATE_GUIDANCE.custom;
   const series = requireExclusiveSeries(seriesId);
+  if (series.seriesId === 'prompt-arcade') {
+    return `严格生成“专属小游戏 · AI 游戏工坊”：
+- schemaVersion 与权威状态由服务端补齐；模型只输出结构化 schema 要求的展示文案、五选一 preset、有界 tuning 和完整 document。
+- document 是在无 allow-same-origin 的 CSP sandbox iframe 中执行的自包含 HTML/CSS/JavaScript，必须严格使用 PairPlay v1 bridge，不得联网、引用外部资源或读取父页 DOM。
+- 模型生成的代码只负责画面、动画与输入采集；角色、允许 control、物理、比分、胜负和状态转换全部服从 host.init / host.sync，不得自行伪造。
+- playMode=preview 时要在沙箱内提供本地对手模拟和完整可玩试玩；playMode=network 时只渲染服务端权威状态。
+- 不得把聊天原文、用户资料或任何敏感信息写入代码和可见文案。
+
+本次系列：${series.title}
+系列 ID：${series.seriesId}
+版本键：${series.templateKey}
+${series.generationBrief}`;
+  }
   return `${TEMPLATE_GUIDANCE.custom}\n\n本次系列：${series.title}\n系列 ID：${series.seriesId}\n版本键：${series.templateKey}\n${series.generationBrief}`;
 }
 

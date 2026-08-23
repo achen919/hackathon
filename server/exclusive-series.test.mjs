@@ -69,7 +69,9 @@ test('exclusive prompt and fallback use public topics and preserve the selected 
 test('prompt arcade fallback follows safe prompt hints without copying the brief', () => {
   const editablePrompt = buildExclusiveSeriesPrompt(match, 'prompt-arcade');
   assert.match(editablePrompt, /做一个以/);
-  assert.match(editablePrompt, /左右滑卡/);
+  assert.match(editablePrompt, /篮球投篮/);
+  assert.match(editablePrompt, /真正可以操作/);
+  assert.doesNotMatch(editablePrompt, /左右滑卡/);
   assert.equal(editablePrompt.includes('schema'), false);
   assert.equal(editablePrompt.includes('exclusive-choice-v1'), false);
 
