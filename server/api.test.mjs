@@ -143,7 +143,7 @@ test('match endpoint rate limits repeated requests by client address', async () 
   );
 });
 
-test('admin session protects config and never returns the provider key', async () => {
+test('admin session protects config and never returns either provider key', async () => {
   const password = 'independent-admin-password';
   const adminPasswordHash = await hashAdminPassword(password);
   const configStore = createMemoryConfigStore();
@@ -164,6 +164,7 @@ test('admin session protects config and never returns the provider key', async (
       assert.ok(loginBody.csrfToken);
 
       const providerKey = 'test-admin-provider-key';
+      const imageProviderKey = 'test-admin-image-provider-key';
       const update = await fetch(`${baseUrl}/api/admin/config`, {
         method: 'PUT',
         headers: {
@@ -176,6 +177,11 @@ test('admin session protects config and never returns the provider key', async (
           apiBaseUrl: 'https://api.example.com/v1',
           apiKey: providerKey,
           model: 'test-model',
+          imageApiBaseUrl: 'https://tokendance.space/gateway/ark/v3',
+          imageApiRoute: '/images/generations',
+          imageApiKey: imageProviderKey,
+          imageProtocol: 'ark:image-generations',
+          imageModel: 'seedream-5.0-pro',
           systemPrompt: '请生成尊重双方边界并且不会泄露私密信息的三轮破冰游戏。'.repeat(4),
           gameTypes: [gameType('profile-riddle')],
         }),
@@ -183,12 +189,15 @@ test('admin session protects config and never returns the provider key', async (
       const rawUpdate = await update.text();
       assert.equal(update.status, 200);
       assert.equal(rawUpdate.includes(providerKey), false);
+      assert.equal(rawUpdate.includes(imageProviderKey), false);
 
       const config = await fetch(`${baseUrl}/api/admin/config`, { headers: { Cookie: cookie } });
       const rawConfig = await config.text();
       assert.equal(config.status, 200);
       assert.equal(rawConfig.includes(providerKey), false);
+      assert.equal(rawConfig.includes(imageProviderKey), false);
       assert.equal(JSON.parse(rawConfig).apiKeyConfigured, true);
+      assert.equal(JSON.parse(rawConfig).imageApiKeyConfigured, true);
     },
   );
 });

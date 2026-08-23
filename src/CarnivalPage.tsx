@@ -48,7 +48,7 @@ const DEFAULT_GAME_TYPES: CarnivalGameType[] = [
   {
     templateId: 'profile-riddle',
     label: '资料猜谜局',
-    description: '各选三个词，说出你眼中的 TA。',
+    description: '三组生活候选各选一个，让 TA 很想接着回应。',
     enabled: true,
     available: true,
   },
@@ -108,6 +108,7 @@ function readCarnivalResultCards(roomId: string): GameResultCard[] {
     if (!Array.isArray(parsed)) return [];
     return parsed.filter((item): item is GameResultCard => Boolean(
       item && typeof item === 'object' && typeof item.id === 'string' &&
+      item.templateId !== 'profile-riddle' &&
       typeof item.gameId === 'string' && typeof item.gameTitle === 'string' &&
       typeof item.headline === 'string' && typeof item.summary === 'string',
     ));
@@ -233,7 +234,7 @@ function localPrompt(
     return buildCarnivalExclusivePrompt(seriesId, messages);
   }
   const mechanic = option.templateId === 'profile-riddle'
-    ? '双方分别选三个中性关键词组成一句印象，完成后再一起揭晓。'
+    ? '生成三个不同生活场景，每组恰好三个口语化行为候选；后台维度不展示，双方每组各选一个组成一句，完成后再一起揭晓。不要使用宽泛人格词或直接复述资料。'
     : option.templateId === 'keyword-wheel'
       ? '从公开聊天主题生成转盘，每个关键词配一条低压力追问。'
       : option.templateId === 'rapid-choice'
@@ -993,6 +994,7 @@ export default function CarnivalPage({
   }, [api, applyState, clearLocalSession, invalidateGamePreview, makeController, releaseController, token]);
 
   function handleCarnivalGameComplete(completion: CarnivalGameCompletion) {
+    if (completion.invitation.templateId === 'profile-riddle') return;
     const cardKey = completion.invitation.inviteId;
     if (resultCardIdsRef.current.has(cardKey)) return;
     resultCardIdsRef.current.add(cardKey);
@@ -1009,7 +1011,15 @@ export default function CarnivalPage({
     void fetch('/api/games/result-card', {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ game, result: completion.result, players: completion.players }),
+      body: JSON.stringify({
+        game,
+        result: completion.result,
+        players: completion.players,
+        conversation: (room?.messages ?? []).slice(-20).map((message) => ({
+          speaker: room?.participants.findIndex((participant) => participant.participantId === message.senderId) === 1 ? 'b' : 'a',
+          content: message.content.slice(0, 500),
+        })),
+      }),
     }).then(async (response) => {
       const payload = (await response.json().catch(() => ({}))) as { card?: GameResultCard };
       if (!response.ok || !payload.card) throw new Error('Result card request failed');

@@ -161,7 +161,9 @@ export function IcebreakerGame({
               其中 {matchedCount} 次碰巧同频，{results.length - matchedCount} 次发现新线索。
               差异不是扣分，是下一段对话的入口。
             </p>
-            <p className="game-complete__reason">这局为什么适合你们：{game.whyItFits}</p>
+            {game.templateId !== 'profile-riddle' && (
+              <p className="game-complete__reason">这局为什么适合你们：{game.whyItFits}</p>
+            )}
             <div className="game-complete__people">
               <Avatar name={match.user_a.nickname} tone={toneFor('a')} size="large" />
               <span className="game-complete__line">一起完成</span>
@@ -209,7 +211,7 @@ export function IcebreakerGame({
                   <span>现在由 {protagonistUser.nickname} 私密作答</span>
                   <span className="privacy-chip">另一方暂时看不到</span>
                 </div>
-                <p className="question-source">{question.source}</p>
+                {game.templateId !== 'profile-riddle' && <p className="question-source">{question.source}</p>}
                 <h3 className="question-title">{question.prompt}</h3>
                 <div className="choice-grid" role="radiogroup" aria-label="选择你的答案">
                   {question.options.map((option, index) => (
@@ -263,7 +265,7 @@ export function IcebreakerGame({
                   <span>{guesserUser.nickname} 来猜一猜</span>
                   <span className="privacy-chip">不算默契考试</span>
                 </div>
-                <p className="question-source">{question.source}</p>
+                {game.templateId !== 'profile-riddle' && <p className="question-source">{question.source}</p>}
                 <h3 className="question-title">{protagonistUser.nickname} 会怎么选？</h3>
                 <div className="choice-grid" role="radiogroup" aria-label="猜猜对方的答案">
                   {question.options.map((option, index) => (

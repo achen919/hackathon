@@ -11,7 +11,12 @@ import {
   createArcadeSession,
   isArcadeGameDefinitionCandidate,
 } from './arcade-game.mjs';
-import { hasUnsafeContactOrLink, hasUnsafeGameText } from './game-templates.mjs';
+import {
+  PROFILE_RIDDLE_DIRECTION_IDS,
+  hasUnsafeContactOrLink,
+  hasUnsafeGameText,
+  isProfileRiddleBehaviorLabel,
+} from './game-templates.mjs';
 import { exclusiveSeriesForId, requireExclusiveSeries } from './exclusive-series.mjs';
 import {
   PROMPT_GAME_ENGINE,
@@ -52,11 +57,28 @@ const TEMPLATE_LABELS = Object.freeze({
 });
 
 const TEMPLATE_PROMPTS = Object.freeze({
-  'profile-riddle': '生成三个中性、非敏感的关键词选择组，让双方各选三个词描述对方；答案在双方都提交前必须保密。',
+  'profile-riddle': '生成三个不同生活场景，每组恰好三个口语化行为候选；双方每组各选一个，猜测在双方都提交前必须保密。',
   'keyword-wheel': '生成三到八个来自公开聊天共同点的安全转盘话题，每个话题附一条轻松追问。',
   'rapid-choice': '生成三到五道五秒二选一，选项没有优劣；双方独立完成后，再一起查看答案并讨论为什么选择 A 或 B。',
   custom: '从稳定专属系列生成三轮轮流猜答；每轮由一方私密作答、另一方猜测，猜测锁定后才揭晓本轮。',
 });
+
+const PROFILE_RIDDLE_DIRECTION_CATEGORIES = Object.freeze({
+  'profile-social-state': 'interaction',
+  'profile-communication': 'interaction',
+  'profile-weekend': 'planning',
+  'profile-travel': 'planning',
+  'profile-food': 'lifestyle',
+  'profile-interest': 'lifestyle',
+  'profile-life-pace': 'planning',
+  'profile-decision': 'planning',
+  'profile-date': 'interaction',
+  'profile-emotion': 'interaction',
+});
+
+function profileRiddleSentence(targetName, keywords) {
+  return `我觉得${targetName}是一个${keywords[0]}、${keywords[1]}，而且${keywords[2]}的人。`;
+}
 
 const DEFAULT_LIMITS = Object.freeze({
   maxParticipants: 500,
@@ -312,11 +334,52 @@ function validateCarnivalGameDefinition(templateId, seriesId, value, limits) {
 
   if (templateId === 'profile-riddle') {
     if (game.mechanics?.kind !== 'profile-riddle') fail('INVALID_GAME', 'profile game mechanics are required', 400);
-    uniqueStrings(game.mechanics.keywordOptions, 'game.mechanics.keywordOptions', {
+    const keywordOptions = uniqueStrings(game.mechanics.keywordOptions, 'game.mechanics.keywordOptions', {
       minItems: 6,
       maxItems: 12,
       maxLength: 60,
     });
+    const validateChoiceGroups = (groups, field, requireFlatOptions = true) => {
+      if (!Array.isArray(groups) || groups.length !== 3) {
+        fail('INVALID_GAME', 'profile game must contain exactly three choice groups', 400);
+      }
+      const ids = new Set();
+      const groupedOptions = [];
+      for (const [index, group] of groups.entries()) {
+        if (!isRecord(group)) fail('INVALID_GAME', `profile choice group ${index} is invalid`, 400);
+        const id = normalizeId(group.id, `${field}[${index}].id`);
+        if (!PROFILE_RIDDLE_DIRECTION_IDS.includes(id) || ids.has(id)) {
+          fail('INVALID_GAME', 'profile choice group ids must be distinct supported directions', 400);
+        }
+        ids.add(id);
+        const options = uniqueStrings(group.options, `${field}[${index}].options`, {
+          minItems: 3,
+          maxItems: 3,
+          maxLength: 60,
+        });
+        if (!options.every(isProfileRiddleBehaviorLabel)) {
+          fail('INVALID_GAME', 'profile choice groups must use scene-based behavior labels', 400);
+        }
+        groupedOptions.push(...options);
+      }
+      if (new Set([...ids].map((id) => PROFILE_RIDDLE_DIRECTION_CATEGORIES[id])).size < 2) {
+        fail('INVALID_GAME', 'profile choice groups must cover at least two scene categories', 400);
+      }
+      if (new Set(groupedOptions).size !== 9 || (requireFlatOptions && groupedOptions.some((option) => !keywordOptions.includes(option)))) {
+        fail('INVALID_GAME', 'profile choice groups must contain nine distinct allowed options', 400);
+      }
+    };
+    if (game.mechanics.choiceGroups !== undefined) {
+      validateChoiceGroups(game.mechanics.choiceGroups, 'game.mechanics.choiceGroups');
+    }
+    if (game.mechanics.choiceGroupsByTarget !== undefined) {
+      const byTarget = game.mechanics.choiceGroupsByTarget;
+      if (!isRecord(byTarget) || Object.keys(byTarget).length !== 2 || !('a' in byTarget) || !('b' in byTarget)) {
+        fail('INVALID_GAME', 'profile game target groups must contain only a and b', 400);
+      }
+      validateChoiceGroups(byTarget.a, 'game.mechanics.choiceGroupsByTarget.a', false);
+      validateChoiceGroups(byTarget.b, 'game.mechanics.choiceGroupsByTarget.b', false);
+    }
   } else if (templateId === 'keyword-wheel') {
     if (game.mechanics?.kind !== 'keyword-wheel') fail('INVALID_GAME', 'wheel game mechanics are required', 400);
     const segments = game.mechanics.segments;
@@ -1364,14 +1427,17 @@ export function createCarnivalService(options = {}) {
           maxLength: 60,
           errorCode: 'INVALID_ACTION',
         });
-        const sentence = normalizeString(input.sentence, 'sentence', { min: 5, max: 200 });
-        if (hasUnsafeContactOrLink(sentence)) {
-          fail('INVALID_ACTION', 'Profile sentence must not contain contact details or links', 400);
-        }
-        const allowed = new Set(invite.game.mechanics.keywordOptions);
-        if (keywords.some((keyword) => !allowed.has(keyword))) {
+        const target = peerMember(room, participant.id);
+        if (!target) fail('ROOM_NOT_FOUND', 'Matched peer is unavailable', 409);
+        const targetKey = target.id === invite.creatorId ? 'a' : 'b';
+        const groups = invite.game.mechanics.choiceGroupsByTarget?.[targetKey] ?? invite.game.mechanics.choiceGroups;
+        const allowedBySlot = Array.isArray(groups) && groups.length === 3
+          ? keywords.every((keyword, index) => Array.isArray(groups[index]?.options) && groups[index].options.includes(keyword))
+          : keywords.every((keyword) => invite.game.mechanics.keywordOptions.includes(keyword));
+        if (!allowedBySlot) {
           fail('INVALID_ACTION', 'Profile answer contains a keyword outside this game', 400);
         }
+        const sentence = profileRiddleSentence(target.nickname, keywords);
         const privateState = invitePrivateState(invite, participant.id);
         if (privateState.profileKeywords) fail('ALREADY_SUBMITTED', 'Profile answer was already submitted', 409);
         privateState.profileKeywords = keywords;

@@ -22,6 +22,44 @@ function profileGame() {
   };
 }
 
+function groupedProfileGame() {
+  const choiceGroups = [
+    { id: 'profile-weekend', options: ['睡醒再决定安排', '约好一件事就够', '喜欢把一天排满'] },
+    { id: 'profile-food', options: ['先看评价再选店', '想吃什么当场定', '会为一家店绕路'] },
+    { id: 'profile-decision', options: ['先列几个选项再定', '听完建议马上决定', '容易当场改变主意'] },
+  ];
+  return {
+    schemaVersion: 2,
+    templateId: 'profile-riddle',
+    title: '三个生活小猜测',
+    mechanics: {
+      kind: 'profile-riddle',
+      choiceGroups,
+      keywordOptions: choiceGroups.flatMap((group) => group.options),
+      sentencePattern: '我觉得{昵称}是一个{猜测一}、{猜测二}，而且{猜测三}的人。',
+    },
+  };
+}
+
+function targetedGroupedProfileGame() {
+  const base = groupedProfileGame();
+  const targetA = [
+    { id: 'profile-travel', options: ['出门前先排好路线', '到了当地再决定', '经常临时改变路线'] },
+    { id: 'profile-interest', options: ['感兴趣会查到底', '会拉朋友一起体验', '有空再慢慢研究'] },
+    { id: 'profile-communication', options: ['有话比较直接说', '先听完再回应', '想清楚以后再开口'] },
+  ];
+  return {
+    ...base,
+    mechanics: {
+      ...base.mechanics,
+      choiceGroupsByTarget: {
+        a: targetA,
+        b: base.mechanics.choiceGroups,
+      },
+    },
+  };
+}
+
 function wheelGame() {
   return {
     schemaVersion: 2,
@@ -238,18 +276,10 @@ test('keeps profile sentences and keywords private until both participants submi
     });
     const inviteId = created.invite.inviteId;
     await service.joinInvite(players.femaleToken, inviteId);
-    await assert.rejects(
-      () => service.gameAction(players.maleToken, inviteId, {
-        type: 'profile-submit',
-        keywords: ['真诚', '有趣', '好奇'],
-        sentence: '我猜你很真诚，可以加微信号 unsafe_12345 继续聊。',
-      }),
-      hasCode('INVALID_ACTION'),
-    );
     await service.gameAction(players.maleToken, inviteId, {
       type: 'profile-submit',
       keywords: ['真诚', '有趣', '好奇'],
-      sentence: '我猜你是一个真诚、有趣，而且愿意探索新东西的人。',
+      sentence: '这段带微信号 unsafe_12345 的客户端句子必须被服务端忽略。',
     });
 
     const femaleView = (await service.getInvite(players.femaleToken, inviteId)).invite;
@@ -270,11 +300,15 @@ test('keeps profile sentences and keywords private until both participants submi
     assert.equal(completed.invite.status, 'completed');
     assert.equal(
       completed.invite.reveal.answers[players.maleId].sentence,
-      '我猜你是一个真诚、有趣，而且愿意探索新东西的人。',
+      '我觉得小余是一个真诚、有趣，而且好奇的人。',
     );
     assert.deepEqual(
       completed.invite.reveal.answers[players.femaleId].keywords,
       ['细腻', '松弛', '热爱生活'],
+    );
+    assert.equal(
+      completed.invite.reveal.answers[players.femaleId].sentence,
+      '我觉得小林是一个细腻、松弛，而且热爱生活的人。',
     );
 
     const outsiders = await pair(service, ['另一位男生', '另一位女生']);
@@ -282,6 +316,76 @@ test('keeps profile sentences and keywords private until both participants submi
       () => service.getInvite(outsiders.maleToken, inviteId),
       hasCode('INVITE_NOT_FOUND'),
     );
+  });
+});
+
+test('grouped profile riddles accept exactly one choice from each hidden group', async () => {
+  await withStateDir(async (_stateDir, service) => {
+    const players = await pair(service);
+    await unlock(service, players);
+    const created = await service.createInvite(players.maleToken, {
+      templateId: 'profile-riddle', prompt: PROMPT, game: groupedProfileGame(),
+    });
+    const inviteId = created.invite.inviteId;
+    await service.joinInvite(players.femaleToken, inviteId);
+
+    await assert.rejects(
+      () => service.gameAction(players.maleToken, inviteId, {
+        type: 'profile-submit',
+        keywords: ['睡醒再决定安排', '约好一件事就够', '先列几个选项再定'],
+        sentence: '我觉得你是一个睡醒再决定安排、约好一件事就够，而且先列几个选项再定的人。',
+      }),
+      hasCode('INVALID_ACTION'),
+    );
+
+    const accepted = await service.gameAction(players.maleToken, inviteId, {
+      type: 'profile-submit',
+      keywords: ['睡醒再决定安排', '想吃什么当场定', '先列几个选项再定'],
+      sentence: '我觉得你是一个睡醒再决定安排、想吃什么当场定，而且先列几个选项再定的人。',
+    });
+    assert.equal(accepted.invite.progress.selfSubmitted, true);
+    assert.equal(accepted.invite.privateState.keywords[1], '想吃什么当场定');
+  });
+});
+
+test('targeted profile riddles validate each participant against the person they are guessing', async () => {
+  await withStateDir(async (_stateDir, service) => {
+    const players = await pair(service);
+    await unlock(service, players);
+    const created = await service.createInvite(players.maleToken, {
+      templateId: 'profile-riddle', prompt: PROMPT, game: targetedGroupedProfileGame(),
+    });
+    const inviteId = created.invite.inviteId;
+    await service.joinInvite(players.femaleToken, inviteId);
+
+    await assert.rejects(
+      () => service.gameAction(players.maleToken, inviteId, {
+        type: 'profile-submit',
+        keywords: ['出门前先排好路线', '感兴趣会查到底', '有话比较直接说'],
+      }),
+      hasCode('INVALID_ACTION'),
+    );
+    await service.gameAction(players.maleToken, inviteId, {
+      type: 'profile-submit',
+      keywords: ['睡醒再决定安排', '想吃什么当场定', '先列几个选项再定'],
+    });
+
+    await assert.rejects(
+      () => service.gameAction(players.femaleToken, inviteId, {
+        type: 'profile-submit',
+        keywords: ['睡醒再决定安排', '想吃什么当场定', '先列几个选项再定'],
+      }),
+      hasCode('INVALID_ACTION'),
+    );
+    const completed = await service.gameAction(players.femaleToken, inviteId, {
+      type: 'profile-submit',
+      keywords: ['出门前先排好路线', '感兴趣会查到底', '有话比较直接说'],
+    });
+
+    assert.equal(completed.invite.reveal.answers[players.maleId].sentence,
+      '我觉得小余是一个睡醒再决定安排、想吃什么当场定，而且先列几个选项再定的人。');
+    assert.equal(completed.invite.reveal.answers[players.femaleId].sentence,
+      '我觉得小林是一个出门前先排好路线、感兴趣会查到底，而且有话比较直接说的人。');
   });
 });
 

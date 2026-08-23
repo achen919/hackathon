@@ -54,6 +54,11 @@ export interface GameQuestion {
   differentFollowUp: string;
 }
 
+export interface ProfileRiddleChoiceGroup {
+  id: string;
+  options: [string, string, string];
+}
+
 export interface GameDefinition {
   schemaVersion: 2;
   id: string;
@@ -70,6 +75,11 @@ export interface GameDefinition {
   mechanics:
     | {
         kind: 'profile-riddle';
+        /** Three independent, hidden-dimension candidate groups. */
+        choiceGroups?: [ProfileRiddleChoiceGroup, ProfileRiddleChoiceGroup, ProfileRiddleChoiceGroup];
+        /** Candidate groups keyed by the participant being guessed. */
+        choiceGroupsByTarget?: Record<ParticipantId, [ProfileRiddleChoiceGroup, ProfileRiddleChoiceGroup, ProfileRiddleChoiceGroup]>;
+        /** Flattened legacy projection kept for persisted games and older clients. */
         keywordOptions: string[];
         sentencePattern: string;
       }

@@ -7,6 +7,7 @@ interface GameResultCardViewProps {
 }
 
 export function GameResultCardView({ card, compact = false, onPrompt }: GameResultCardViewProps) {
+  const isProfileRiddle = card.templateId === 'profile-riddle';
   return (
     <article
       aria-busy={card.status === 'generating'}
@@ -18,7 +19,7 @@ export function GameResultCardView({ card, compact = false, onPrompt }: GameResu
           <span className="game-result-card__eyebrow">游戏结果 · {card.gameTitle}</span>
           <span className="game-result-card__badge">{card.badge}</span>
         </div>
-        <div className="game-result-card__score"><strong>{card.score}</strong><span>/ 100<br />AI 评估</span></div>
+        {!isProfileRiddle && <div className="game-result-card__score"><strong>{card.score}</strong><span>/ 100<br />AI 评估</span></div>}
         <h3>{card.headline}</h3>
         <p>{card.summary}</p>
         {!compact && <ul>{card.highlights.map((item) => <li key={item}>{item}</li>)}</ul>}
@@ -26,7 +27,7 @@ export function GameResultCardView({ card, compact = false, onPrompt }: GameResu
           <span>下一步 · {card.nextPrompt}</span>
           {onPrompt && <button type="button" onClick={() => onPrompt(card.nextPrompt)}>继续聊这个</button>}
         </div>
-        <small className="game-result-card__source">{card.status === 'generating' ? 'AI 正在评估并生成背景…' : card.generatedBy === 'ai' ? (card.backgroundUrl ? 'AI 评估 · AI 背景' : 'AI 评估 · 文字卡片') : '本地安全评估 · 可继续聊天'} · {new Date(card.createdAt).toLocaleString('zh-CN', { hour12: false })}</small>
+        <small className="game-result-card__source">{isProfileRiddle ? '安全结果整理' : card.status === 'generating' ? 'AI 正在评估并生成背景…' : card.generatedBy === 'ai' ? (card.backgroundUrl ? 'AI 评估 · AI 背景' : 'AI 评估 · 文字卡片') : '本地安全评估 · 可继续聊天'} · {new Date(card.createdAt).toLocaleString('zh-CN', { hour12: false })}</small>
       </div>
     </article>
   );

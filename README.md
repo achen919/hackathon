@@ -24,6 +24,7 @@ LIANGPEI_TOKEN=你的比赛令牌
 ADMIN_PASSWORD_HASH=管理员密码的_scrypt_哈希
 CONFIG_ENCRYPTION_KEY=32字节_base64url_主密钥
 AI_ALLOWED_ORIGINS=https://api.openai-next.com
+IMAGE_AI_ALLOWED_ORIGINS=https://tokendance.space
 AI_GENERATION_PER_HOUR=20
 AI_FRESH_PER_CONTEXT=2
 ```
@@ -54,7 +55,7 @@ LIANGPEI_TOKEN=你的比赛令牌 npm run start:api
 
 ## AI 专属游戏与管理后台
 
-默认 Demo 点击“一起玩”后，只会向同域后端提交一次性的案例上下文 ID 与本人确认过的 Prompt。后端保留最近 60 条公开聊天，并可从 Demo 接口返回的 `profile`、`memories_self`、`memories_ideal` 与择偶偏好中提炼 allowlist 内的非敏感兴趣/相处信号；原始私密文本、昵称和性别不会发送给模型。
+默认 Demo 点击“一起玩”后，只会向同域后端提交一次性的案例上下文 ID 与本人确认过的 Prompt。后端保留最近 60 条公开聊天，并可从 Demo 接口返回的 `profile`、`memories_self`、`memories_ideal` 与择偶偏好中提炼 allowlist 内的非敏感兴趣/相处信号；原始私密文本、昵称和性别不会发送给模型。资料猜谜局采用更窄的边界，只使用公开 `profile`、公开聊天和显式的公开资料信号，不读取 `memories_self`、`memories_ideal` 或择偶偏好。
 
 游园会的真实用户注册只收集昵称和性别，没有 Demo 的资料与记忆字段。因此游园会「专属小游戏」只使用当前房间中清洗、截断后的最近公开聊天片段与安全话题信号；昵称和性别仅用于匹配与界面展示，不作为题目推断依据。
 
@@ -66,15 +67,29 @@ POST {API_BASE_URL}/v1/chat/completions
 
 基址也可以直接以 `/v1` 结尾，服务端会避免重复拼接。当前默认基址为 `https://api.openai-next.com`，实际可用模型应在保存 Key 后点击“检测模型”读取。
 
+结果卡背景使用独立的生图配置。默认按 TokenDance 的 Ark 生图协议请求 Seedream 5.0 Pro：
+
+```text
+POST https://tokendance.space/gateway/ark/v3/images/generations
+Authorization: Bearer <独立生图 Key>
+model: seedream-5.0-pro
+protocol: ark:image-generations
+```
+
+Base URL、请求路由、协议、模型和生图 Key 都可在管理后台修改；Ark 请求使用 `2K`、PNG、Base64 响应且关闭水印。文本模型与生图模型使用两套独立 Key，任一服务失败时仍保留可用的本地题卡或文字结果卡。
+
 管理后台支持：
 
-- API Base URL、API Key 和模型；
+- 文本模型的 API Base URL、API Key 和模型；
+- 结果卡生图的 Base URL、请求路由、协议、独立加密 Key 和模型；
 - 4 个稳定模板 ID、可编辑滚动展示词及每模板生成要求；`custom` 模板内另有 6 个稳定专属系列 ID，其中 `prompt-arcade` 支持一句话生成可玩预览；
 - 可编辑的游戏设计系统提示词；
 - 使用当前 Key 检测可用模型；
 - 显式清除 Key，并让前台自动回退本地题卡。
 
-Key 只在 HTTPS 保存请求中提交一次，使用 AES-256-GCM 加密到仓库外的状态目录；管理接口只返回 `apiKeyConfigured`，不会返回 Key。本地 `.env`、生产 `/etc/hackathon-chat.env`、状态目录和管理员会话都不会进入前端包。
+两套 Key 都只在 HTTPS 保存请求中提交一次，使用 AES-256-GCM 分别加密到仓库外的状态目录；管理接口只返回 `apiKeyConfigured` / `imageApiKeyConfigured`，不会返回任何 Key。本地 `.env`、生产 `/etc/hackathon-chat.env`、状态目录和管理员会话都不会进入前端包。
+
+管理端还可以编辑结果卡生图 Prompt。服务端会把该基础 Prompt 与最近公开对话状态、本局游戏和结果组合后再请求生图模型；只使用 A/B 说话方标识，并限制条数与长度、过滤联系方式和链接，不会把昵称或原始私密资料发送给生图上游。
 
 公开生成接口默认最多触发 20 次真实模型调用/小时，同一个 15 分钟案例上下文最多强制换题 2 次；相同请求会复用缓存与进行中的调用。
 
@@ -100,7 +115,7 @@ node /opt/hackathon-chat/deploy/bootstrap-production.mjs
 6. 完整展示接口返回的全部聊天记录，包括非文本类型携带的原始内容；
 7. 邀请标题在后台启用的玩法关键词之间自动上下滚动；
 8. 开始前生成可编辑的本局 Prompt；内置玩法由稳定模板 ID 控制，`prompt-arcade` 则让 AI 编写完整自包含游戏代码并立即隔离试玩；
-9. “资料猜谜局”支持双方各选三个词并拼成一句印象，保密交接后共同揭晓；
+9. “资料猜谜局”会分别根据当前被猜的 TA 的公开线索，动态挑选三个不同生活场景，每组给三个行为候选；双方各组选一个，由服务端拼成固定安全句式，保密交接后共同揭晓；
 10. “关键词深挖”支持话题转盘、追问切换与回填聊天；
 11. “极限2选1”支持 3–5 题、每题 5 秒、双方私密作答与共同揭晓；
 12. “专属小游戏”使用 `templateId: custom`，其中 5 个旧系列继续使用三轮答猜协议，`prompt-arcade` 使用真实连续操作、服务端权威物理与比分；
@@ -124,7 +139,7 @@ node /opt/hackathon-chat/deploy/bootstrap-production.mjs
 
 - 不显示匹配度或输赢；猜错被定义为“发现新线索”。
 - 本地题卡只使用双方已经在聊天中公开提到的安全话题。
-- 默认 Demo 的 AI 接收公开聊天，以及从 `profile`、`memories_self`、`memories_ideal` 和择偶偏好中提炼的 allowlist 非敏感信号，不接收这些字段的原始私密文本。
+- 默认 Demo 的 AI 接收公开聊天，以及从 `profile`、`memories_self`、`memories_ideal` 和择偶偏好中提炼的 allowlist 非敏感信号，不接收这些字段的原始私密文本；资料猜谜局除外，它只使用公开 `profile`、公开聊天和显式的公开资料信号。
 - 游园会专属小游戏只接收当前房间中清洗、截断后的最近公开聊天片段与安全话题信号，不使用昵称或性别推断内容。
 - 不自动发送消息，不替用户表白或做关系判断。
 - 双端玩法把答案保存在服务端，并按当前参与者投影状态；双方完成前不会返回对方具体选择。
