@@ -343,7 +343,8 @@ const broadProfileLabelRoots = [
 ];
 const interestingScene = /有趣(?:的)?(?:小店|店|地方|展览|展|电影|书|音乐|游戏|话题|活动|东西|故事|点子|路线|招牌|菜单|餐厅|体验|事情|内容|作品)/gu;
 
-function isBehaviorLabel(value: string) {
+function isBehaviorLabel(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
   const normalized = value.trim();
   const length = [...normalized].length;
   const comparable = normalized.replace(/[\s\p{P}\p{S}]+/gu, '');
@@ -364,7 +365,8 @@ function validProfileGroups(groups: unknown) {
   const categories = new Set(ids.map((id) => profileDirections.find((direction) => direction.id === id)?.category));
   const options = groups.flatMap((group) => Array.isArray(group?.options) ? group.options : []);
   return categories.size >= 2 && options.length === 9 && new Set(options).size === 9 &&
-    groups.every((group) => Array.isArray(group.options) && group.options.length === 3 && group.options.every(isBehaviorLabel));
+    groups.every((group) => group && typeof group === 'object' &&
+      Array.isArray(group.options) && group.options.length === 3 && group.options.every(isBehaviorLabel));
 }
 
 export function isGameDefinition(value: unknown): value is GameDefinition {

@@ -79,3 +79,27 @@ test('result-card endpoint rejects profile-riddle without invoking evaluation', 
     assert.equal(createCalls, 0);
   });
 });
+
+test('result-card endpoint rejects profile-riddle without invoking evaluation', async () => {
+  let calls = 0;
+  const resultCardService = {
+    create: async () => {
+      calls += 1;
+      throw new Error('profile-riddle must not reach the result-card service');
+    },
+  };
+  await withServer(createApiHandler({ configStore: createMemoryConfigStore(), resultCardService }), async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/games/result-card`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', Origin: baseUrl },
+      body: JSON.stringify({
+        ...requestBody,
+        game: { ...requestBody.game, templateId: 'profile-riddle' },
+        result: { type: 'profile-riddle', guesses: { a: ['一', '二', '三'], b: ['四', '五', '六'] } },
+      }),
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).code, 'RESULT_CARD_UNSUPPORTED');
+    assert.equal(calls, 0);
+  });
+});
