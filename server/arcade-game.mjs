@@ -255,6 +255,29 @@ export function isSafeArcadeDocument(value) {
   return true;
 }
 
+export function supportsArcadePresentationOnly(value) {
+  return isSafeArcadeDocument(value) &&
+    /<meta(?=[^>]*name=["']pairplay-presentation["'])(?=[^>]*content=["']host-only-v1["'])[^>]*>/iu.test(value) &&
+    /presentationOnly/u.test(value) &&
+    /controls\.hidden\s*=\s*presentationOnly/u.test(value) &&
+    /(?:paused\s*\|\|\s*presentationOnly|presentationOnly\s*\|\|\s*paused)/u.test(value);
+}
+
+function isMobileArcadeDocument(value, preset) {
+  if (
+    typeof value !== 'string' ||
+    !preset ||
+    !supportsArcadePresentationOnly(value) ||
+    !/<meta\s+[^>]*name=["']viewport["']/iu.test(value) ||
+    !/touch-action\s*:/iu.test(value) ||
+    !/pointerdown/u.test(value) ||
+    !/setPointerCapture/u.test(value)
+  ) return false;
+  const controls = [...new Set(preset.roles.flatMap((role) => role.controls))];
+  if (controls.includes('move') && !/pointermove/u.test(value)) return false;
+  return controls.every((control) => new RegExp(`["']${control}["']`, 'u').test(value));
+}
+
 function presetFor(value) {
   return typeof value === 'string' ? PRESET_CATALOG[value] ?? null : null;
 }
@@ -281,6 +304,7 @@ export function isArcadeGamePayload(value, { hasUnsafeText = () => false } = {})
   ) return false;
   const preset = presetFor(value.preset);
   if (!preset || preset.kind !== value.kind) return false;
+  if (!isMobileArcadeDocument(value.document, preset)) return false;
   return ![
     value.title, value.eyebrow, value.description, value.whyItFits, ...value.topics,
   ].some((text) => hasUnsafeText(text));
@@ -427,22 +451,33 @@ export function isArcadeGameDefinition(value, options = {}) {
 }
 
 export const FALLBACK_ARCADE_DOCUMENT = `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no"><meta name="pairplay-presentation" content="host-only-v1">
 <title>PairPlay 双人游戏</title><style>
-*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#101425;color:#fff;font-family:system-ui,sans-serif}main{height:100%;display:grid;grid-template-rows:1fr auto;gap:10px;padding:10px}canvas{width:100%;height:100%;min-height:250px;border-radius:20px;background:linear-gradient(#ffb36b,#7656d6);touch-action:none}.controls{display:flex;justify-content:center;align-items:center;gap:8px;min-height:54px}.controls button,.controls input{min-height:46px;border:0;border-radius:16px;font:700 15px system-ui}.controls button{padding:0 18px;background:#fff;color:#27233d}.controls input{width:min(32vw,190px)}.status{position:absolute;left:22px;top:20px;padding:8px 12px;border-radius:99px;background:#1119;font-weight:800}button:active{transform:scale(.96)}</style></head>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#101425;color:#fff;font-family:system-ui,sans-serif}main{height:100%;min-height:0;display:grid;grid-template-rows:minmax(0,1fr) auto;gap:8px;padding:8px 8px max(8px,env(safe-area-inset-bottom))}canvas{display:block;width:100%;height:100%;min-height:0;border-radius:18px;background:#15152a;touch-action:none}.controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:end;gap:8px;min-height:58px;padding-bottom:1px}.controls[hidden]{display:none}.controls.is-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.controls label{display:grid;gap:3px;min-width:0;color:#dcd9f1;font-size:11px;font-weight:800}.controls output{color:#fff}.controls button,.controls input{width:100%;min-width:0;min-height:48px;border:0;border-radius:15px;font:800 15px system-ui;touch-action:none}.controls button{padding:0 12px;background:#fff;color:#27233d}.controls button.is-selected{background:#72f2c5;color:#10251f;box-shadow:0 0 0 3px #72f2c566}.controls .wide{grid-column:1/-1}.controls input{height:48px;accent-color:#ff8f55}.status{position:absolute;z-index:2;left:18px;top:16px;max-width:calc(100% - 36px);padding:7px 11px;border-radius:99px;background:#111c;font-size:13px;font-weight:800;pointer-events:none}button:active{transform:scale(.97)}button:disabled,input:disabled{opacity:.48}@media(max-width:520px){main{height:100dvh}.controls{position:relative;z-index:3}.controls button{min-height:54px;font-size:15px}}</style></head>
 <body><main><canvas id="stage" width="1000" height="600" aria-label="双人游戏画面"></canvas><div class="controls" id="controls"></div></main><div class="status" id="status">等待连接</div><script>
-'use strict';(()=>{const stage=document.getElementById('stage'),ctx=stage.getContext('2d'),controls=document.getElementById('controls'),status=document.getElementById('status');let channel='',role='',mode='basketball-duel',playMode='network',state=null,completed=false,paused=false,lastAt=0,previewStartedAt=0,aiAt=0,aimValue=0,powerValue=.76;
+'use strict';(()=>{const stage=document.getElementById('stage'),ctx=stage.getContext('2d'),controls=document.getElementById('controls'),status=document.getElementById('status');let channel='',role='',mode='basketball-duel',playMode='network',state=null,completed=false,paused=false,presentationOnly=false,lastAt=0,previewStartedAt=0,aiAt=0,aimValue=0,powerValue=.76,moveValue=0,dragPointer=null,selectedCell=null,lastRound=1;const gridButtons=[];
 const send=(type,extra={})=>{if(channel)parent.postMessage({pairplay:1,type,channel,...extra},'*')};
 const resetBall=f=>{f.ball={x:110,y:500,vx:0,vy:0,inFlight:false}};
-function previewState(){const duration=45000;return{phase:'playing',frame:mode==='basketball-duel'?{tick:0,remainingMs:duration,ball:{x:110,y:500,vx:0,vy:0,inFlight:false},hoop:{x:760,y:300},score:{shooter:0,keeper:0},shots:{taken:0,made:0},event:'preview-start'}:{tick:0,remainingMs:duration,score:{primary:0,secondary:0,team:0},event:'preview-start'},outcome:null}}
+function arenaWidth(){return mode==='relic-expedition'?1200:mode==='grid-command'?900:1000}function arenaHeight(){return mode==='grid-command'?540:mode==='tandem-rescue'?560:mode==='dash-duel'?500:600}function ownKey(){return ['runner-b','navigator','guardian','blue-commander'].includes(role)?'secondary':'primary'}function otherKey(){return ownKey()==='primary'?'secondary':'primary'}
+function genericFrame(duration){const w=arenaWidth(),h=arenaHeight();return{tick:0,remainingMs:duration,score:{primary:0,secondary:0,team:0},round:1,positions:{primary:{x:w*.14,y:h*.34},secondary:{x:w*.14,y:h*.68}},movement:{primary:0,secondary:0},grid:null,event:'preview-start'}}
+function previewState(){const duration=45000;return{phase:'playing',frame:mode==='basketball-duel'?{tick:0,remainingMs:duration,ball:{x:110,y:500,vx:0,vy:0,inFlight:false},hoop:{x:760,y:300},score:{shooter:0,keeper:0},shots:{taken:0,made:0},event:'preview-start'}:genericFrame(duration),outcome:null}}
 function launch(target){const f=state.frame;if(f.ball.inFlight)return;if(Number.isFinite(target)){const flight=1.05;f.ball.vx=(target-f.ball.x)/flight;f.ball.vy=(f.hoop.y-f.ball.y-.5*980*flight*flight)/flight}else{const speed=520+powerValue*300,angle=-1.04+aimValue*.34;f.ball.vx=Math.cos(angle)*speed;f.ball.vy=Math.sin(angle)*speed}f.ball.inFlight=true;f.shots.taken+=1;f.event='shot'}
-function applyPreview(control,value){if(!state||state.phase!=='playing')return;const f=state.frame;if(mode==='basketball-duel'){if(control==='aim')aimValue=Math.max(-1,Math.min(1,Number(value)||0));else if(control==='power')powerValue=Math.max(.25,Math.min(1,Number(value)||0));else if(control==='move'&&role==='keeper')f.hoop.x=Math.max(170,Math.min(900,f.hoop.x+(Number(value)||0)*34));else if(control==='shoot'&&role==='shooter')launch()}else{const amount=control==='move'||control==='select'?1:2;if(mode==='tandem-rescue'||mode==='relic-expedition')f.score.team=Math.min(10,f.score.team+amount);else f.score.primary=Math.min(10,f.score.primary+amount);f.event=control}}
-const input=(control,value)=>{send('game.input',{control,value});if(playMode==='preview')applyPreview(control,value)};
-function button(label,down,up){const b=document.createElement('button');b.textContent=label;b.addEventListener('pointerdown',e=>{e.preventDefault();down()});if(up){for(const n of ['pointerup','pointercancel','pointerleave'])b.addEventListener(n,up)}controls.appendChild(b)}
-function mount(){controls.replaceChildren();if(mode==='basketball-duel'&&role==='shooter'){const aim=document.createElement('input');aim.type='range';aim.min='-1';aim.max='1';aim.step='.02';aim.value='0';aim.setAttribute('aria-label','投篮角度');aim.addEventListener('input',()=>input('aim',Number(aim.value)));controls.appendChild(aim);const power=document.createElement('input');power.type='range';power.min='.25';power.max='1';power.step='.02';power.value=String(powerValue);power.setAttribute('aria-label','投篮力度');power.addEventListener('input',()=>input('power',Number(power.value)));controls.appendChild(power);button('投篮',()=>input('shoot',1))}else if(mode==='basketball-duel'){button('向左',()=>input('move',-1),()=>input('move',0));button('向右',()=>input('move',1),()=>input('move',0))}else{button('移动',()=>input('move',1),()=>input('move',0));button('行动',()=>input(role.includes('commander')?'commit':role.includes('runner')?'boost':role==='pilot'||role==='navigator'?'sync':role==='explorer'?'jump':'guard',1))}}
-function advancePreview(now){if(playMode!=='preview'||paused||!state||state.phase!=='playing')return;const f=state.frame,dt=Math.min(.05,Math.max(0,(now-lastAt)/1000));f.tick+=1;f.remainingMs=Math.max(0,45000-(now-previewStartedAt));if(mode==='basketball-duel'){if(role==='shooter'){f.hoop.x=535+Math.sin(now/620)*300}else if(now-aiAt>1650&&!f.ball.inFlight){aiAt=now;launch(f.hoop.x+(Math.random()-.5)*150)}if(f.ball.inFlight){const oldY=f.ball.y;f.ball.x+=f.ball.vx*dt;f.ball.y+=f.ball.vy*dt;f.ball.vy+=980*dt;if(oldY<=f.hoop.y&&f.ball.y>=f.hoop.y&&Math.abs(f.ball.x-f.hoop.x)<72){f.score.shooter+=1;f.shots.made+=1;f.event='score';resetBall(f)}else if(f.ball.y>620||f.ball.x>1040||f.ball.x<0){f.score.keeper+=1;f.event='miss';resetBall(f)}}}else if(now-aiAt>1400){aiAt=now;if(mode==='tandem-rescue'||mode==='relic-expedition')f.score.team=Math.min(10,f.score.team+1);else f.score.secondary=Math.min(10,f.score.secondary+1)}if(f.remainingMs<=0){state.phase='finished';state.outcome={reason:'preview-ended',completedAt:Date.now(),score:{...f.score}}}}
-function draw(now=0){requestAnimationFrame(draw);if(!lastAt)lastAt=now;advancePreview(now);lastAt=now;const w=stage.width,h=stage.height;ctx.clearRect(0,0,w,h);const f=state&&state.frame;if(!f){ctx.fillStyle='#fff';ctx.font='700 30px system-ui';ctx.textAlign='center';ctx.fillText('正在启动游戏',w/2,h/2);return}if(mode==='basketball-duel'&&f.ball&&f.hoop){ctx.fillStyle='#ffffff22';ctx.fillRect(0,h*.82,w,h*.18);ctx.strokeStyle='#fff';ctx.lineWidth=12;ctx.beginPath();ctx.moveTo(f.hoop.x-66,f.hoop.y);ctx.lineTo(f.hoop.x+66,f.hoop.y);ctx.stroke();ctx.fillStyle='#ff7c3b';ctx.beginPath();ctx.arc(f.ball.x,f.ball.y,14,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff';ctx.font='800 30px system-ui';ctx.textAlign='center';ctx.fillText('投篮 '+f.score.shooter+' : '+f.score.keeper+' 篮筐',w/2,48)}else{ctx.fillStyle='#ffffff18';ctx.fillRect(70,210,w-140,90);const score=f.score||{};const progress=Math.max(score.primary||0,score.secondary||0,score.team||0);ctx.fillStyle='#72f2c5';ctx.fillRect(70,210,(w-140)*Math.min(1,progress/10),90);ctx.fillStyle='#fff';ctx.font='800 34px system-ui';ctx.textAlign='center';ctx.fillText('协作 / 对抗进度 '+progress,w/2,170)}status.textContent=(playMode==='preview'?'试玩 · ':'联机 · ')+(state.phase||'waiting')+' · '+Math.ceil((f.remainingMs||0)/1000)+'s';if(state.phase==='finished'&&!completed){completed=true;send('game.complete',{result:state.outcome||{}})}}
-addEventListener('message',event=>{if(event.source!==parent||!event.data||event.data.pairplay!==1)return;const data=event.data;if(data.type==='host.init'){channel=String(data.channel||'');role=String(data.role||'shooter');mode=String(data.mode||mode);playMode=data.playMode==='preview'||!data.state?'preview':'network';state=playMode==='preview'?previewState():data.state||null;previewStartedAt=performance.now();lastAt=previewStartedAt;aiAt=previewStartedAt;mount();send('game.ready')}else if(channel&&data.channel===channel&&data.type==='host.sync'){if(data.playMode==='network')playMode='network';if(playMode==='network')state=data.state||state}else if(channel&&data.channel===channel&&data.type==='host.pause'){paused=true}else if(channel&&data.channel===channel&&data.type==='host.resume'){paused=false}else if(channel&&data.channel===channel&&data.type==='host.stop'){state={...(state||{}),phase:'finished'}}});
+function applyPreview(control,value){if(!state||state.phase!=='playing')return;const f=state.frame,key=ownKey();if(mode==='basketball-duel'){if(control==='aim')aimValue=Math.max(-1,Math.min(1,Number(value)||0));else if(control==='power')powerValue=Math.max(.25,Math.min(1,Number(value)||0));else if(control==='move'&&role==='keeper')moveValue=Math.max(-1,Math.min(1,Number(value)||0));else if(control==='shoot'&&role==='shooter')launch();return}if(control==='move'){moveValue=Math.max(-1,Math.min(1,Number(value)||0));f.movement[key]=moveValue;f.event='move';return}if(mode==='dash-duel'&&control==='boost'){f.score[key]+=1;f.event='boost'}else if(mode==='tandem-rescue'&&control==='sync'){f.score.team+=1;f.event='sync'}else if(mode==='relic-expedition'&&(control==='jump'||control==='guard')){f.score[key]+=1;f.score.team=Math.min(f.score.primary,f.score.secondary);f.event=control}else if(mode==='grid-command'&&control==='select'){selectedCell=Number(value);f.event='select';updateGridButtons()}else if(mode==='grid-command'&&control==='commit'&&Number.isInteger(selectedCell)){const peer=(selectedCell+f.round*2+3)%9,result=selectedCell===peer?'team':selectedCell>peer?key:otherKey();f.score[result]+=1;f.grid={round:f.round,selections:{[key]:selectedCell,[otherKey()]:peer},result};f.event=result==='team'?'draw':'claim';f.round+=1;selectedCell=null;updateGridButtons()}}
+const input=(control,value)=>{if(paused||presentationOnly)return;if(mode==='grid-command'&&control==='select'){selectedCell=Number(value);updateGridButtons()}send('game.input',{control,value});if(playMode==='preview')applyPreview(control,value)};
+function setPresentation(next){presentationOnly=Boolean(next);controls.hidden=presentationOnly;controls.setAttribute('aria-hidden',String(presentationOnly));status.hidden=presentationOnly;status.setAttribute('aria-hidden',String(presentationOnly))}function setPaused(next){paused=Boolean(next);for(const item of controls.querySelectorAll('button,input'))item.disabled=paused;controls.setAttribute('aria-disabled',String(paused))}
+function button(label,down,up){const b=document.createElement('button');let activePointer=null;b.type='button';b.textContent=label;b.addEventListener('pointerdown',e=>{if(paused||presentationOnly)return;e.preventDefault();activePointer=e.pointerId;b.setPointerCapture(e.pointerId);down()});if(up){const release=e=>{if(activePointer!==e.pointerId)return;activePointer=null;up();if(b.hasPointerCapture(e.pointerId))b.releasePointerCapture(e.pointerId)};b.addEventListener('pointerup',release);b.addEventListener('pointercancel',release);b.addEventListener('lostpointercapture',release)}b.addEventListener('click',e=>{if(e.detail!==0||paused||presentationOnly)return;down();if(up)up()});controls.appendChild(b);return b}
+function slider(labelText,name,min,max,step,value,onChange){const label=document.createElement('label'),text=document.createElement('span'),output=document.createElement('output'),range=document.createElement('input');text.textContent=labelText;output.textContent=String(value);text.append(' ',output);range.type='range';range.min=String(min);range.max=String(max);range.step=String(step);range.value=String(value);range.setAttribute('aria-label',labelText);range.addEventListener('input',()=>{output.textContent=range.value;onChange(Number(range.value))});label.append(text,range);controls.appendChild(label)}
+function updateGridButtons(){gridButtons.forEach((item,index)=>{item.classList.toggle('is-selected',index===selectedCell);item.setAttribute('aria-pressed',String(index===selectedCell))})}function syncGridSelection(){if(playMode!=='network'||mode!=='grid-command')return;const own=Object.values(state||{}).find(item=>item&&typeof item==='object'&&item.role===role&&item.input),value=own?.input?.select;selectedCell=Number.isInteger(value)&&value>=0&&value<=8?value:null;updateGridButtons()}
+function mount(){controls.replaceChildren();gridButtons.length=0;controls.className='controls';controls.dataset.role=role;if(mode==='basketball-duel'&&role==='shooter'){slider('投篮角度','aim',-1,1,.02,aimValue,value=>{aimValue=value;input('aim',value)});slider('投篮力度','power',.25,1,.02,powerValue,value=>{powerValue=value;input('power',value)});const shoot=button('点击投篮',()=>input('shoot',1));shoot.className='wide'}else if(mode==='basketball-duel'){button('按住向左',()=>input('move',-1),()=>input('move',0));button('按住向右',()=>input('move',1),()=>input('move',0))}else if(mode==='grid-command'){controls.classList.add('is-grid');for(let index=0;index<9;index+=1){const cell=button('落点 '+(index+1),()=>input('select',index));cell.setAttribute('aria-pressed','false');gridButtons.push(cell)}const commit=button('锁定并提交',()=>input('commit',1));commit.className='wide'}else{button('按住向左',()=>input('move',-1),()=>input('move',0));button('按住向右',()=>input('move',1),()=>input('move',0));const action=mode==='dash-duel'?['冲刺加速','boost']:mode==='tandem-rescue'?['同步脉冲','sync']:role==='explorer'?['跳跃探索','jump']:['举盾防护','guard'];const act=button(action[0],()=>input(action[1],1));act.className='wide'}syncGridSelection();setPresentation(presentationOnly);setPaused(paused)}
+function canDrag(){return !presentationOnly&&!paused&&mode!=='grid-command'&&!(mode==='basketball-duel'&&role==='shooter')}function dragMove(event){if(!canDrag()||dragPointer!==event.pointerId||!state||!state.frame)return;event.preventDefault();const rect=stage.getBoundingClientRect(),target=(event.clientX-rect.left)/Math.max(1,rect.width)*arenaWidth(),current=mode==='basketball-duel'?Number(state.frame.hoop?.x):Number(state.frame.positions?.[ownKey()]?.x),distance=target-(Number.isFinite(current)?current:arenaWidth()/2);input('move',Math.abs(distance)<22?0:distance<0?-1:1)}
+stage.addEventListener('pointerdown',event=>{if(!canDrag())return;dragPointer=event.pointerId;stage.setPointerCapture(event.pointerId);dragMove(event)});stage.addEventListener('pointermove',dragMove);const stopDrag=event=>{if(dragPointer!==event.pointerId)return;input('move',0);dragPointer=null;if(stage.hasPointerCapture(event.pointerId))stage.releasePointerCapture(event.pointerId)};for(const name of ['pointerup','pointercancel','lostpointercapture'])stage.addEventListener(name,stopDrag);
+function advancePreview(now){if(playMode!=='preview'||paused||!state||state.phase!=='playing')return;const f=state.frame,dt=Math.min(.05,Math.max(0,(now-lastAt)/1000));f.tick+=1;f.remainingMs=Math.max(0,45000-(now-previewStartedAt));if(mode==='basketball-duel'){if(role==='shooter'){f.hoop.x=535+Math.sin(now/620)*300}else{f.hoop.x=Math.max(170,Math.min(900,f.hoop.x+moveValue*420*dt));if(now-aiAt>1650&&!f.ball.inFlight){aiAt=now;launch(f.hoop.x+(Math.random()-.5)*150)}}if(f.ball.inFlight){const oldY=f.ball.y;f.ball.x+=f.ball.vx*dt;f.ball.y+=f.ball.vy*dt;f.ball.vy+=980*dt;if(oldY<=f.hoop.y&&f.ball.y>=f.hoop.y&&Math.abs(f.ball.x-f.hoop.x)<72){f.score.shooter+=1;f.shots.made+=1;f.event='score';resetBall(f)}else if(f.ball.y>620||f.ball.x>1040||f.ball.x<0){f.score.keeper+=1;f.event='miss';resetBall(f)}}}else{const key=ownKey(),other=otherKey(),width=arenaWidth();f.positions[key].x=Math.max(18,Math.min(width-18,f.positions[key].x+moveValue*360*dt));f.movement[key]=moveValue;f.positions[other].x=Math.max(18,Math.min(width-18,f.positions[other].x+(Math.sin(now/700)>0?1:-1)*90*dt));if(now-aiAt>1500&&mode!=='grid-command'){aiAt=now;if(mode==='tandem-rescue')f.score.team=Math.min(10,f.score.team+1);else{f.score[other]=Math.min(10,f.score[other]+1);if(mode==='relic-expedition')f.score.team=Math.min(f.score.primary,f.score.secondary)}}}if(f.remainingMs<=0){state.phase='finished';state.outcome={reason:'preview-ended',completedAt:Date.now(),score:{...f.score}}}}
+function dot(x,y,r,color){ctx.fillStyle=color;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill()}function ring(x,y,r,color,width=4){ctx.strokeStyle=color;ctx.lineWidth=width;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.stroke()}function label(text,x,y,size=14,color='#fff'){ctx.fillStyle=color;ctx.font='800 '+size+'px system-ui';ctx.textAlign='center';ctx.fillText(text,x,y)}function canvasSize(){const w=Math.max(280,Math.round(stage.clientWidth||1000)),h=Math.max(280,Math.round(stage.clientHeight||600));if(stage.width!==w||stage.height!==h){stage.width=w;stage.height=h}return[w,h]}function genericPosition(f,key){const fallback={x:arenaWidth()*.14,y:arenaHeight()*(key==='primary'?.34:.68)};return f.positions?.[key]||fallback}
+function drawRunner(point,color,name,sx,sy,moving){const x=sx(point.x),y=sy(point.y);ctx.strokeStyle=color+'55';ctx.lineWidth=7;ctx.beginPath();ctx.moveTo(Math.max(18,x-(moving?52:30)),y);ctx.lineTo(Math.max(20,x-10),y);ctx.stroke();ring(x,y,22,'#ffffff44',5);dot(x,y,17,color);label(name,x,y+5,12,'#101426')}
+function drawGeneric(f,w,h){const primary=genericPosition(f,'primary'),secondary=genericPosition(f,'secondary'),sx=value=>value/arenaWidth()*w,sy=value=>value/arenaHeight()*h,primaryMove=Number(f.movement?.primary||0),secondaryMove=Number(f.movement?.secondary||0),titleY=Math.max(46,h*.11);if(mode==='dash-duel'){ctx.fillStyle='#090d1c';ctx.fillRect(0,0,w,h);ctx.fillStyle='#141b35';ctx.fillRect(0,h*.17,w,h*.7);for(let x=0;x<w;x+=48){ctx.fillStyle=x%96===0?'#ffffff16':'#ffffff09';ctx.fillRect(x,h*.17,24,h*.7)}ctx.strokeStyle='#ffffff2d';ctx.lineWidth=3;for(const y of [h*.38,h*.67]){ctx.beginPath();ctx.moveTo(22,y);ctx.lineTo(w-28,y);ctx.stroke()}for(let row=0;row<8;row+=1){ctx.fillStyle=row%2?'#fff':'#18213f';ctx.fillRect(w-42,h*.19+row*h*.082,16,h*.082)}drawRunner(primary,'#ff8f55','你',sx,sy,primaryMove);drawRunner(secondary,'#71b7ff','TA',sx,sy,secondaryMove);label('冲向终点',w/2,titleY,18,'#f5f1ff');label(Math.round(primary.x/arenaWidth()*100)+'%   VS   '+Math.round(secondary.x/arenaWidth()*100)+'%',w/2,h*.94,15,'#b8c5ef')}else if(mode==='tandem-rescue'){ctx.fillStyle='#062532';ctx.fillRect(0,0,w,h);ctx.fillStyle='#0a3a48';ctx.fillRect(0,h*.15,w,h*.85);ctx.fillStyle='#ffffff12';for(let index=0;index<14;index+=1){const x=(index*83+37)%Math.max(1,w),y=h*.2+(index*61)%(Math.max(1,h*.66));dot(x,y,3+(index%3)*2,'#b9fff044')}const px=sx(primary.x),py=sy(primary.y),qx=sx(secondary.x),qy=sy(secondary.y);ctx.strokeStyle='#6ff2dd55';ctx.lineWidth=10;ctx.beginPath();ctx.moveTo(px,py);ctx.lineTo(qx,qy);ctx.stroke();ring(w*.82,h*.5,36,'#f7d27c88',10);ring(w*.82,h*.5,16,'#f7d27c',5);ring(px,py,29,'#ffbd7a44',7);ring(qx,qy,29,'#72f2c544',7);dot(px,py,19,'#ffbd7a');dot(qx,qy,19,'#72f2c5');label('领',px,py+5,12,'#11313a');label('航',qx,qy+5,12,'#11313a');label('同步救援',w/2,titleY,18,'#d9fff8');label('默契能量 '+Number(f.score?.team||0),w/2,h*.93,16,'#72f2c5')}else if(mode==='relic-expedition'){ctx.fillStyle='#10261e';ctx.fillRect(0,0,w,h);ctx.fillStyle='#193a2c';ctx.fillRect(0,h*.15,w,h*.69);dot(w*.78,h*.18,34,'#efd77b33');for(let x=35;x<w;x+=100){ctx.fillStyle='#6b5a3a66';ctx.fillRect(x,h*.31,16,h*.52);ctx.fillStyle='#9d825455';ctx.fillRect(x-11,h*.29,38,12)}ctx.fillStyle='#604b2f';ctx.fillRect(0,h*.84,w,h*.16);const px=sx(primary.x),py=sy(primary.y),qx=sx(secondary.x),qy=sy(secondary.y);ctx.fillStyle='#ffd16f22';ctx.fillRect(Math.max(0,px-45),py-45,90,90);ring(px,py,25,'#ffd16f55',6);ring(qx,qy,25,'#8fe2bd55',6);dot(px,py,18,'#ffd16f');dot(qx,qy,18,'#8fe2bd');label('探',px,py+5,12,'#29351f');label('护',qx,qy+5,12,'#19382d');ctx.fillStyle='#d8b55e';ctx.fillRect(w-72,h*.73,42,30);ctx.fillStyle='#fff0aa';ctx.fillRect(w-67,h*.67,32,12);label('遗迹深处',w/2,titleY,18,'#fff1b7');label('共同进度 '+Number(f.score?.team||0),w/2,h*.94,16,'#bce6cb')}else{ctx.fillStyle='#090e25';ctx.fillRect(0,0,w,h);for(let index=0;index<20;index+=1)dot((index*67+19)%Math.max(1,w),(index*43+27)%Math.max(1,h),index%3+1,'#c9d7ff55');const size=Math.min(w*.27,h*.19),left=(w-size*3)/2,top=(h-size*3)/2;ctx.fillStyle='#121b3b';ctx.fillRect(left-12,top-12,size*3+24,size*3+24);for(let index=0;index<9;index+=1){const x=left+(index%3)*size,y=top+Math.floor(index/3)*size;ctx.fillStyle=index===selectedCell?'#72f2c5':'#202b57';ctx.fillRect(x+5,y+5,size-10,size-10);ctx.strokeStyle=index===selectedCell?'#d8fff7':'#8292c733';ctx.lineWidth=3;ctx.strokeRect(x+6,y+6,size-12,size-12);label(String(index+1),x+size/2,y+size/2+7,20,index===selectedCell?'#10251f':'#edf2ff')}if(f.grid){ctx.strokeStyle=f.grid.result==='team'?'#72f2c5':'#ff9c70';ctx.lineWidth=7;for(const value of Object.values(f.grid.selections||{})){const x=left+(Number(value)%3)*size,y=top+Math.floor(Number(value)/3)*size;ctx.strokeRect(x+10,y+10,size-20,size-20)}}label('九格指挥',w/2,Math.max(46,top-18),18,'#edf2ff');label('第 '+Number(f.round||1)+' 回合 · 主 '+Number(f.score?.primary||0)+' : '+Number(f.score?.secondary||0),w/2,top+size*3+35,15,'#9eb0e7')}}
+function drawBasketball(f,w,h){const sx=value=>value/1000*w,sy=value=>value/600*h,hoopX=sx(f.hoop.x),hoopY=sy(f.hoop.y),ballX=sx(f.ball.x),ballY=sy(f.ball.y);ctx.fillStyle='#4d2b72';ctx.fillRect(0,0,w,h);ctx.fillStyle='#68438d';ctx.fillRect(0,h*.18,w,h*.65);ctx.fillStyle='#8d68a6';ctx.fillRect(0,h*.83,w,h*.17);ctx.strokeStyle='#ffffff32';ctx.lineWidth=3;ctx.beginPath();ctx.arc(w*.22,h*.83,Math.min(w,h)*.22,Math.PI,Math.PI*2);ctx.stroke();ctx.fillStyle='#f2f2f4';ctx.fillRect(hoopX+48,hoopY-68,8,116);ctx.fillStyle='#ffffffcc';ctx.fillRect(hoopX-30,hoopY-58,85,8);ctx.strokeStyle='#ffb05a';ctx.lineWidth=7;ctx.beginPath();ctx.moveTo(hoopX-42,hoopY);ctx.lineTo(hoopX+42,hoopY);ctx.stroke();ctx.strokeStyle='#ffffff88';ctx.lineWidth=2;for(let offset=-36;offset<=36;offset+=18){ctx.beginPath();ctx.moveTo(hoopX+offset,hoopY+4);ctx.lineTo(hoopX+offset*.45,hoopY+42);ctx.stroke()}ring(ballX,ballY,19,'#5d2a1b',3);dot(ballX,ballY,16,'#ff823d');ctx.strokeStyle='#6f321f';ctx.lineWidth=2;ctx.beginPath();ctx.arc(ballX,ballY,10,-1.2,1.2);ctx.stroke();ctx.beginPath();ctx.moveTo(ballX-15,ballY);ctx.lineTo(ballX+15,ballY);ctx.stroke();label('投篮 '+Number(f.score?.shooter||0)+'  :  '+Number(f.score?.keeper||0)+' 守筐',w/2,54,20,'#fff');label(f.ball.inFlight?'飞行中':'调整角度与力度',w/2,h*.94,15,'#f5eaff')}
+function draw(now=0){requestAnimationFrame(draw);if(!lastAt)lastAt=now;advancePreview(now);lastAt=now;const [w,h]=canvasSize();ctx.clearRect(0,0,w,h);const f=state&&state.frame;if(!f){ctx.fillStyle='#101425';ctx.fillRect(0,0,w,h);label('正在启动游戏',w/2,h/2,22);return}if(Number.isInteger(f.round)&&f.round!==lastRound){lastRound=f.round;selectedCell=null;updateGridButtons()}if(mode==='basketball-duel'&&f.ball&&f.hoop)drawBasketball(f,w,h);else drawGeneric(f,w,h);status.textContent=(playMode==='preview'?'试玩 · ':'联机 · ')+(state.phase||'waiting')+' · '+Math.ceil((f.remainingMs||0)/1000)+'s';if(state.phase==='finished'&&!completed){completed=true;send('game.complete',{result:state.outcome||{}})}}
+addEventListener('message',event=>{if(event.source!==parent||!event.data||event.data.pairplay!==1)return;const data=event.data;if(data.type==='host.init'){channel=String(data.channel||'');role=String(data.role||'shooter');mode=String(data.mode||mode);playMode=data.playMode==='preview'||!data.state?'preview':'network';state=playMode==='preview'?previewState():data.state||null;paused=Boolean(data.paused);presentationOnly=Boolean(data.presentationOnly);lastRound=Number(state?.frame?.round)||1;previewStartedAt=performance.now();lastAt=previewStartedAt;aiAt=previewStartedAt;mount();send('game.ready')}else if(channel&&data.channel===channel&&data.type==='host.sync'){if(data.playMode==='network')playMode='network';if(playMode==='network')state=data.state||state;syncGridSelection();setPresentation(data.presentationOnly);setPaused(data.paused)}else if(channel&&data.channel===channel&&data.type==='host.pause'){setPaused(true)}else if(channel&&data.channel===channel&&data.type==='host.resume'){setPaused(false)}else if(channel&&data.channel===channel&&data.type==='host.stop'){setPaused(true);state={...(state||{}),phase:'finished'}}});
 addEventListener('error',event=>send('game.error',{message:String(event.message||'runtime error').slice(0,160)}));parent.postMessage({pairplay:1,type:'game.bootstrap-ready'},'*');draw()})();
 </script></body></html>`;
 
@@ -536,8 +571,54 @@ function initialGenericFrame(params) {
     remainingMs: params.durationMs,
     score: { primary: 0, secondary: 0, team: 0 },
     round: 1,
+    positions: {
+      primary: { x: Math.round(params.arenaWidth * 0.14), y: Math.round(params.arenaHeight * 0.34) },
+      secondary: { x: Math.round(params.arenaWidth * 0.14), y: Math.round(params.arenaHeight * 0.68) },
+    },
+    movement: { primary: 0, secondary: 0 },
+    grid: null,
     event: null,
   };
+}
+
+/**
+ * Adds fields introduced after the original v4 rollout without invalidating
+ * or rewriting persisted invitations. Positions are public presentation state;
+ * participant ids and private input maps remain outside the frame.
+ */
+function normalizeGenericFrame(frame, params) {
+  const target = isRecord(frame) ? frame : initialGenericFrame(params);
+  const finiteNumber = (value, fallback) => typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  const score = isRecord(target.score) ? target.score : {};
+  target.score = {
+    primary: finiteNumber(score.primary, 0),
+    secondary: finiteNumber(score.secondary, 0),
+    team: finiteNumber(score.team, 0),
+  };
+  if (!Number.isSafeInteger(target.round) || target.round < 1) target.round = 1;
+  const startX = Math.round(params.arenaWidth * 0.14);
+  const position = (value, y) => ({
+    x: clamp(finiteNumber(value?.x, startX), params.projectileRadius, params.arenaWidth - params.projectileRadius),
+    y: clamp(finiteNumber(value?.y, y), params.projectileRadius, params.arenaHeight - params.projectileRadius),
+  });
+  target.positions = {
+    primary: position(target.positions?.primary, Math.round(params.arenaHeight * 0.34)),
+    secondary: position(target.positions?.secondary, Math.round(params.arenaHeight * 0.68)),
+  };
+  target.movement = {
+    primary: clamp(finiteNumber(target.movement?.primary, 0), -1, 1),
+    secondary: clamp(finiteNumber(target.movement?.secondary, 0), -1, 1),
+  };
+  if (target.grid !== null && target.grid !== undefined && !isRecord(target.grid)) target.grid = null;
+  if (target.grid === undefined) target.grid = null;
+  return target;
+}
+
+function normalizeGenericSession(session) {
+  if (!isRecord(session.generic)) session.generic = {};
+  if (!isRecord(session.generic.lastSyncAtByParticipant)) session.generic.lastSyncAtByParticipant = {};
+  if (!isRecord(session.generic.selectedByParticipant)) session.generic.selectedByParticipant = {};
+  if (!isRecord(session.generic.committedByParticipant)) session.generic.committedByParticipant = {};
 }
 
 export function createArcadeSession(definition, participantIds, creatorId, timestamp) {
@@ -600,6 +681,7 @@ function completeSession(session, timestamp, reason) {
   if (session.phase === 'finished') return;
   session.phase = 'finished';
   session.frame.remainingMs = 0;
+  if (isRecord(session.frame.movement)) session.frame.movement = { primary: 0, secondary: 0 };
   session.outcome = {
     reason,
     completedAt: timestamp,
@@ -672,6 +754,8 @@ function advanceBasketball(definition, session, timestamp) {
 
 function advanceGeneric(definition, session, timestamp) {
   const params = definition.arcade.params;
+  session.frame = normalizeGenericFrame(session.frame, params);
+  normalizeGenericSession(session);
   if (session.phase === 'countdown' && timestamp >= session.countdownEndsAt) {
     session.phase = 'playing';
     session.startedAt = session.countdownEndsAt;
@@ -681,8 +765,31 @@ function advanceGeneric(definition, session, timestamp) {
   if (session.phase !== 'playing') return;
   const elapsed = Math.max(0, Math.min(timestamp, session.deadlineAt) - session.lastFrameAt);
   const ticks = Math.floor(elapsed / params.tickMs);
-  session.frame.tick += ticks;
-  session.lastFrameAt += ticks * params.tickMs;
+  if (ticks > 0) {
+    const participantIds = Object.keys(session.assignments);
+    const elapsedSeconds = ticks * params.tickMs / 1_000;
+    participantIds.forEach((participantId, index) => {
+      const scoreKey = index === 0 ? 'primary' : 'secondary';
+      const move = definition.arcade.preset === 'grid-command'
+        ? 0
+        : clamp(Number(session.inputsByParticipant?.[participantId]?.move ?? 0), -1, 1);
+      const speed = index === 0 ? params.primarySpeed : params.secondarySpeed;
+      session.frame.positions[scoreKey].x = clamp(
+        session.frame.positions[scoreKey].x + move * speed * elapsedSeconds,
+        params.projectileRadius,
+        params.arenaWidth - params.projectileRadius,
+      );
+      session.frame.movement[scoreKey] = move;
+    });
+    session.frame.tick += ticks;
+    if (session.frame.movement.primary !== 0 || session.frame.movement.secondary !== 0) {
+      session.frame.event = {
+        type: 'move',
+        movement: clone(session.frame.movement),
+      };
+    }
+    session.lastFrameAt += ticks * params.tickMs;
+  }
   if (timestamp >= session.deadlineAt) session.lastFrameAt = session.deadlineAt;
   session.frame.remainingMs = Math.max(0, session.deadlineAt - session.lastFrameAt);
   if (timestamp >= session.deadlineAt) completeSession(session, timestamp, 'time-limit');
@@ -730,11 +837,15 @@ function markContinuousControl(session, participantId, control, timestamp) {
 }
 
 function genericInput(definition, session, participantId, role, control, value, timestamp) {
-  const frame = session.frame;
+  const frame = normalizeGenericFrame(session.frame, definition.arcade.params);
+  normalizeGenericSession(session);
   const participantIds = Object.keys(session.assignments);
   const actorIndex = participantIds.indexOf(participantId);
   const scoreKey = actorIndex === 0 ? 'primary' : 'secondary';
-  if (definition.arcade.preset === 'dash-duel' && control === 'boost' && value === 1) {
+  if (control === 'move') {
+    frame.movement[scoreKey] = value;
+    frame.event = { type: 'move', movement: clone(frame.movement) };
+  } else if (definition.arcade.preset === 'dash-duel' && control === 'boost' && value === 1) {
     frame.score[scoreKey] += 1;
     frame.event = { type: 'boost', role: role.id };
   } else if (definition.arcade.preset === 'tandem-rescue' && control === 'sync' && value === 1) {
@@ -753,16 +864,42 @@ function genericInput(definition, session, participantId, role, control, value, 
     frame.score.team = Math.min(frame.score.primary, frame.score.secondary);
     frame.event = { type: control, role: role.id };
   } else if (definition.arcade.preset === 'grid-command') {
-    if (control === 'select') session.generic.selectedByParticipant[participantId] = value;
+    if (control === 'select') {
+      if (session.generic.committedByParticipant[participantId]) {
+        session.inputsByParticipant[participantId].select = session.generic.selectedByParticipant[participantId];
+      } else {
+        session.generic.selectedByParticipant[participantId] = value;
+        frame.event = { type: 'select', role: role.id };
+      }
+    }
     if (control === 'commit' && value === 1) {
+      if (!Number.isInteger(session.generic.selectedByParticipant[participantId])) {
+        delete session.inputsByParticipant[participantId].commit;
+        frame.event = { type: 'selection-required', role: role.id };
+        return;
+      }
       session.generic.committedByParticipant[participantId] = true;
       if (participantIds.every((id) => session.generic.committedByParticipant[id])) {
         const [left, right] = participantIds.map((id) => session.generic.selectedByParticipant[id]);
         if (Number.isInteger(left) && Number.isInteger(right)) {
-          if (left === right) frame.score.team += 1;
-          else frame.score[left > right ? 'primary' : 'secondary'] += 1;
-          frame.event = { type: left === right ? 'draw' : 'claim', role: left === right ? 'team' : role.id };
+          const result = left === right ? 'team' : left > right ? 'primary' : 'secondary';
+          frame.score[result] += 1;
+          const winningParticipantId = result === 'primary' ? participantIds[0] : result === 'secondary' ? participantIds[1] : null;
+          frame.grid = {
+            round: frame.round,
+            selections: { primary: left, secondary: right },
+            result,
+          };
+          frame.event = {
+            type: left === right ? 'draw' : 'claim',
+            role: winningParticipantId ? session.assignments[winningParticipantId] : 'team',
+          };
           frame.round += 1;
+        }
+        for (const id of participantIds) {
+          if (!isRecord(session.inputsByParticipant[id])) session.inputsByParticipant[id] = {};
+          delete session.inputsByParticipant[id].select;
+          delete session.inputsByParticipant[id].commit;
         }
         session.generic.selectedByParticipant = {};
         session.generic.committedByParticipant = {};
@@ -812,17 +949,19 @@ export function applyArcadeAction(definition, session, participantId, input, tim
     if (typeof input.control !== 'string' || !role.controls.includes(input.control)) {
       return { ok: false, code: 'WRONG_GAME_ROLE', message: 'This control is not available to the current role', status: 403 };
     }
+    const value = numericControlValue(input.control, input.value);
+    if (value === null) {
+      return { ok: false, code: 'INVALID_ACTION', message: 'Arcade control value is outside its safe range', status: 400 };
+    }
+    const emergencyMoveRelease = input.control === 'move' && value === 0;
     const lastContinuousAt = lastContinuousControlAt(session, participantId, input.control);
     if (
       CONTINUOUS_CONTROLS.has(input.control) &&
+      !emergencyMoveRelease &&
       Number.isFinite(lastContinuousAt) &&
       timestamp - lastContinuousAt < 80
     ) {
       return { ok: false, code: 'ACTION_THROTTLED', message: 'Continuous arcade controls are limited to about 10 Hz', status: 429 };
-    }
-    const value = numericControlValue(input.control, input.value);
-    if (value === null) {
-      return { ok: false, code: 'INVALID_ACTION', message: 'Arcade control value is outside its safe range', status: 400 };
     }
     if (session.phase === 'countdown' && ['shoot', 'boost', 'sync', 'jump', 'guard', 'commit'].includes(input.control)) {
       return { ok: false, code: 'COUNTDOWN_ACTIVE', message: 'Wait for the arcade countdown to finish', status: 409 };
@@ -879,6 +1018,20 @@ export function arcadeSessionProjection(definition, session, participantId) {
   const peerId = Object.keys(session.assignments).find((id) => id !== participantId);
   const peerRole = roleFor(definition, session, peerId);
   const ownInputs = session.inputsByParticipant?.[participantId] ?? {};
+  let publicFrame = clone(session.frame);
+  if (definition.arcade.preset !== 'basketball-duel') {
+    publicFrame = normalizeGenericFrame(publicFrame, definition.arcade.params);
+    if (
+      definition.arcade.preset === 'grid-command' &&
+      publicFrame.event?.type === 'select' &&
+      publicFrame.event?.role !== role?.id
+    ) publicFrame.event = null;
+  }
+  const events = (Array.isArray(session.events) ? session.events : []).filter((event) => !(
+    definition.arcade.preset === 'grid-command' &&
+    event?.control === 'select' &&
+    event?.actorRole !== role?.id
+  ));
   return {
     phase: session.phase,
     self: {
@@ -892,8 +1045,8 @@ export function arcadeSessionProjection(definition, session, participantId) {
       role: peerRole?.id ?? null,
       ready: Boolean(session.readyByParticipant?.[peerId]),
     },
-    frame: clone(session.frame),
-    events: clone(Array.isArray(session.events) ? session.events : []),
+    frame: publicFrame,
+    events: clone(events),
     eventCursor: Number(session.eventCursor ?? 0),
     countdownEndsAt: session.countdownEndsAt,
     startedAt: session.startedAt,

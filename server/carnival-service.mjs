@@ -1418,7 +1418,14 @@ export function createCarnivalService(options = {}) {
       const participant = participantForToken(token);
       const room = activeRoomFor(participant);
       const invite = inviteFor(room, inviteId);
-      if (!invite.joinedParticipantIds.includes(participant.id) || invite.joinedParticipantIds.length !== room.members.length) {
+      const participantJoined = invite.joinedParticipantIds.includes(participant.id);
+      const everyoneJoined = invite.joinedParticipantIds.length === room.members.length;
+      // The creator may load the generated runtime before the peer taps the
+      // invitation. Persisting that creator's ready signal avoids a mobile
+      // deadlock: the iframe emits ready only once, while actual game input is
+      // still forbidden until both participants have joined this exact invite.
+      const earlyArcadeReady = input.type === 'arcade-ready' && participantJoined;
+      if (!participantJoined || (!everyoneJoined && !earlyArcadeReady)) {
         fail('INVITE_NOT_JOINED', 'Both participants must join this invite first', 409);
       }
       const exclusiveAction = input.type === 'exclusive-answer' || input.type === 'exclusive-guess' || input.type === 'exclusive-next';

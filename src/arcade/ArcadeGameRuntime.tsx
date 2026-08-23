@@ -176,11 +176,11 @@ export function ArcadeGameRuntime({
       {localPreview && <p className="arcade-runtime__preview-note"><span aria-hidden="true">●</span> 本地试玩模式 · 未操作的一方由游戏助手接管</p>}
 
       <div className="arcade-runtime__stage" inert={result ? true : undefined}>
-        {definition.kind === 'basketball-duel' && <BasketballDuel {...gameProps} />}
-        {definition.kind === 'neon-paddles' && <NeonPaddles {...gameProps} />}
-        {definition.kind === 'meteor-rescue' && <MeteorRescue {...gameProps} />}
-        {definition.kind === 'ruins-relay' && <RuinsRelay {...gameProps} />}
-        {definition.kind === 'signal-grid' && <SignalGrid {...gameProps} />}
+        {definition.kind === 'basketball-duel' && <BasketballDuel key={runtimeKey} {...gameProps} />}
+        {definition.kind === 'neon-paddles' && <NeonPaddles key={runtimeKey} {...gameProps} />}
+        {definition.kind === 'meteor-rescue' && <MeteorRescue key={runtimeKey} {...gameProps} />}
+        {definition.kind === 'ruins-relay' && <RuinsRelay key={runtimeKey} {...gameProps} />}
+        {definition.kind === 'signal-grid' && <SignalGrid key={runtimeKey} {...gameProps} />}
       </div>
 
       {result && (

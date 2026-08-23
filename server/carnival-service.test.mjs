@@ -720,18 +720,21 @@ test('runs persisted arcade v4 with isolated roles, concurrent actor sequences, 
     assert.equal(runtime.codeHash, game.artifact.codeHash);
     assert.match(runtime.document, /^<!doctype html>/);
 
+    // A creator can finish loading the runtime before the peer taps the card.
+    // Persist that one-shot ready event so mobile clients cannot deadlock in
+    // waiting after the peer eventually joins.
+    const creatorReady = await service.gameAction(players.maleToken, inviteId, {
+      type: 'arcade-ready', seq: 0, requestId: 'arcade-ready-male-0001',
+    });
+    assert.equal(creatorReady.invite.privateState.ready, true);
+
     const joined = await service.joinInvite(players.femaleToken, inviteId);
     assert.equal(joined.invite.progress.selfRole, 'keeper');
     assert.equal((await service.getInvite(players.maleToken, inviteId)).invite.progress.selfRole, 'shooter');
 
-    await Promise.all([
-      service.gameAction(players.maleToken, inviteId, {
-        type: 'arcade-ready', seq: 0, requestId: 'arcade-ready-male-0001',
-      }),
-      service.gameAction(players.femaleToken, inviteId, {
-        type: 'arcade-ready', seq: 0, requestId: 'arcade-ready-female-01',
-      }),
-    ]);
+    await service.gameAction(players.femaleToken, inviteId, {
+      type: 'arcade-ready', seq: 0, requestId: 'arcade-ready-female-01',
+    });
     timestamp += 1_001;
     const beforeInputs = (await service.getInvite(players.maleToken, inviteId)).invite.revision;
     const [aimed, moved] = await Promise.all([

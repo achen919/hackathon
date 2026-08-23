@@ -5,6 +5,7 @@ import {
   arcadeScriptCspSources,
   assertArcadeGameDefinition,
   buildArcadeFallbackGame,
+  supportsArcadePresentationOnly,
 } from './arcade-game.mjs';
 import { clearSessionCookie, createAdminSessions, sessionCookie, verifyAdminPassword } from './admin-auth.mjs';
 import { createAiCapacityGate } from './ai-capacity.mjs';
@@ -114,6 +115,7 @@ function sendArcadeDocument(response, request, artifact, requestId) {
   response.setHeader('X-Request-Id', requestId);
   response.setHeader('X-Arcade-Code-Hash', artifact.codeHash);
   response.setHeader('X-Generated-Code-Hash', artifact.codeHash);
+  response.setHeader('X-Arcade-Presentation-Only', supportsArcadePresentationOnly(artifact.document) ? '1' : '0');
   response.setHeader(
     'Content-Security-Policy',
     `default-src 'none'; script-src ${scriptSources}; script-src-attr 'none'; style-src 'unsafe-inline'; img-src 'none'; ` +

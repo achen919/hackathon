@@ -1228,10 +1228,17 @@
 .arcade-prompt-preview__footer button:disabled { opacity: .45; }
 
 @media (max-width: 560px) {
-  .arcade-prompt-preview { padding: 10px; border-radius: 18px; }
-  .arcade-prompt-preview__header { display: grid; }
-  .arcade-prompt-preview__badges { justify-content: flex-start; }
-  .arcade-prompt-preview__roles { grid-template-columns: 1fr; }
+  .arcade-prompt-preview { gap: 8px; padding: 7px; border-radius: 18px; }
+  .arcade-prompt-preview__header { display: flex; align-items: center; padding: 2px 4px; }
+  .arcade-prompt-preview__header span { font-size: 10px; }
+  .arcade-prompt-preview__header h3 { margin: 3px 0 0; font-size: 18px; }
+  .arcade-prompt-preview__header p { display: none; }
+  .arcade-prompt-preview__badges { flex: 0 0 auto; justify-content: flex-end; }
+  .arcade-prompt-preview__badges b { display: none; }
+  .arcade-prompt-preview__badges b:last-child { display: block; }
+  .arcade-prompt-preview__roles { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 6px; }
+  .arcade-prompt-preview__roles button { min-height: 50px; padding: 7px 9px; text-align: center; }
+  .arcade-prompt-preview__roles small { display: none; }
   .arcade-prompt-preview__footer { grid-template-columns: 1fr; }
   .arcade-prompt-preview__footer small,.arcade-prompt-preview__footer button { grid-column: 1; grid-row: auto; }
 }

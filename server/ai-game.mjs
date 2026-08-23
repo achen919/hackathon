@@ -47,11 +47,13 @@ const PAIRPLAY_RUNTIME_PROMPT = `prompt-arcade 的 document 是会在无 allow-s
 - tuning 必须恰好包含 durationSeconds、speedPercent、targetScore、maxRounds 四个整数；durationSeconds 范围 20-90，speedPercent 范围 70-140，targetScore 范围 1-20，maxRounds 范围 1-30；estimatedMinutes 必须是 1-3 的整数；topics 必须是 2-4 个短字符串。
 - 必须自包含 HTML/CSS/JavaScript，大小 1000-50000 字符；不得引用任何外部依赖、URL、图片、字体、媒体、iframe、表单、存储或网络 API。
 - 只能有一个无属性的 <script>，第一条语句必须是 'use strict';。动画只使用 requestAnimationFrame；禁止 async/await、Promise、微任务、定时器、动态代码、反射、计算访问全局对象和动态创建资源标签。
-- 只能通过 PairPlay v1 bridge 与父页交互。脚本启动后先发送无 channel 的 {pairplay:1,type:'game.bootstrap-ready'}；收到父页 {pairplay:1,type:'host.init',channel,role,mode,playMode,seed,codeHash,state,events} 后，再发送 {pairplay:1,type:'game.ready',channel}。
-- 父页后续发送 {pairplay:1,type:'host.sync',channel,playMode,state,events}，还可能发送 host.pause/host.resume/host.stop。操作时子页发送 {pairplay:1,type:'game.input',channel,control,value}；可发送 game.complete/game.error。
+- 只能通过 PairPlay v1 bridge 与父页交互。脚本启动后先发送无 channel 的 {pairplay:1,type:'game.bootstrap-ready'}；收到父页 {pairplay:1,type:'host.init',channel,role,mode,playMode,seed,codeHash,state,events,presentationOnly} 后，再发送 {pairplay:1,type:'game.ready',channel}。
+- document 必须保留 <meta name="pairplay-presentation" content="host-only-v1">。父页后续发送 {pairplay:1,type:'host.sync',channel,playMode,state,events,presentationOnly}，还可能发送 host.pause/host.resume/host.stop。presentationOnly===true 时只渲染沉浸式游戏世界和 HUD，必须隐藏并禁用 document 内部控件，由宿主提供唯一操作台。操作时子页发送 {pairplay:1,type:'game.input',channel,control,value}；可发送 game.complete/game.error。
 - message 监听必须校验 event.source===parent、pairplay===1 和 channel；不得读取父页 DOM。所有角色、control 名和规则都来自所选服务端 preset，不得增加自定义控制协议。
 - playMode==='preview' 时必须在 iframe 内启动可操作的短局，本地模拟另一角色并继续发送 game.input；不得停在“等待双方”。playMode==='network' 时不得本地改比分、胜负或权威状态，只能渲染 host.init/host.sync。
-- basketball-duel 必须画出会飞行的篮球与可移动篮筐：shooter 使用 aim/power/shoot，keeper 使用 move；preview 中 AI 接管未操作角色，network 中状态和比分只读取 host.sync。
+- 所有玩法必须优先适配 320-430px 手机竖屏：viewport 正确、画布可收缩、游戏世界至少占可用高度 60%、操作区始终在首屏底部、触控目标至少 44px；使用 pointer 事件与 pointer capture，不能只支持 hover、键盘或鼠标。HUD 分数至少 24px、关键角色至少 36px，不能用一条通用进度条冒充不同玩法。
+- basketball-duel 必须画出会飞行的篮球与可移动篮筐：shooter 使用 aim/power/shoot，并显示带文字标签的大滑杆与投篮按钮；keeper 使用 move，既能在画布上单指拖动篮筐，也有“按住向左/按住向右”大按钮。preview 中 AI 接管未操作角色，network 中状态和比分只读取 host.sync。
+- dash-duel 必须画两条赛道、双方选手与终点，move 产生可见位移，boost 有明显冲刺反馈；tandem-rescue 必须画双方位置、同步窗口和脉冲反馈；relic-expedition 必须画探索场景、角色与障碍，并区分 jump / guard；grid-command 必须画清晰 3×3 棋盘，通过 select(0-8) 后 commit，绝不能提前展示对方选择。
 - 为保证生成结果真的能运行，请以 <known_good_pairplay_document> 中的完整代码为基线。保留它的 doctype、单一 strict script、消息桥、preview/network 分流和安全 API 用法；可以根据 Prompt 改写 CSS、画面元素、可见文案、绘制函数与动画表现，但不要换成点击页面、alert、Math.random、window、定时器或脱离 PairPlay 的独立小游戏。
 - document 必须是上述 JSON 的普通字符串字段；整个响应不要使用 Markdown 代码围栏，也不要在 JSON 前后添加解释。`;
 
