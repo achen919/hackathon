@@ -188,7 +188,6 @@ export function IcebreakerGame({
                   <span>→</span>
                   <Avatar name={getUser(match, requiredViewer).nickname} tone={toneFor(requiredViewer)} size="large" />
                 </div>
-                <p className="eyebrow">双端隐私演示</p>
                 <h3>这一页只在 {getUser(match, requiredViewer).nickname} 的视角可见</h3>
                 <p>
                   当前是 {perspectiveLabel(match, viewer)}。切换后才能继续，另一方不会看到未揭晓的选择。

@@ -81,9 +81,7 @@ export function PromptGamePreviewCard({
       aria-disabled={expired}
     >
       <header>
-        <div><span><i aria-hidden="true" /> LIVE PREVIEW</span><small>本地试玩 · 不会提交答案</small></div>
         <div className="carnival-prompt-game-preview__badges">
-          <b>{preview.game.generatedBy === 'ai' ? 'AI 生成' : '安全离线生成'}</b>
           <b>{completed ? '试玩结尾' : interactionLabel}</b>
         </div>
       </header>
@@ -105,7 +103,6 @@ export function PromptGamePreviewCard({
       {completed ? (
         <div className={`carnival-prompt-game-preview__ending effect-${visual.revealEffect}`} aria-live="polite">
           <span aria-hidden="true">✦</span>
-          <p>三轮本地试玩完成</p>
           <h3 ref={titleRef} id="carnival-prompt-game-preview-title" tabIndex={-1}>{preview.game.ending.headline}</h3>
           <strong>{preview.game.ending.summary}</strong>
           <ol>

@@ -327,7 +327,7 @@ export default function App() {
       if (runVersion !== promptVersionRef.current) return;
       setPromptText(local.prompt);
       setPromptStatus('editing');
-      setPromptError('在线 Prompt 暂时不可用，已准备好本地安全简报，仍可修改并开始。');
+      setPromptError('在线 Prompt 暂时不可用，已准备本地版本，可修改后开始。');
     }
   }
 
@@ -583,7 +583,7 @@ export default function App() {
     'profile-riddle': '双方分别选词，揭晓前彼此不可见',
     'keyword-wheel': '转盘从公开话题中随机抽取一个追问',
     'rapid-choice': '双方分别作答，答案不会提前暴露',
-    custom: '在当前接口案例中本地试玩，不进入真实匹配',
+    custom: '当前案例中本地试玩',
   };
   return (
     <div className="app-shell">
@@ -609,7 +609,7 @@ export default function App() {
           <span><strong>我也要聊</strong><small>进入游园会真实匹配</small></span>
           <span aria-hidden="true">→</span>
         </a>
-        <div className="sidebar-note"><span className={`source-dot source-dot--${dataSource}`} /><p>{sourceMessage}</p><button type="button" onClick={() => void loadMatch()} disabled={dataSource === 'loading'}>{dataSource === 'loading' ? '载入中' : dataSource === 'demo' ? '从接口抽一对' : '换一对案例'}</button></div>
+        <button className="sidebar-match-button" type="button" onClick={() => void loadMatch()} disabled={dataSource === 'loading'}>{dataSource === 'loading' ? '载入中' : dataSource === 'demo' ? '从接口抽一对' : '换一对案例'}</button>
       </aside>
 
       <main className="chat-panel">
@@ -672,8 +672,6 @@ export default function App() {
           <div className="section-heading"><div><span className="eyebrow">{displayGame.templateId === 'custom' ? displayGame.generatedBy === 'ai' ? 'AI 专属游戏' : 'PROMPT 安全引擎' : displayGame.generatedBy === 'ai' ? 'AI 专属题面' : '固定玩法模板'}</span><h2>{displayGame.gameType}</h2></div><span className="round-count">{sessionStatus === 'complete' ? '完成' : sessionStatus === 'playing' ? '进行中' : '待开始'}</span></div>
           <ol className="round-list">{steps.map((step, index) => <li className={sessionStatus === 'complete' ? 'is-done' : sessionStatus === 'playing' && index === 0 ? 'is-current' : ''} key={`${displayGame.templateId}-${step}`}><span>{sessionStatus === 'complete' ? '✓' : index + 1}</span><div><strong>{step}</strong><small>{index === 0 ? firstStepNote[displayGame.templateId] : '玩法内会提示下一步'}</small></div></li>)}</ol>
         </section>
-
-        <section className="safety-note"><span aria-hidden="true">☂</span><div><strong>资料用于理解，题面守住边界</strong><p>Prompt 只展示安全玩法简报；私密偏好不会直接出现在题目里，发送内容仍由本人确认。</p></div></section>
       </aside>
 
       <GamePromptStudio open={promptStudioOpen} options={visibleGameTypes} selectedId={selectedOption.id} prompt={promptText} status={promptStatus} error={promptError} usesAi={aiStatus?.configured !== false && Boolean(gameContextId)} onSelect={(templateId) => void loadPrompt(templateId)} onPromptChange={(value) => { setPromptText(value); setPromptStatus('editing'); setPromptError(null); }} onStart={() => void generateAndStart()} onClose={closePromptStudio} />
