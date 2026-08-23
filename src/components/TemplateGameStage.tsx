@@ -552,7 +552,7 @@ export function TemplateGameStage({
   const wheelGradient = `conic-gradient(${topics.map((_, index) => {
     const start = (index * 360) / topics.length;
     const end = ((index + 1) * 360) / topics.length;
-    return `${index % 2 === 0 ? '#5746c7' : '#a83f35'} ${start}deg ${end}deg`;
+    return `${index % 2 === 0 ? '#A3DAFF' : '#FD999A'} ${start}deg ${end}deg`;
   }).join(', ')})`;
 
   const titleByTemplate: Record<TemplateGameType, string> = {

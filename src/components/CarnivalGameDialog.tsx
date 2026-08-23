@@ -638,7 +638,7 @@ function KeywordWheelGame({ participant, invite, state, pending, runAction, onUs
   const gradient = `conic-gradient(${state.segments.map((_, index) => {
     const start = index * segmentAngle;
     const end = (index + 1) * segmentAngle;
-    return `${index % 2 === 0 ? '#5746c7' : '#a83f35'} ${start}deg ${end}deg`;
+    return `${index % 2 === 0 ? '#A3DAFF' : '#FD999A'} ${start}deg ${end}deg`;
   }).join(', ')})`;
   const spinnerName = state.lastSpunBy ? invite.participants[state.lastSpunBy].nickname : '';
 
