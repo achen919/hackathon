@@ -164,7 +164,14 @@ export default function App() {
 
   const visibleGameTypes = useMemo(() => {
     const visible = gameTypes.filter((option) => option.enabled);
-    return visible.length > 0 ? visible : DEFAULT_GAME_TYPES;
+    const options = visible.length > 0 ? visible : DEFAULT_GAME_TYPES;
+    return options.map((option) => option.id === 'custom'
+      ? {
+          ...option,
+          available: true,
+          description: '编辑一句 Prompt，AI 现场编写并运行完整 HTML/CSS/JavaScript 小游戏；案例页直接试玩，无需登录。',
+        }
+      : option);
   }, [gameTypes]);
   const selectedOption = visibleGameTypes.find((option) => option.id === selectedTemplateId) ?? visibleGameTypes[0];
   const peer = otherParticipant(viewer);
@@ -400,7 +407,6 @@ export default function App() {
     setCasePromptPreview(null);
     setCaseLocalArcade(game);
     setGameGeneration('fallback');
-    setGameNotice(notice);
     setSessionStatus('playing');
     setCompletedSummary('');
     setSessionKey(`case-local-${Date.now()}`);
@@ -697,7 +703,7 @@ export default function App() {
         </section>
 
         <section className="round-card">
-          <div className="section-heading"><div><span className="eyebrow">{displayGame.templateId === 'custom' ? displayGame.generatedBy === 'ai' ? 'AI 专属游戏' : 'PROMPT 安全引擎' : displayGame.generatedBy === 'ai' ? 'AI 专属题面' : '固定玩法模板'}</span><h2>{displayGame.gameType}</h2></div><span className="round-count">{sessionStatus === 'complete' ? '完成' : sessionStatus === 'playing' ? '进行中' : '待开始'}</span></div>
+          <div className="section-heading"><div><span className="eyebrow">{displayGame.templateId === 'custom' ? displayGame.generatedBy === 'ai' ? 'AI 生成代码' : '隔离代码沙箱' : displayGame.generatedBy === 'ai' ? 'AI 专属题面' : '固定玩法模板'}</span><h2>{displayGame.gameType}</h2></div><span className="round-count">{sessionStatus === 'complete' ? '完成' : sessionStatus === 'playing' ? '进行中' : '待开始'}</span></div>
           <ol className="round-list">{steps.map((step, index) => <li className={sessionStatus === 'complete' ? 'is-done' : sessionStatus === 'playing' && index === 0 ? 'is-current' : ''} key={`${displayGame.templateId}-${step}`}><span>{sessionStatus === 'complete' ? '✓' : index + 1}</span><div><strong>{step}</strong><small>{index === 0 ? firstStepNote[displayGame.templateId] : '玩法内会提示下一步'}</small></div></li>)}</ol>
         </section>
       </aside>

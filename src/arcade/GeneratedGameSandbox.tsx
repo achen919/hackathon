@@ -179,7 +179,8 @@ export function GeneratedGameSandbox({
   const rateRef = useRef({ startedAt: performance.now(), count: 0 });
   const blockedRef = useRef(false);
   const frameLoadCountRef = useRef(0);
-  const bootstrapAcceptedRef = useRef(false);
+  const bootstrapSeenRef = useRef(false);
+  const initSentRef = useRef(false);
   const timeoutRef = useRef<number | null>(null);
   const preflightRef = useRef<AbortController | null>(null);
   const runtimeUrl = useMemo(() => safeRuntimeUrl(artifact.runtimePath), [artifact.runtimePath]);
@@ -212,6 +213,8 @@ export function GeneratedGameSandbox({
   }, []);
 
   const sendInit = useCallback(() => {
+    if (blockedRef.current || initSentRef.current) return;
+    initSentRef.current = true;
     post('host.init', {
       artifactId: artifact.artifactId,
       codeHash: artifact.codeHash,
@@ -238,7 +241,8 @@ export function GeneratedGameSandbox({
     setVerifiedRuntimeUrl(null);
     setErrorMessage(null);
     frameLoadCountRef.current = 0;
-    bootstrapAcceptedRef.current = false;
+    bootstrapSeenRef.current = false;
+    initSentRef.current = false;
     const boundedTimeout = Math.max(3_000, Math.min(20_000, timeoutMs));
     const verificationTimer = window.setTimeout(() => {
       if (disposed) return;
@@ -305,11 +309,11 @@ export function GeneratedGameSandbox({
 
       // Bootstrap contains no data and is accepted only from this exact iframe.
       if (data.pairplay === PAIRPLAY_VERSION && data.type === 'game.bootstrap-ready' && hasOnlyKeys(data, ['pairplay', 'type'])) {
-        if (bootstrapAcceptedRef.current) {
+        if (bootstrapSeenRef.current) {
           reportError('游戏运行页发生了异常重载，已停止同步状态。');
           return;
         }
-        bootstrapAcceptedRef.current = true;
+        bootstrapSeenRef.current = true;
         sendInit();
         return;
       }
@@ -369,7 +373,8 @@ export function GeneratedGameSandbox({
     rateRef.current = { startedAt: performance.now(), count: 0 };
     blockedRef.current = false;
     frameLoadCountRef.current = 0;
-    bootstrapAcceptedRef.current = false;
+    bootstrapSeenRef.current = false;
+    initSentRef.current = false;
     setErrorMessage(null);
     setVerifiedRuntimeUrl(null);
     setStatus('verifying');
@@ -395,12 +400,10 @@ export function GeneratedGameSandbox({
       reportError('游戏运行页尝试离开已校验版本，已立即停止。');
       return;
     }
-    // Some browsers can finish the frame load before the bootstrap message is
-    // observed. Initialize once, but never send state after a second load.
-    if (!bootstrapAcceptedRef.current) {
-      bootstrapAcceptedRef.current = true;
-      sendInit();
-    }
+    // Some browsers finish the frame load before the bootstrap message is
+    // observed. `sendInit` is independently idempotent, so either ordering is
+    // safe while a second iframe load still trips the guard above.
+    sendInit();
   };
 
   return (

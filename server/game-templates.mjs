@@ -29,7 +29,7 @@ export const GAME_TEMPLATE_CATALOG = Object.freeze([
     id: 'custom',
     defaultLabel: '专属小游戏',
     available: true,
-    description: '从稳定系列或 AI 游戏工坊出发，让 Prompt 在四种安全交互组件中组合三轮专属双人游戏。',
+    description: '写一句 Prompt，AI 现场编写并运行完整 HTML/CSS/JavaScript，生成真正可操作的双人小游戏。',
   }),
 ]);
 

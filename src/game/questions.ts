@@ -91,22 +91,22 @@ const rapidQuestions: GameQuestion[] = [
 
 const customQuestions: GameQuestion[] = [
   {
-    id: 'prompt-opening', label: '滑卡开场', source: '根据公开聊天主题组合的安全互动',
-    prompt: '用左右滑卡选一个更像你的开场方式。', options: ['先听 TA 说', '先分享自己的'],
-    matchedFollowUp: '你们想从同一边开场。这种方式为什么让你放松？',
-    differentFollowUp: '你们选了不同的开场。各自更看重什么？',
+    id: 'prompt-opening', label: '理解玩法', source: '只提取公开聊天主题与本局 Prompt',
+    prompt: '先确定这局是对抗、合作、运动、冒险还是策略。', options: ['对抗或运动', '合作或冒险'],
+    matchedFollowUp: '玩法方向已经确定，开始搭建游戏世界。',
+    differentFollowUp: '系统会把两种方向组合成一局双人玩法。',
   },
   {
-    id: 'prompt-temperature', label: '情绪刻度', source: '只描述当下聊天节奏，不分析人格',
-    prompt: '现在的聊天温度更接近哪一格？', options: ['轻松试探', '有点好奇', '渐入佳境', '想多听一点'],
-    matchedFollowUp: '你们感受很像。是哪个瞬间让聊天升温了？',
-    differentFollowUp: '你们的感受不同。下一句怎样聊会更自然？',
+    id: 'prompt-temperature', label: '编写代码', source: '生成完整 HTML、CSS 与 JavaScript',
+    prompt: 'AI 正在生成游戏画面、规则、动画和触控操作。', options: ['画面与动画', '规则与操作'],
+    matchedFollowUp: '完整游戏代码已经生成。',
+    differentFollowUp: '完整游戏代码已经生成。',
   },
   {
-    id: 'prompt-next', label: '星轨选择', source: '从公开话题延伸的低压力续聊方向',
-    prompt: '这局结束后，你最想把聊天带向哪里？', options: ['周末灵感', '最近的小确幸', '一个还没问过的好奇', '先收好这份默契'],
-    matchedFollowUp: '你们想去同一个方向。谁愿意先用一句话开场？',
-    differentFollowUp: '这里出现了两条好走的支线。为什么你更想先聊这一条？',
+    id: 'prompt-next', label: '隔离试玩', source: '校验代码指纹并在无网络沙箱运行',
+    prompt: '验证通过后立即进入真实可操作的小游戏。', options: ['开始试玩', '换个 Prompt 再生成'],
+    matchedFollowUp: '同一份代码可以继续发给 TA。',
+    differentFollowUp: '修改 Prompt 会生成一个新的独立版本。',
   },
 ];
 
@@ -184,7 +184,7 @@ export function buildFallbackGame(
         ? '转盘会从公开聊天线索中抽一个关键词，再给出一条低压力追问。'
         : templateId === 'rapid-choice'
           ? '双方分别完成 3–5 道五秒二选一，最后一起查看答案和可以继续聊的原因。'
-          : '在当前案例页编辑 Prompt，生成滑卡、情绪刻度和星轨等三轮可玩互动，无需登录。',
+          : '在当前案例页编辑 Prompt，让 AI 编写完整 HTML/CSS/JavaScript 小游戏并在隔离沙箱中直接试玩，无需登录。',
     whyItFits: `从你们已经聊过的「${topic}」开始，不需要准备标准答案。`,
     estimatedMinutes: templateId === 'rapid-choice' ? 4 : 3,
     topics,

@@ -197,6 +197,15 @@ export function buildCarnivalExclusivePrompt(
   const series = exclusiveSeriesById(seriesId) ?? CARNIVAL_EXCLUSIVE_SERIES[0];
   const topics = summarizeCarnivalTopics(messages);
   const topicLine = topics.length > 0 ? topics.join('、') : '轻松日常、周末安排和聊天节奏';
+  if (series.id === 'prompt-arcade') {
+    return [
+      '请生成一局真正可操作的双人篮球攻防小游戏。',
+      `双方已经公开交换 ${messages.length} 条文字消息；可用的公开主题：${topicLine}。`,
+      '一人拖动调整投篮角度、按住蓄力并松手投篮；另一人实时左右拖动篮筐防守。游戏要有连续动画、轨迹、命中反馈、倒计时和比分。',
+      '请输出完整、自包含的 HTML、CSS 与 JavaScript，并使用 PairPlay v1 接收角色、服务端状态和双方操作；预览模式下由本地 AI 接管另一方。',
+      '代码只能使用页面内绘制与动画，不能联网、跳转、读写存储或请求设备权限。不要输出聊天原文、私密资料、匹配结论或可识别个人的信息。',
+    ].join('\n\n');
+  }
   return [
     `请为我们生成一局「${series.title}」专属双人小游戏。`,
     `双方已经公开交换 ${messages.length} 条文字消息；可以使用的公开主题：${topicLine}。`,

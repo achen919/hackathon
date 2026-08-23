@@ -507,7 +507,8 @@ test('arcade preview serves isolated runtime, reuses it byte-for-byte, and keeps
     assert.match(previewRuntime.headers.get('content-security-policy'), /connect-src 'none'/);
     assert.match(previewRuntime.headers.get('content-security-policy'), /script-src 'sha256-/);
     assert.doesNotMatch(previewRuntime.headers.get('content-security-policy'), /script-src 'unsafe-inline'/);
-    assert.match(previewRuntime.headers.get('content-security-policy'), /navigate-to 'none'/);
+    assert.match(previewRuntime.headers.get('content-security-policy'), /form-action 'none'/);
+    assert.equal(previewRuntime.headers.get('origin-agent-cluster'), null);
     assert.match(previewDocument, /^<!doctype html>/);
     assert.match(previewDocument, /pairplay\s*:\s*1/);
 

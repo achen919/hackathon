@@ -59,7 +59,6 @@ function sendArcadeDocument(response, request, artifact, requestId) {
   response.setHeader('Referrer-Policy', 'no-referrer');
   response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
   response.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
-  response.setHeader('Origin-Agent-Cluster', '?1');
   response.setHeader('X-Frame-Options', 'SAMEORIGIN');
   response.setHeader('X-Request-Id', requestId);
   response.setHeader('X-Arcade-Code-Hash', artifact.codeHash);
@@ -67,7 +66,7 @@ function sendArcadeDocument(response, request, artifact, requestId) {
     'Content-Security-Policy',
     `default-src 'none'; script-src ${scriptSources}; script-src-attr 'none'; style-src 'unsafe-inline'; img-src 'none'; ` +
       "font-src 'none'; media-src 'none'; connect-src 'none'; object-src 'none'; frame-src 'none'; " +
-      "child-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none'; frame-ancestors 'self'; sandbox allow-scripts",
+      "child-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts",
   );
   response.setHeader(
     'Permissions-Policy',

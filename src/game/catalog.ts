@@ -15,7 +15,7 @@ export const DEFAULT_GAME_TYPES: GameTypeOption[] = [
   },
   {
     id: 'custom', templateId: 'custom', label: '专属小游戏', enabled: true, available: true,
-    description: '编辑一句 Prompt，系统会将公开聊天线索变成三轮可玩互动；案例页直接试玩，无需登录。',
+    description: '编辑一句 Prompt，AI 现场编写并运行完整 HTML/CSS/JavaScript 小游戏；案例页直接试玩，无需登录。',
   },
 ];
 
@@ -35,7 +35,7 @@ export function buildLocalPromptPreview(match: MatchPayload, option: GameTypeOpt
       ? '生成 3–5 个公开聊天关键词作为转盘扇区，每个关键词配一条轻量追问。'
       : option.id === 'rapid-choice'
         ? '生成 3–5 道五秒二选一，每题严格两个短选项，结束后引导双方解释为什么选择 A 或 B。'
-        : '固定生成 3 轮可玩互动：左右滑卡、情绪刻度和星球轨道。可根据 Prompt 调整主题、场景和交互顺序，但只使用公开聊天线索。';
+        : '生成一个真正可操作的双人小游戏：可以是投篮攻防、实时对抗、合作冒险或策略玩法。AI 需要编写完整 HTML/CSS/JavaScript，并通过 PairPlay v1 接收双方操作；试玩时由 AI 接管另一方。';
   return {
     templateId: option.id,
     label: option.label,
