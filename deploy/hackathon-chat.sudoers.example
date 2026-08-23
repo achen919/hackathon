@@ -1,0 +1,10 @@
+# Requires sudo 1.9.10 or newer for regular-expression command arguments.
+# Install with mode 0440 under /etc/sudoers.d/ and validate with visudo -cf.
+#
+# The script itself repeats strict argument validation, constructs every path
+# from the release SHA, takes a deployment lock, and never executes uploaded
+# code as root.
+
+Cmnd_Alias HACKATHON_CHAT_DEPLOY = /usr/local/sbin/deploy-hackathon-chat ^[0-9a-f]{40}\ [0-9a-f]{64}$
+
+hackdeploy ALL=(root) NOPASSWD: HACKATHON_CHAT_DEPLOY

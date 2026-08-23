@@ -1,0 +1,763 @@
+#!/usr/bin/env bash
+# Install this file as root:root, mode 0755 at:
+#   /usr/local/sbin/deploy-hackathon-chat
+#
+# The GitHub Actions SSH user may only select an immutable release SHA and the
+# expected SHA-256 of its fixed-path archive. No caller-controlled path is
+# accepted. Uploaded source is tested as the isolated, no-login `hackbuild`
+# user, which owns neither incoming files nor sudo rights; archive code is never
+# executed as root or as the SSH deployment user.
+
+set -Eeuo pipefail
+IFS=$'\n\t'
+umask 027
+
+readonly DEPLOY_USER='hackdeploy'
+readonly BUILD_USER='hackbuild'
+readonly INCOMING_ROOT='/home/hackdeploy/incoming'
+readonly APP_TARGET='/opt/hackathon-chat'
+readonly STATIC_TARGET='/var/www/hackathon'
+readonly STATE_TARGET='/var/lib/hackathon-chat'
+readonly APP_ROLLBACK_ROOT='/opt/hackathon-rollbacks'
+readonly STATIC_ROLLBACK_ROOT='/var/www/hackathon-rollbacks'
+readonly STATE_ROLLBACK_ROOT='/var/lib/hackathon-rollbacks'
+readonly SERVICE_NAME='hackathon-chat.service'
+readonly LOCK_PATH='/run/lock/hackathon-chat-deploy.lock'
+readonly HEALTH_URL='http://127.0.0.1:8788/api/health'
+readonly PUBLIC_ORIGIN='https://hackathon.shcyr.com'
+readonly MAX_ARCHIVE_BYTES=$((50 * 1024 * 1024))
+readonly MIN_FREE_BYTES=$((512 * 1024 * 1024))
+readonly KEEP_AUTOMATIC_ROLLBACKS=5
+
+log() {
+  printf '[hackathon-deploy] %s\n' "$*"
+}
+
+die() {
+  printf '[hackathon-deploy] ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || die "required command is unavailable: $1"
+}
+
+terminate_builder_processes() {
+  # hackbuild is dedicated to this locked deployment path, so no unrelated
+  # workload can be affected. This also reaps a malicious test's detached child.
+  if pkill -TERM -u "$BUILD_USER" >/dev/null 2>&1; then
+    sleep 1
+    pkill -KILL -u "$BUILD_USER" >/dev/null 2>&1 || true
+  fi
+}
+
+is_real_directory() {
+  local path=$1
+  [[ -d "$path" && ! -L "$path" ]] || return 1
+  [[ "$(realpath -e -- "$path")" == "$path" ]]
+}
+
+is_real_file() {
+  local path=$1
+  [[ -f "$path" && ! -L "$path" ]] || return 1
+  [[ "$(realpath -e -- "$path")" == "$path" ]]
+}
+
+health_signature_once() {
+  local health_payload
+  health_payload=$(curl --fail --silent --show-error \
+    --connect-timeout 2 \
+    --max-filesize 65536 \
+    --max-time 4 \
+    "$HEALTH_URL") || return 1
+
+  printf '%s' "$health_payload" | python3 -c '
+import json
+import sys
+
+try:
+    health = json.load(sys.stdin)
+except (json.JSONDecodeError, UnicodeError):
+    raise SystemExit(1)
+
+keys = ("upstream_configured", "ai_configured", "admin_configured")
+if health.get("status") != "ok" or health.get("service") != "liangpei-hackathon-api":
+    raise SystemExit(1)
+if any(type(health.get(key)) is not bool for key in keys):
+    raise SystemExit(1)
+print(":".join("1" if health[key] else "0" for key in keys))
+'
+}
+
+carnival_state_probe() {
+  local status
+  # A syntactically valid but nonexistent token forces the candidate to load and
+  # validate persisted carnival state before it returns UNAUTHORIZED. A 500
+  # therefore catches state-version incompatibility that /api/health cannot see.
+  status=$(curl --silent --show-error \
+    --connect-timeout 2 \
+    --max-time 4 \
+    --output /dev/null \
+    --write-out '%{http_code}' \
+    --header 'Authorization: Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' \
+    'http://127.0.0.1:8788/api/carnival/state') || return 1
+  [[ "$status" == '401' ]]
+}
+
+health_check() {
+  local attempt
+  local candidate_signature
+  for attempt in $(seq 1 20); do
+    candidate_signature=''
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+      candidate_signature=$(health_signature_once) || candidate_signature=''
+      if [[ "$candidate_signature" == "$PREDEPLOY_HEALTH_SIGNATURE" ]] \
+        && carnival_state_probe; then
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+[[ $EUID -eq 0 ]] || die 'must run as root (normally through sudo)'
+[[ $# -eq 2 ]] || die 'usage: deploy-hackathon-chat <40-hex-release-sha> <64-hex-archive-sha256>'
+
+readonly RELEASE_SHA=$1
+readonly EXPECTED_ARCHIVE_SHA256=$2
+
+[[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || die 'release SHA must be exactly 40 lowercase hexadecimal characters'
+[[ "$EXPECTED_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || die 'archive SHA-256 must be exactly 64 lowercase hexadecimal characters'
+
+for command_name in \
+  chown chmod cmp cp curl date df env find flock getent mkdir mktemp mv node npm pkill \
+  python3 realpath rm runuser seq sha256sum sleep sort stat systemctl tail timeout tr; do
+  require_command "$command_name"
+done
+
+getent passwd "$DEPLOY_USER" >/dev/null || die "deployment user does not exist: $DEPLOY_USER"
+getent passwd "$BUILD_USER" >/dev/null || die "isolated build user does not exist: $BUILD_USER"
+getent group "$BUILD_USER" >/dev/null || die "isolated build group does not exist: $BUILD_USER"
+
+exec 9>"$LOCK_PATH"
+flock -n 9 || die 'another deployment is already running'
+
+readonly INCOMING_DIR="$INCOMING_ROOT/$RELEASE_SHA"
+readonly INCOMING_ARCHIVE="$INCOMING_DIR/release.tar.gz"
+
+is_real_directory "$INCOMING_ROOT" || die 'incoming root must be a real directory, not a symlink'
+is_real_directory "$INCOMING_DIR" || die 'release incoming directory must be a real directory, not a symlink'
+is_real_file "$INCOMING_ARCHIVE" || die 'release archive must be a real regular file, not a symlink'
+[[ "$(stat -c '%U' -- "$INCOMING_DIR")" == "$DEPLOY_USER" ]] || die 'incoming release directory has an unexpected owner'
+[[ "$(stat -c '%U' -- "$INCOMING_ARCHIVE")" == "$DEPLOY_USER" ]] || die 'release archive has an unexpected owner'
+[[ "$(stat -c '%h' -- "$INCOMING_ARCHIVE")" == '1' ]] || die 'release archive must not be a hard link'
+
+for current_path in "$APP_TARGET" "$STATIC_TARGET" "$STATE_TARGET"; do
+  is_real_directory "$current_path" || die "production target must be a real directory: $current_path"
+done
+
+PREDEPLOY_HEALTH_SIGNATURE=$(health_signature_once) \
+  || die 'current production health response is invalid; refusing a baseline-less deployment'
+[[ "$PREDEPLOY_HEALTH_SIGNATURE" =~ ^[01]:[01]:[01]$ ]] \
+  || die 'current production configuration signature is invalid'
+health_check || die 'current production state is not loadable; refusing a deployment without a safe rollback baseline'
+
+for rollback_root in "$APP_ROLLBACK_ROOT" "$STATIC_ROLLBACK_ROOT" "$STATE_ROLLBACK_ROOT"; do
+  if [[ -e "$rollback_root" || -L "$rollback_root" ]]; then
+    is_real_directory "$rollback_root" || die "rollback root must be a real directory: $rollback_root"
+  else
+    mkdir -p -- "$rollback_root"
+    chmod 0700 -- "$rollback_root"
+  fi
+done
+
+available_bytes=$(df --output=avail -B1 /opt | tail -n 1 | tr -d '[:space:]')
+[[ "$available_bytes" =~ ^[0-9]+$ ]] || die 'could not determine available deployment disk space'
+(( available_bytes >= MIN_FREE_BYTES )) || die 'less than 512 MiB is available; refusing a disk-risky deployment'
+
+WORK_ROOT=''
+APP_STAGE=''
+STATIC_STAGE=''
+APP_BACKUP=''
+STATIC_BACKUP=''
+STATE_BACKUP=''
+APP_BACKED_UP=0
+APP_INSTALLED=0
+STATIC_BACKED_UP=0
+STATIC_INSTALLED=0
+STATE_SNAPSHOTTED=0
+SERVICE_STOPPED=0
+DEPLOYMENT_SUCCEEDED=0
+
+rollback_release() {
+  set +e
+  log 'deployment failed; restoring application, static files, and state snapshot'
+
+  systemctl stop "$SERVICE_NAME" >/dev/null 2>&1
+
+  if (( STATIC_INSTALLED == 1 )) && [[ -d "$STATIC_TARGET" && ! -L "$STATIC_TARGET" ]]; then
+    mv -T -- "$STATIC_TARGET" "$WORK_ROOT/failed-static" >/dev/null 2>&1
+  fi
+  if (( STATIC_BACKED_UP == 1 )) && [[ -d "$STATIC_BACKUP" && ! -L "$STATIC_BACKUP" ]]; then
+    mv -T -- "$STATIC_BACKUP" "$STATIC_TARGET" >/dev/null 2>&1
+  fi
+
+  if (( APP_INSTALLED == 1 )) && [[ -d "$APP_TARGET" && ! -L "$APP_TARGET" ]]; then
+    mv -T -- "$APP_TARGET" "$WORK_ROOT/failed-app" >/dev/null 2>&1
+  fi
+  if (( APP_BACKED_UP == 1 )) && [[ -d "$APP_BACKUP" && ! -L "$APP_BACKUP" ]]; then
+    mv -T -- "$APP_BACKUP" "$APP_TARGET" >/dev/null 2>&1
+  fi
+
+  if (( STATE_SNAPSHOTTED == 1 )) && [[ -d "$STATE_BACKUP" && ! -L "$STATE_BACKUP" ]]; then
+    if [[ -d "$STATE_TARGET" && ! -L "$STATE_TARGET" ]]; then
+      mv -T -- "$STATE_TARGET" "$WORK_ROOT/failed-state" >/dev/null 2>&1
+    fi
+    mv -T -- "$STATE_BACKUP" "$STATE_TARGET" >/dev/null 2>&1
+  fi
+
+  systemctl start "$SERVICE_NAME" >/dev/null 2>&1
+  SERVICE_STOPPED=0
+  if health_check; then
+    log 'previous release restored and healthy'
+  else
+    log 'WARNING: rollback completed but the previous release did not pass its health check'
+  fi
+  set -e
+}
+
+cleanup() {
+  local status=$?
+  trap - EXIT INT TERM
+
+  terminate_builder_processes
+
+  if (( status != 0 && DEPLOYMENT_SUCCEEDED == 0 )); then
+    if (( APP_BACKED_UP == 1 || STATIC_BACKED_UP == 1 || STATE_SNAPSHOTTED == 1 )); then
+      rollback_release
+    elif (( SERVICE_STOPPED == 1 )); then
+      systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
+    fi
+  fi
+
+  if [[ -n "$APP_STAGE" && -d "$APP_STAGE" && ! -L "$APP_STAGE" ]]; then
+    rm -rf -- "$APP_STAGE"
+  fi
+  if [[ -n "$STATIC_STAGE" && -d "$STATIC_STAGE" && ! -L "$STATIC_STAGE" ]]; then
+    rm -rf -- "$STATIC_STAGE"
+  fi
+  if [[ -n "$WORK_ROOT" && -d "$WORK_ROOT" && ! -L "$WORK_ROOT" ]]; then
+    rm -rf -- "$WORK_ROOT"
+  fi
+
+  exit "$status"
+}
+
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+WORK_ROOT=$(mktemp -d "/opt/.hackathon-deploy.${RELEASE_SHA:0:12}.XXXXXX")
+chmod 0755 -- "$WORK_ROOT"
+readonly ARCHIVE_COPY="$WORK_ROOT/release.tar.gz"
+readonly PAYLOAD_ROOT="$WORK_ROOT/payload"
+readonly BUILD_ROOT="$WORK_ROOT/build"
+readonly NPM_CACHE="$WORK_ROOT/npm-cache"
+
+# Pin each incoming directory by file descriptor and copy through O_NOFOLLOW.
+# This closes the check/copy race even though hackdeploy owns its incoming tree.
+python3 - "$INCOMING_ROOT" "$RELEASE_SHA" "$ARCHIVE_COPY" "$MAX_ARCHIVE_BYTES" <<'PY'
+import os
+import pwd
+import stat
+import sys
+
+incoming_root, release_sha, destination, max_bytes_text = sys.argv[1:]
+max_bytes = int(max_bytes_text)
+deploy_uid = pwd.getpwnam('hackdeploy').pw_uid
+directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | getattr(os, 'O_NOFOLLOW', 0)
+file_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | getattr(os, 'O_NOFOLLOW', 0)
+
+
+def require_directory(metadata, label):
+    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != deploy_uid:
+        raise ValueError(f'{label} is not a deploy-user-owned directory')
+
+
+try:
+    root_fd = os.open(incoming_root, directory_flags)
+    try:
+        require_directory(os.fstat(root_fd), 'incoming root')
+        release_fd = os.open(release_sha, directory_flags, dir_fd=root_fd)
+        try:
+            require_directory(os.fstat(release_fd), 'incoming release')
+            source_fd = os.open('release.tar.gz', file_flags, dir_fd=release_fd)
+            try:
+                before = os.fstat(source_fd)
+                if not stat.S_ISREG(before.st_mode) or before.st_uid != deploy_uid or before.st_nlink != 1:
+                    raise ValueError('archive is not a single-link deploy-user-owned regular file')
+                if before.st_size <= 0 or before.st_size > max_bytes:
+                    raise ValueError('archive is empty or exceeds its size limit')
+
+                destination_fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o400)
+                try:
+                    copied = 0
+                    while True:
+                        chunk = os.read(source_fd, min(1024 * 1024, max_bytes + 1 - copied))
+                        if not chunk:
+                            break
+                        copied += len(chunk)
+                        if copied > max_bytes:
+                            raise ValueError('archive grew beyond its size limit while copying')
+                        view = memoryview(chunk)
+                        while view:
+                            written = os.write(destination_fd, view)
+                            view = view[written:]
+                    os.fsync(destination_fd)
+                finally:
+                    os.close(destination_fd)
+
+                after = os.fstat(source_fd)
+                stable_fields = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+                if any(getattr(before, field) != getattr(after, field) for field in stable_fields):
+                    raise ValueError('archive changed while it was being copied')
+                if copied != before.st_size:
+                    raise ValueError('archive copy length does not match its metadata')
+            finally:
+                os.close(source_fd)
+        finally:
+            os.close(release_fd)
+    finally:
+        os.close(root_fd)
+except (KeyError, OSError, ValueError) as error:
+    print(f'[hackathon-deploy] ERROR: secure archive copy failed: {error}', file=sys.stderr)
+    raise SystemExit(1)
+PY
+
+chown root:root "$ARCHIVE_COPY"
+chmod 0400 "$ARCHIVE_COPY"
+
+archive_bytes=$(stat -c '%s' -- "$ARCHIVE_COPY")
+[[ "$archive_bytes" =~ ^[0-9]+$ ]] || die 'could not determine archive size'
+(( archive_bytes > 0 && archive_bytes <= MAX_ARCHIVE_BYTES )) || die 'archive is empty or exceeds the 50 MiB limit'
+
+archive_checksum_line=$(sha256sum --binary "$ARCHIVE_COPY")
+actual_archive_sha256=${archive_checksum_line%% *}
+[[ "$actual_archive_sha256" == "$EXPECTED_ARCHIVE_SHA256" ]] || die 'archive SHA-256 does not match the workflow-provided value'
+
+mkdir -p -- "$PAYLOAD_ROOT"
+
+# Python's tar parser is used as a validator, not extractall(): every entry is
+# checked and copied explicitly.  Links, devices, traversal, duplicate names,
+# hidden/secret-bearing paths, and archive bombs are rejected.
+python3 - "$ARCHIVE_COPY" "$PAYLOAD_ROOT" "$RELEASE_SHA" <<'PY'
+import shutil
+import sys
+import tarfile
+from pathlib import Path, PurePosixPath
+
+archive_path = Path(sys.argv[1])
+output_root = Path(sys.argv[2])
+release_sha = sys.argv[3]
+
+max_members = 5_000
+max_member_bytes = 50 * 1024 * 1024
+max_total_bytes = 250 * 1024 * 1024
+allowed_app_roots = {
+    'RELEASE_SHA',
+    'README.md',
+    'deploy',
+    'docs',
+    'index.html',
+    'package-lock.json',
+    'package.json',
+    'public',
+    'server',
+    'src',
+    'tsconfig.json',
+    'vite.config.mjs',
+}
+blocked_parts = {'node_modules', 'dist', 'data', '.git', '.github'}
+required_files = {
+    'app/RELEASE_SHA',
+    'app/index.html',
+    'app/package-lock.json',
+    'app/package.json',
+    'app/server/index.mjs',
+    'app/tsconfig.json',
+    'app/vite.config.mjs',
+    'static/index.html',
+}
+
+
+def fail(message):
+    raise ValueError(message)
+
+
+try:
+    with tarfile.open(archive_path, mode='r:gz') as archive:
+        members = []
+        for member in archive:
+            members.append(member)
+            if len(members) > max_members:
+                fail('member count is over limit')
+        if not members:
+            fail('archive has no members')
+
+        seen = set()
+        regular_files = set()
+        total_bytes = 0
+
+        for member in members:
+            raw_name = member.name
+            path = PurePosixPath(raw_name)
+            canonical_name = path.as_posix()
+
+            if not raw_name or raw_name.startswith('/'):
+                fail('absolute or empty member path')
+            if raw_name not in {canonical_name, f'{canonical_name}/'}:
+                fail('non-canonical member path')
+            if len(raw_name) > 240 or any(ord(character) < 32 or ord(character) == 127 for character in raw_name):
+                fail('unsafe member name')
+            if any(part in {'', '.', '..'} for part in path.parts):
+                fail('path traversal member')
+            if path.parts[0] not in {'app', 'static'}:
+                fail('member outside app/ or static/')
+            if any(part in blocked_parts or part == '.env' or part.startswith('.env.') for part in path.parts):
+                fail('forbidden generated, VCS, state, or environment path')
+            if any(part.startswith('.') for part in path.parts):
+                fail('hidden archive member')
+            if path.parts[0] == 'app' and len(path.parts) > 1 and path.parts[1] not in allowed_app_roots:
+                fail('unexpected app root entry')
+            if canonical_name in seen:
+                fail('duplicate archive member')
+            seen.add(canonical_name)
+
+            if not (member.isdir() or member.isreg()):
+                fail('links and special files are forbidden')
+            if member.size < 0 or member.size > max_member_bytes:
+                fail('member exceeds size limit')
+            total_bytes += member.size
+            if total_bytes > max_total_bytes:
+                fail('expanded archive exceeds size limit')
+            if member.isreg():
+                regular_files.add(canonical_name)
+
+        if not required_files.issubset(regular_files):
+            fail('archive is missing required application or static files')
+
+        for member in sorted(members, key=lambda item: len(PurePosixPath(item.name).parts)):
+            relative_path = PurePosixPath(member.name)
+            target = output_root.joinpath(*relative_path.parts)
+            if member.isdir():
+                target.mkdir(mode=0o755, parents=True, exist_ok=True)
+                continue
+
+            target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+            source = archive.extractfile(member)
+            if source is None:
+                fail('regular member could not be read')
+            with source, target.open('xb') as destination:
+                shutil.copyfileobj(source, destination, length=1024 * 1024)
+            target.chmod(0o444)
+
+    marker = (output_root / 'app' / 'RELEASE_SHA').read_text(encoding='ascii').strip()
+    if marker != release_sha:
+        fail('RELEASE_SHA does not match the requested commit')
+except (OSError, tarfile.TarError, UnicodeError, ValueError) as error:
+    print(f'[hackathon-deploy] ERROR: archive validation failed: {error}', file=sys.stderr)
+    raise SystemExit(1)
+PY
+
+chown -R root:root "$PAYLOAD_ROOT"
+find "$PAYLOAD_ROOT" -type d -exec chmod 0555 {} +
+find "$PAYLOAD_ROOT" -type f -exec chmod 0444 {} +
+
+# A re-run of an already healthy SHA is a no-op.  This check occurs only after
+# the fixed-path upload, digest, archive members, and embedded SHA are validated.
+# It avoids filling the nearly-full host with duplicate rollback triples.
+active_release_sha=''
+if is_real_file "$APP_TARGET/RELEASE_SHA"; then
+  active_release_sha=$(<"$APP_TARGET/RELEASE_SHA")
+fi
+if [[ "$active_release_sha" == "$RELEASE_SHA" ]] \
+  && health_check \
+  && curl --fail --silent --show-error \
+    --retry 4 \
+    --retry-all-errors \
+    --retry-delay 1 \
+    --connect-timeout 3 \
+    --max-filesize 65536 \
+    --max-time 10 \
+    --proto '=https' \
+    --tlsv1.2 \
+    --output /dev/null \
+    "$PUBLIC_ORIGIN/api/health"; then
+  DEPLOYMENT_SUCCEEDED=1
+  rm -rf -- "$INCOMING_DIR"
+  log "release ${RELEASE_SHA:0:12} is already active and healthy; no changes made"
+  exit 0
+fi
+
+# The build copy is the only payload tree writable by uploaded code. The build
+# identity has no sudo permission and cannot enter hackdeploy's 0700 incoming
+# tree. Production environment files and state are neither inherited nor mounted.
+readonly BUILD_HOME="$WORK_ROOT/home"
+readonly NPM_GLOBAL_CONFIG="$WORK_ROOT/empty-global-npmrc"
+: >"$NPM_GLOBAL_CONFIG"
+chown root:root "$NPM_GLOBAL_CONFIG"
+chmod 0444 "$NPM_GLOBAL_CONFIG"
+mkdir -p -- "$BUILD_ROOT" "$BUILD_HOME" "$NPM_CACHE"
+cp -a -- "$PAYLOAD_ROOT/app/." "$BUILD_ROOT/"
+chown -R "$BUILD_USER:$BUILD_USER" "$BUILD_ROOT" "$BUILD_HOME" "$NPM_CACHE"
+chmod -R u+rwX "$BUILD_ROOT" "$BUILD_HOME" "$NPM_CACHE"
+
+run_as_builder() {
+  timeout --signal=TERM --kill-after=15s "$1" \
+    runuser -u "$BUILD_USER" -- \
+      env -i \
+        HOME="$BUILD_HOME" \
+        USER="$BUILD_USER" \
+        LOGNAME="$BUILD_USER" \
+        PATH='/usr/local/bin:/usr/bin:/bin' \
+        CI='true' \
+        NPM_CONFIG_AUDIT='false' \
+        NPM_CONFIG_CACHE="$NPM_CACHE" \
+        NPM_CONFIG_FUND='false' \
+        NPM_CONFIG_GLOBALCONFIG="$NPM_GLOBAL_CONFIG" \
+        NPM_CONFIG_USERCONFIG='/dev/null' \
+        npm --prefix "$BUILD_ROOT" "${@:2}"
+}
+
+log 'installing locked dependencies as the isolated build user'
+run_as_builder 300s ci --ignore-scripts --loglevel=error
+
+log 'running type checks, server tests, and the production build'
+run_as_builder 600s run verify
+terminate_builder_processes
+
+# Validate the generated tree again and compare it byte-for-byte with the static
+# payload built in CI.  This prevents a source/static split-brain release.
+python3 - "$BUILD_ROOT/dist" "$PAYLOAD_ROOT/static" <<'PY'
+import hashlib
+import os
+import stat
+import sys
+from pathlib import Path
+
+
+def manifest(root):
+    if not root.is_dir() or root.is_symlink():
+        raise ValueError('static root is missing or is a symlink')
+    result = {}
+    for directory, directories, files in os.walk(root, followlinks=False):
+        directory_path = Path(directory)
+        for name in directories:
+            path = directory_path / name
+            if path.is_symlink() or not path.is_dir():
+                raise ValueError('static tree contains a non-directory entry')
+        for name in files:
+            path = directory_path / name
+            metadata = path.lstat()
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError('static tree contains a link or special file')
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            result[path.relative_to(root).as_posix()] = (metadata.st_size, digest)
+    return result
+
+
+try:
+    generated = manifest(Path(sys.argv[1]))
+    supplied = manifest(Path(sys.argv[2]))
+    if generated != supplied:
+        raise ValueError('CI static payload differs from the server-rebuilt dist')
+except (OSError, ValueError) as error:
+    print(f'[hackathon-deploy] ERROR: static validation failed: {error}', file=sys.stderr)
+    raise SystemExit(1)
+PY
+
+# Construct minimal root-owned release trees from the immutable payload.  Build
+# dependencies and dist never enter /opt; static files live only in /var/www.
+APP_STAGE="$WORK_ROOT/release-app"
+mkdir -p -- "$APP_STAGE"
+cp -a -- "$PAYLOAD_ROOT/app/." "$APP_STAGE/"
+rm -f -- "$APP_STAGE/RELEASE_SHA"
+printf '%s\n' "$RELEASE_SHA" >"$APP_STAGE/RELEASE_SHA"
+chown -R root:root "$APP_STAGE"
+find "$APP_STAGE" -type d -exec chmod 0755 {} +
+find "$APP_STAGE" -type f -exec chmod 0644 {} +
+
+STATIC_STAGE=$(mktemp -d "/var/www/.hackathon-static.${RELEASE_SHA:0:12}.XXXXXX")
+cp -a -- "$PAYLOAD_ROOT/static/." "$STATIC_STAGE/"
+chown -R root:root "$STATIC_STAGE"
+find "$STATIC_STAGE" -type d -exec chmod 0755 {} +
+find "$STATIC_STAGE" -type f -exec chmod 0644 {} +
+
+auto_stamp=$(date -u +%s%N)
+[[ "$auto_stamp" =~ ^[0-9]{19}$ ]] || die 'could not create a strict automatic rollback identifier'
+readonly AUTO_ID="auto-${auto_stamp}-${RELEASE_SHA:0:12}"
+[[ "$AUTO_ID" =~ ^auto-[0-9]{19}-[0-9a-f]{12}$ ]] || die 'automatic rollback identifier is invalid'
+APP_BACKUP="$APP_ROLLBACK_ROOT/$AUTO_ID"
+STATIC_BACKUP="$STATIC_ROLLBACK_ROOT/$AUTO_ID"
+STATE_BACKUP="$STATE_ROLLBACK_ROOT/$AUTO_ID"
+
+for backup_path in "$APP_BACKUP" "$STATIC_BACKUP" "$STATE_BACKUP"; do
+  [[ ! -e "$backup_path" && ! -L "$backup_path" ]] || die 'automatic rollback identifier collision'
+done
+
+# Re-capture immediately before stopping the service. An administrator may have
+# intentionally changed AI readiness during the unprivileged build; rollback and
+# candidate checks must use the current, not the several-minutes-old, baseline.
+PREDEPLOY_HEALTH_SIGNATURE=$(health_signature_once) \
+  || die 'production became unhealthy before activation; refusing to stop it'
+[[ "$PREDEPLOY_HEALTH_SIGNATURE" =~ ^[01]:[01]:[01]$ ]] \
+  || die 'pre-stop production configuration signature is invalid'
+health_check || die 'production state became unloadable before activation; refusing to stop it'
+
+log "activating release ${RELEASE_SHA:0:12}"
+systemctl stop "$SERVICE_NAME"
+SERVICE_STOPPED=1
+
+# State is copied only after a graceful stop, so its atomic JSON/config files
+# form a coherent rollback snapshot.  Contents and filenames are never logged.
+cp -a --reflink=auto -- "$STATE_TARGET" "$STATE_BACKUP"
+STATE_SNAPSHOTTED=1
+
+mv -T -- "$APP_TARGET" "$APP_BACKUP"
+APP_BACKED_UP=1
+mv -T -- "$APP_STAGE" "$APP_TARGET"
+APP_INSTALLED=1
+APP_STAGE=''
+
+mv -T -- "$STATIC_TARGET" "$STATIC_BACKUP"
+STATIC_BACKED_UP=1
+mv -T -- "$STATIC_STAGE" "$STATIC_TARGET"
+STATIC_INSTALLED=1
+STATIC_STAGE=''
+
+systemctl start "$SERVICE_NAME"
+SERVICE_STOPPED=0
+
+health_check || die 'new release did not become healthy within 20 seconds'
+[[ "$(<"$APP_TARGET/RELEASE_SHA")" == "$RELEASE_SHA" ]] || die 'active release marker does not match the requested SHA'
+
+# The transaction is not committed until the public TLS route serves this exact
+# release.  Query strings bypass intermediary caches without changing SPA file
+# selection.  Neither response bodies nor headers are written to the journal.
+readonly PUBLIC_INDEX_COPY="$WORK_ROOT/public-index.html"
+curl --fail --silent --show-error \
+  --retry 4 \
+  --retry-all-errors \
+  --retry-delay 1 \
+  --connect-timeout 3 \
+  --max-filesize 65536 \
+  --max-time 10 \
+  --proto '=https' \
+  --tlsv1.2 \
+  --output /dev/null \
+  "$PUBLIC_ORIGIN/api/health"
+curl --fail --silent --show-error \
+  --retry 4 \
+  --retry-all-errors \
+  --retry-delay 1 \
+  --connect-timeout 3 \
+  --max-filesize 1048576 \
+  --max-time 10 \
+  --proto '=https' \
+  --tlsv1.2 \
+  --output "$PUBLIC_INDEX_COPY" \
+  "$PUBLIC_ORIGIN/?release=$RELEASE_SHA"
+cmp --silent -- "$PUBLIC_INDEX_COPY" "$STATIC_TARGET/index.html" \
+  || die 'public index does not match the activated static index'
+
+readonly ASSET_LIST="$WORK_ROOT/public-assets.txt"
+python3 - "$STATIC_TARGET/index.html" "$ASSET_LIST" <<'PY'
+import re
+import sys
+from html.parser import HTMLParser
+from pathlib import Path
+from urllib.parse import urlsplit
+
+
+class AssetParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.assets = set()
+
+    def handle_starttag(self, _tag, attrs):
+        for name, value in attrs:
+            if name not in {'href', 'src'} or not value:
+                continue
+            parsed = urlsplit(value)
+            if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+                continue
+            if parsed.path.startswith('/assets/'):
+                self.assets.add(parsed.path)
+
+
+try:
+    parser = AssetParser()
+    parser.feed(Path(sys.argv[1]).read_text(encoding='utf-8'))
+    if not parser.assets:
+        raise ValueError('activated index references no hashed assets')
+    for asset in parser.assets:
+        if not re.fullmatch(r'/assets/[A-Za-z0-9._-]+', asset):
+            raise ValueError('activated index contains an unsafe asset path')
+    Path(sys.argv[2]).write_text(''.join(f'{asset}\n' for asset in sorted(parser.assets)), encoding='ascii')
+except (OSError, UnicodeError, ValueError) as error:
+    print(f'[hackathon-deploy] ERROR: public asset validation failed: {error}', file=sys.stderr)
+    raise SystemExit(1)
+PY
+
+asset_number=0
+while IFS= read -r public_asset; do
+  asset_number=$((asset_number + 1))
+  public_asset_copy="$WORK_ROOT/public-asset-$asset_number"
+  curl --fail --silent --show-error \
+    --retry 4 \
+    --retry-all-errors \
+    --retry-delay 1 \
+    --connect-timeout 3 \
+    --max-filesize 52428800 \
+    --max-time 15 \
+    --proto '=https' \
+    --tlsv1.2 \
+    --output "$public_asset_copy" \
+    "$PUBLIC_ORIGIN${public_asset}?release=$RELEASE_SHA"
+  cmp --silent -- "$public_asset_copy" "$STATIC_TARGET$public_asset" \
+    || die 'a public hashed asset does not match the activated static file'
+done <"$ASSET_LIST"
+
+DEPLOYMENT_SUCCEEDED=1
+log "release ${RELEASE_SHA:0:12} is healthy on loopback and the public TLS route"
+
+# Retain exactly the newest five complete automatic triples.  Only names that
+# match our strict auto-* grammar are removable; manual rollback-pre-* and
+# backup-pre-* paths are never enumerated or touched.
+mapfile -t complete_automatic_ids < <(
+  find "$APP_ROLLBACK_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
+    | sort -r \
+    | while IFS= read -r candidate; do
+        if [[ "$candidate" =~ ^auto-[0-9]{19}-[0-9a-f]{12}$ ]] \
+          && [[ -d "$STATIC_ROLLBACK_ROOT/$candidate" && ! -L "$STATIC_ROLLBACK_ROOT/$candidate" ]] \
+          && [[ -d "$STATE_ROLLBACK_ROOT/$candidate" && ! -L "$STATE_ROLLBACK_ROOT/$candidate" ]]; then
+          printf '%s\n' "$candidate"
+        fi
+      done
+)
+
+if (( ${#complete_automatic_ids[@]} > KEEP_AUTOMATIC_ROLLBACKS )); then
+  for stale_id in "${complete_automatic_ids[@]:KEEP_AUTOMATIC_ROLLBACKS}"; do
+    [[ "$stale_id" =~ ^auto-[0-9]{19}-[0-9a-f]{12}$ ]] || continue
+    rm -rf -- \
+      "$APP_ROLLBACK_ROOT/$stale_id" \
+      "$STATIC_ROLLBACK_ROOT/$stale_id" \
+      "$STATE_ROLLBACK_ROOT/$stale_id"
+  done
+fi
+
+# The successful upload is no longer needed.  This path is built exclusively
+# from the already validated 40-hex SHA and was realpath-checked above.
+rm -rf -- "$INCOMING_DIR"
+
+log "deployment complete; automatic rollback sets retained: ${#complete_automatic_ids[@]} (maximum $KEEP_AUTOMATIC_ROLLBACKS)"
