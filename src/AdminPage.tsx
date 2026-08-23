@@ -1,53 +1,26 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import './admin.css';
 
-interface AdminSession {
-  authenticated: boolean;
-  csrfToken?: string;
-}
+interface AdminSession { authenticated: boolean; csrfToken?: string; }
+interface AdminConfig { apiBaseUrl: string; apiKeyConfigured: boolean; model: string; systemPrompt: string; gameTypes: AdminGameType[]; updatedAt: string | null; }
+interface AdminGameType { id: 'profile-riddle' | 'keyword-wheel' | 'rapid-choice' | 'custom'; label: string; enabled: boolean; generationPrompt: string; }
+interface ApiErrorBody { error?: string; code?: string; }
 
-interface AdminConfig {
-  apiBaseUrl: string;
-  apiKeyConfigured: boolean;
-  model: string;
-  systemPrompt: string;
-  gameTypes: AdminGameType[];
-  updatedAt: string | null;
-}
+class ApiRequestError extends Error { status: number; constructor(message: string, status: number) { super(message); this.name = 'ApiRequestError'; this.status = status; } }
+async function readApi<T>(response: Response): Promise<T> { const payload = (await response.json().catch(() => ({}))) as T & ApiErrorBody; if (!response.ok) throw new ApiRequestError(payload.error ?? `请求失败（${response.status}）`, response.status); return payload; }
+function formatUpdatedAt(value: string | null) { if (!value) return '尚未保存'; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false }); }
 
-interface AdminGameType {
-  id: 'profile-riddle' | 'keyword-wheel' | 'rapid-choice' | 'custom';
-  label: string;
-  enabled: boolean;
-  generationPrompt: string;
-}
+type AdminSection = 'overview' | 'provider' | 'game-types' | 'prompt' | 'flow';
+const sections: Array<{ id: AdminSection; path: string; label: string; caption: string; icon: string }> = [
+  { id: 'overview', path: '/admin', label: '总览', caption: '查看控制台状态', icon: '⌂' },
+  { id: 'provider', path: '/admin/provider', label: '模型接口', caption: 'API 与模型配置', icon: '✦' },
+  { id: 'game-types', path: '/admin/game-types', label: '游戏模板', caption: '玩法与滚动关键词', icon: '◇' },
+  { id: 'prompt', path: '/admin/prompt', label: '系统提示词', caption: '统一生成规则', icon: '⌘' },
+  { id: 'flow', path: '/admin/flow', label: '生成流程', caption: '了解工作链路', icon: '↗' },
+];
+function sectionFromPath(pathname: string): AdminSection { return sections.find((item) => item.path === pathname)?.id ?? 'overview'; }
 
-interface ApiErrorBody {
-  error?: string;
-  code?: string;
-}
-
-class ApiRequestError extends Error {
-  status: number;
-
-  constructor(message: string, status: number) {
-    super(message);
-    this.name = 'ApiRequestError';
-    this.status = status;
-  }
-}
-
-async function readApi<T>(response: Response): Promise<T> {
-  const payload = (await response.json().catch(() => ({}))) as T & ApiErrorBody;
-  if (!response.ok) throw new ApiRequestError(payload.error ?? `请求失败（${response.status}）`, response.status);
-  return payload;
-}
-
-function formatUpdatedAt(value: string | null) {
-  if (!value) return '尚未保存';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false });
-}
+type BusyState = 'login' | 'save' | 'models' | 'logout' | null;
 
 export default function AdminPage() {
   const [session, setSession] = useState<AdminSession | null>(null);
@@ -59,367 +32,138 @@ export default function AdminPage() {
   const [systemPrompt, setSystemPrompt] = useState('');
   const [gameTypes, setGameTypes] = useState<AdminGameType[]>([]);
   const [models, setModels] = useState<string[]>([]);
-  const [busy, setBusy] = useState<'login' | 'save' | 'models' | 'logout' | null>(null);
+  const [busy, setBusy] = useState<BusyState>(null);
   const [notice, setNotice] = useState<{ tone: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
+  const [activeSection, setActiveSection] = useState<AdminSection>(() => sectionFromPath(window.location.pathname));
 
-  function applyConfig(next: AdminConfig) {
-    setConfig(next);
-    setApiBaseUrl(next.apiBaseUrl);
-    setModel(next.model);
-    setSystemPrompt(next.systemPrompt);
-    setGameTypes(next.gameTypes.map((item) => ({ ...item })));
+  function navigate(path: string) {
+    if (window.location.pathname !== path) window.history.pushState({}, '', path);
+    setActiveSection(sectionFromPath(path));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
+  useEffect(() => { const onPopState = () => setActiveSection(sectionFromPath(window.location.pathname)); window.addEventListener('popstate', onPopState); return () => window.removeEventListener('popstate', onPopState); }, []);
 
-  async function loadConfig() {
-    const response = await fetch('/api/admin/config', { credentials: 'same-origin' });
-    applyConfig(await readApi<AdminConfig>(response));
-    setPageError(null);
-  }
-
-  function handleFailure(error: unknown, fallback: string) {
-    const message = error instanceof Error ? error.message : fallback;
-    if (error instanceof ApiRequestError && error.status === 401) {
-      setSession({ authenticated: false });
-      setConfig(null);
-      setNotice({ tone: 'error', text: '管理会话已过期，请重新登录。' });
-      return;
-    }
-    setNotice({ tone: 'error', text: message });
-  }
+  function applyConfig(next: AdminConfig) { setConfig(next); setApiBaseUrl(next.apiBaseUrl); setModel(next.model); setSystemPrompt(next.systemPrompt); setGameTypes(next.gameTypes.map((item) => ({ ...item }))); }
+  async function loadConfig() { const response = await fetch('/api/admin/config', { credentials: 'same-origin' }); applyConfig(await readApi<AdminConfig>(response)); setPageError(null); }
+  function handleFailure(error: unknown, fallback: string) { const message = error instanceof Error ? error.message : fallback; if (error instanceof ApiRequestError && error.status === 401) { setSession({ authenticated: false }); setConfig(null); setNotice({ tone: 'error', text: '管理会话已过期，请重新登录。' }); return; } setNotice({ tone: 'error', text: message }); }
 
   useEffect(() => {
-    let active = true;
-    let sessionWasAuthenticated = false;
-    void fetch('/api/admin/session', { credentials: 'same-origin' })
-      .then((response) => readApi<AdminSession>(response))
-      .then(async (nextSession) => {
-        if (!active) return;
-        sessionWasAuthenticated = nextSession.authenticated;
-        setSession(nextSession);
-        if (nextSession.authenticated) await loadConfig();
-      })
-      .catch((error: Error) => {
-        if (active) {
-          if (sessionWasAuthenticated) setPageError(error.message);
-          else {
-            setSession({ authenticated: false });
-            setNotice({ tone: 'error', text: error.message });
-          }
-        }
-      });
-    return () => {
-      active = false;
-    };
+    let active = true; let sessionWasAuthenticated = false;
+    void fetch('/api/admin/session', { credentials: 'same-origin' }).then((response) => readApi<AdminSession>(response)).then(async (nextSession) => { if (!active) return; sessionWasAuthenticated = nextSession.authenticated; setSession(nextSession); if (nextSession.authenticated) await loadConfig(); }).catch((error: Error) => { if (!active) return; if (sessionWasAuthenticated) setPageError(error.message); else { setSession({ authenticated: false }); setNotice({ tone: 'error', text: error.message }); } });
+    return () => { active = false; };
   }, []);
 
   async function login(event: React.FormEvent) {
-    event.preventDefault();
-    setBusy('login');
-    setNotice(null);
-    let loginEstablished = false;
+    event.preventDefault(); setBusy('login'); setNotice(null); let loginEstablished = false;
     try {
-      const response = await fetch('/api/admin/session', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
-      });
-      const nextSession = await readApi<AdminSession>(response);
-      loginEstablished = nextSession.authenticated;
-      setSession(nextSession);
-      setPassword('');
-      await loadConfig();
-      setNotice({ tone: 'success', text: '已安全登录管理后台。' });
-    } catch (error) {
-      if (loginEstablished && !(error instanceof ApiRequestError && error.status === 401)) {
-        setPageError(error instanceof Error ? error.message : '无法读取配置');
-      } else handleFailure(error, '登录失败');
-    } finally {
-      setBusy(null);
-    }
+      const response = await fetch('/api/admin/session', { method: 'POST', credentials: 'same-origin', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+      const nextSession = await readApi<AdminSession>(response); loginEstablished = nextSession.authenticated; setSession(nextSession); setPassword(''); await loadConfig(); setNotice({ tone: 'success', text: '已安全登录管理控制台。' });
+    } catch (error) { if (loginEstablished && !(error instanceof ApiRequestError && error.status === 401)) setPageError(error instanceof Error ? error.message : '无法读取配置'); else handleFailure(error, '登录失败'); } finally { setBusy(null); }
   }
 
   async function saveConfig(options: { clearApiKey?: boolean } = {}) {
     if (!session?.csrfToken) return;
-    if (!gameTypes.some((item) => item.enabled)) {
-      setNotice({ tone: 'error', text: '至少保留一种候选游戏类型。' });
-      return;
-    }
-    setBusy('save');
-    setNotice(null);
+    if (!gameTypes.some((item) => item.enabled)) { setNotice({ tone: 'error', text: '至少保留一种启用中的游戏类型。' }); return; }
+    setBusy('save'); setNotice(null);
     try {
-      const response = await fetch('/api/admin/config', {
-        method: 'PUT',
-        credentials: 'same-origin',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-          'X-CSRF-Token': session.csrfToken,
-        },
-        body: JSON.stringify({
-          apiBaseUrl,
-          apiKey,
-          clearApiKey: options.clearApiKey === true,
-          model,
-          systemPrompt,
-          gameTypes,
-        }),
-      });
-      const next = await readApi<AdminConfig>(response);
-      applyConfig(next);
-      setApiKey('');
-      setModels([]);
-      setNotice({
-        tone: 'success',
-        text: options.clearApiKey ? 'API Key 已清除，前台将使用安全题卡。' : '配置已加密保存，下一局立即生效。',
-      });
-    } catch (error) {
-      handleFailure(error, '保存失败');
-    } finally {
-      setBusy(null);
-    }
+      const response = await fetch('/api/admin/config', { method: 'PUT', credentials: 'same-origin', headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken }, body: JSON.stringify({ apiBaseUrl, apiKey, clearApiKey: options.clearApiKey === true, model, systemPrompt, gameTypes }) });
+      const next = await readApi<AdminConfig>(response); applyConfig(next); setApiKey(''); setModels([]); setNotice({ tone: 'success', text: options.clearApiKey ? 'API Key 已清除，前台将使用安全题卡。' : '配置已加密保存，修改立即生效。' });
+    } catch (error) { handleFailure(error, '保存失败'); } finally { setBusy(null); }
   }
 
   async function loadModels() {
-    if (!session?.csrfToken) return;
-    setBusy('models');
-    setNotice({ tone: 'info', text: '正在用已保存的 Key 读取可用模型…' });
-    try {
-      const response = await fetch('/api/admin/models', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-          'X-CSRF-Token': session.csrfToken,
-        },
-        body: '{}',
-      });
-      const payload = await readApi<{ models: string[] }>(response);
-      setModels(payload.models);
-      setNotice({ tone: 'success', text: `连接成功，当前 Key 可见 ${payload.models.length} 个模型。` });
-    } catch (error) {
-      handleFailure(error, '连接失败');
-    } finally {
-      setBusy(null);
-    }
+    if (!session?.csrfToken) return; setBusy('models'); setNotice({ tone: 'info', text: '正在使用已保存的 Key 读取可用模型…' });
+    try { const response = await fetch('/api/admin/models', { method: 'POST', credentials: 'same-origin', headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken }, body: '{}' }); const payload = await readApi<{ models: string[] }>(response); setModels(payload.models); setNotice({ tone: 'success', text: `连接成功，当前 Key 可见 ${payload.models.length} 个模型。` }); } catch (error) { handleFailure(error, '连接失败'); } finally { setBusy(null); }
   }
 
   async function logout() {
-    if (!session?.csrfToken) return;
-    setBusy('logout');
-    try {
-      await readApi(await fetch('/api/admin/session', {
-        method: 'DELETE',
-        credentials: 'same-origin',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-          'X-CSRF-Token': session.csrfToken,
-        },
-        body: '{}',
-      }));
-      setSession({ authenticated: false });
-      setConfig(null);
-      setNotice({ tone: 'info', text: '已退出管理后台。' });
-    } catch (error) {
-      handleFailure(error, '退出失败，请重试');
-    } finally {
-      setBusy(null);
-    }
+    if (!session?.csrfToken) return; setBusy('logout');
+    try { await readApi(await fetch('/api/admin/session', { method: 'DELETE', credentials: 'same-origin', headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken }, body: '{}' })); setSession({ authenticated: false }); setConfig(null); setNotice({ tone: 'info', text: '已退出管理控制台。' }); } catch (error) { handleFailure(error, '退出失败，请重试'); } finally { setBusy(null); }
   }
 
-  if (session === null) {
-    return <main className="admin-loading"><span>良</span><p>正在确认管理会话…</p></main>;
-  }
+  if (session === null) return <main className="admin-loading"><span>良</span><p>正在确认管理会话…</p></main>;
 
-  if (!session.authenticated) {
-    return (
-      <main className="admin-login-shell">
-        <a className="admin-back-link" href="/">← 返回聊天演示</a>
-        <form className="admin-login-card" onSubmit={login}>
-          <div className="admin-brand-mark">良</div>
-          <p className="eyebrow">PAIR PLAYGROUND · ADMIN</p>
-          <h1>专属游戏控制台</h1>
-          <p className="admin-login-card__intro">管理 AI 接口、模型、候选游戏类型与系统提示词。密钥不会返回浏览器。</p>
-          <input type="hidden" name="username" autoComplete="username" value="admin" />
-          <label className="admin-field">
-            <span>管理员密码</span>
-            <input
-              type="password"
-              name="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="输入独立管理密码"
-              required
-            />
-          </label>
-          {notice && <p className={`admin-notice is-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}>{notice.text}</p>}
-          <button className="admin-primary-button" type="submit" disabled={busy === 'login'}>
-            {busy === 'login' ? '正在验证…' : '进入控制台'}
-          </button>
-          <small>会话使用 HttpOnly 安全 Cookie，30 分钟无操作自动过期。</small>
-        </form>
-      </main>
-    );
-  }
-
-  if (!config) return (
-    <main className="admin-loading">
-      <span>良</span>
-      <p>{pageError ?? '正在读取 AI 配置…'}</p>
-      {pageError && <button className="admin-primary-button" type="button" onClick={() => {
-        setPageError(null);
-        void loadConfig().catch((error) => {
-          if (error instanceof ApiRequestError && error.status === 401) handleFailure(error, '会话已过期');
-          else setPageError(error instanceof Error ? error.message : '重试失败');
-        });
-      }}>重新读取配置</button>}
-    </main>
-  );
-
-  return (
-    <main className="admin-page">
-      <header className="admin-topbar">
-        <a className="admin-wordmark" href="/"><span>良</span><strong>Pair Playground</strong></a>
-        <div>
-          <a className="admin-secondary-button" href="/">打开聊天演示</a>
-          <button className="admin-text-button" type="button" onClick={() => void logout()} disabled={busy === 'logout'}>退出</button>
-        </div>
-      </header>
-
-      <section className="admin-hero">
-        <div>
-          <p className="eyebrow">AI GAME STUDIO</p>
-          <h1>让每一对匹配，都有不重样的破冰局</h1>
-          <p>模型会理解最近公开聊天与服务端提炼的非敏感资料信号，再按你选择的固定玩法生成专属题面。固定安全规则不会被自定义提示词覆盖。</p>
-        </div>
-        <div className="admin-status-card">
-          <span className={config.apiKeyConfigured ? 'is-online' : 'is-offline'} />
-          <div><strong>{config.apiKeyConfigured ? 'AI 已配置' : 'AI 尚未配置'}</strong><small>{config.apiKeyConfigured ? `${config.model} · 前台可生成` : '前台自动使用安全题卡'}</small></div>
-        </div>
-      </section>
-
-      <form className="admin-config-form" onSubmit={(event) => { event.preventDefault(); void saveConfig(); }}>
-        <input type="hidden" name="username" autoComplete="username" value="admin" />
-        {notice && <p className={`admin-notice admin-notice--floating is-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}>{notice.text}</p>}
-
-        <div className="admin-grid">
-        <section className="admin-panel admin-panel--provider">
-          <div className="admin-panel__heading">
-            <div><span>01</span><h2>模型接口</h2></div>
-            <small>更新于 {formatUpdatedAt(config.updatedAt)}</small>
-          </div>
-
-          <label className="admin-field">
-            <span>API Base URL</span>
-            <input type="url" value={apiBaseUrl} onChange={(event) => setApiBaseUrl(event.target.value)} required />
-            <small>填写服务根地址或以 /v1 结尾的地址，后端会统一调用 Chat Completions。</small>
-          </label>
-
-          <label className="admin-field">
-            <span>API Key <em>{config.apiKeyConfigured ? '已安全配置' : '未配置'}</em></span>
-            <input
-              type="password"
-              name="api-key"
-              autoComplete="new-password"
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              placeholder={config.apiKeyConfigured ? '留空即保留当前 Key' : '粘贴新的 API Key'}
-            />
-            <small>保存后输入框会立即清空，服务端读取时也不会把 Key 返回页面。</small>
-          </label>
-
-          <div className="admin-field">
-            <span>模型</span>
-            <div className="admin-inline-field">
-              <input list="available-models" value={model} onChange={(event) => setModel(event.target.value)} required />
-              <datalist id="available-models">{models.map((item) => <option value={item} key={item} />)}</datalist>
-              <button type="button" onClick={() => void loadModels()} disabled={!config.apiKeyConfigured || busy === 'models'}>
-                {busy === 'models' ? '检测中…' : '检测模型'}
-              </button>
-            </div>
-            <small>检测使用“已保存”的 Key。新 Key 请先保存，再检测权限。</small>
-          </div>
-
-          <div className="admin-security-strip">
-            <span>✓ Key 加密落盘</span><span>✓ 仅后端调用</span><span>✓ 上游拒绝重定向</span>
-          </div>
-        </section>
-
-        <section className="admin-panel admin-panel--types">
-          <div className="admin-panel__heading"><div><span>02</span><h2>滚动关键词与模板</h2></div><small>{gameTypes.filter((item) => item.enabled).length}/{gameTypes.length}</small></div>
-          <p className="admin-panel__intro">模板 ID 和交互机制固定，滚动展示词与该模板的生成要求可以随时修改。</p>
-          <div className="admin-template-list">
-            {gameTypes.map((item, index) => (
-              <article className={`admin-template-card ${item.enabled ? 'is-enabled' : ''}`} key={item.id}>
-                <header>
-                  <div><code>{item.id}</code><strong>{item.label}</strong></div>
-                  <label className="admin-template-toggle">
-                    <input
-                      type="checkbox"
-                      checked={item.enabled}
-                      onChange={(event) => setGameTypes((current) => current.map((entry, entryIndex) => entryIndex === index ? { ...entry, enabled: event.target.checked } : entry))}
-                    />
-                    <span>{item.enabled ? '展示' : '隐藏'}</span>
-                  </label>
-                </header>
-                <label className="admin-field">
-                  <span>聊天页滚动关键词</span>
-                  <input
-                    value={item.label}
-                    maxLength={60}
-                    onChange={(event) => setGameTypes((current) => current.map((entry, entryIndex) => entryIndex === index ? { ...entry, label: event.target.value } : entry))}
-                  />
-                </label>
-                <label className="admin-field">
-                  <span>该模板生成要求</span>
-                  <textarea
-                    value={item.generationPrompt}
-                    rows={5}
-                    maxLength={4_000}
-                    onChange={(event) => setGameTypes((current) => current.map((entry, entryIndex) => entryIndex === index ? { ...entry, generationPrompt: event.target.value } : entry))}
-                  />
-                </label>
-                {item.id === 'custom' && <small className="admin-template-card__waiting">专属小游戏已接入 AI 游戏工坊和五个双端系列；这里配置入口名称和通用生成要求，用户发起前仍可编辑本局 Prompt。</small>}
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className="admin-panel admin-panel--prompt">
-          <div className="admin-panel__heading"><div><span>03</span><h2>系统提示词</h2></div><small>{systemPrompt.length} 字</small></div>
-          <label className="admin-field admin-field--grow">
-            <span>游戏设计要求</span>
-            <textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} rows={15} />
-            <small>可调整语气、轮次节奏和业务目标；防泄密、反操纵等硬边界由后端额外注入。</small>
-          </label>
-        </section>
-
-        <aside className="admin-panel admin-panel--flow">
-          <div className="admin-panel__heading"><div><span>04</span><h2>生成链路</h2></div></div>
-          <ol className="admin-flow-list">
-            <li><span>1</span><div><strong>理解两个人</strong><small>最近公开聊天与非敏感资料信号，不发送原始私密资料</small></div></li>
-            <li><span>2</span><div><strong>锁定玩法模板</strong><small>稳定 ID 对应下拉、转盘或五秒二选一</small></div></li>
-            <li><span>3</span><div><strong>用户确认 Prompt</strong><small>先生成安全简报，允许本人修改后再开始</small></div></li>
-            <li><span>4</span><div><strong>本地安全校验</strong><small>不合格输出不会进入前台，自动回退题库</small></div></li>
-          </ol>
-          <a className="admin-demo-link" href="/">去聊天页生成一局 <span>→</span></a>
-        </aside>
-        </div>
-
-        <footer className="admin-savebar">
-          <div><strong>{config.apiKeyConfigured ? '服务已就绪' : '还差一个 API Key'}</strong><small>保存后新配置会立即用于下一次游戏生成。</small></div>
-          <div>
-            {config.apiKeyConfigured && <button className="admin-danger-button" type="button" onClick={() => window.confirm('确定清除已保存的 API Key？前台会回退到本地题卡。') && void saveConfig({ clearApiKey: true })} disabled={busy !== null}>清除 Key</button>}
-            <button className="admin-primary-button" type="submit" disabled={busy !== null}>
-              {busy === 'save' ? '正在加密保存…' : '保存并立即生效'}
-            </button>
-          </div>
-        </footer>
+  if (!session.authenticated) return (
+    <main className="admin-login-shell">
+      <a className="admin-back-link" href="/">← 返回聊天演示</a>
+      <form className="admin-login-card" onSubmit={login}>
+        <div className="admin-brand-mark">良</div><p className="eyebrow">PAIR PLAYGROUND · ADMIN</p><h1>专属游戏控制台</h1>
+        <p className="admin-login-card__intro">管理 AI 接口、模型、候选游戏类型与系统提示词。密码只用于建立管理会话，不会返回浏览器。</p>
+        <input type="hidden" name="username" autoComplete="username" value="admin" readOnly />
+        <label className="admin-field"><span>管理员密码</span><input type="password" name="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="输入独立管理密码" required /></label>
+        {notice && <p className={`admin-notice is-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}>{notice.text}</p>}
+        <button className="admin-primary-button" type="submit" disabled={busy === 'login'}>{busy === 'login' ? '正在验证…' : '进入控制台'}</button>
+        <small>会话使用 HttpOnly 安全 Cookie，30 分钟无操作自动过期。</small>
       </form>
     </main>
   );
+
+  if (!config) return <main className="admin-loading"><span>良</span><p>{pageError ?? '正在读取 AI 配置…'}</p>{pageError && <button className="admin-primary-button" type="button" onClick={() => { setPageError(null); void loadConfig().catch((error) => setPageError(error instanceof Error ? error.message : '重试失败')); }}>重新读取配置</button>}</main>;
+
+  const current = sections.find((item) => item.id === activeSection) ?? sections[0];
+  const saveLabel = busy === 'save' ? '正在保存…' : '保存并立即生效';
+  return (
+    <main className="admin-page">
+      <aside className="admin-sidebar">
+        <a className="admin-wordmark" href="/"><span>良</span><strong>Pair Playground</strong></a>
+        <div className="admin-sidebar__label">控制台目录</div>
+        <nav className="admin-nav" aria-label="控制台功能区">
+          {sections.map((item) => <a key={item.id} href={item.path} className={`admin-nav-item ${activeSection === item.id ? 'is-active' : ''}`} onClick={(event) => { event.preventDefault(); navigate(item.path); }}><span className="admin-nav-item__icon">{item.icon}</span><span><strong>{item.label}</strong><small>{item.caption}</small></span>{activeSection === item.id && <i aria-hidden="true">›</i>}</a>)}
+        </nav>
+        <div className="admin-sidebar__footer"><div className="admin-sidebar-status"><span className={config.apiKeyConfigured ? 'is-online' : 'is-offline'} /><span><strong>{config.apiKeyConfigured ? 'AI 已连接' : '使用本地题卡'}</strong><small>{config.apiKeyConfigured ? config.model : '尚未配置 API Key'}</small></span></div><a className="admin-sidebar-chat" href="/">打开聊天演示 <span>↗</span></a></div>
+      </aside>
+      <section className="admin-main">
+        <header className="admin-topbar"><div><p className="eyebrow">AI GAME STUDIO / {current.label.toUpperCase()}</p><h1>{current.label}</h1><p>{current.caption}，每个功能区都在独立页面中管理，配置内容不会再挤在同一张长页面里。</p></div><button className="admin-text-button" type="button" onClick={() => void logout()} disabled={busy === 'logout'}>{busy === 'logout' ? '退出中…' : '退出登录'}</button></header>
+        {notice && <p className={`admin-notice admin-notice--floating is-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}>{notice.text}</p>}
+        <form className="admin-config-form" onSubmit={(event) => { event.preventDefault(); void saveConfig(); }}>
+          {activeSection === 'overview' && <OverviewPage config={config} gameTypes={gameTypes} onNavigate={navigate} />}
+          {activeSection === 'provider' && <ProviderPage config={config} apiBaseUrl={apiBaseUrl} apiKey={apiKey} model={model} models={models} busy={busy} setApiBaseUrl={setApiBaseUrl} setApiKey={setApiKey} setModel={setModel} loadModels={loadModels} />}
+          {activeSection === 'game-types' && <GameTypesPage gameTypes={gameTypes} setGameTypes={setGameTypes} />}
+          {activeSection === 'prompt' && <PromptPage systemPrompt={systemPrompt} setSystemPrompt={setSystemPrompt} />}
+          {activeSection === 'flow' && <FlowPage onNavigate={navigate} />}
+          {activeSection !== 'overview' && activeSection !== 'flow' && <footer className="admin-savebar"><div><strong>{config.apiKeyConfigured ? '服务已就绪' : '还差一个 API Key'}</strong><small>上次保存：{formatUpdatedAt(config.updatedAt)} · 保存后新配置会立即用于下一次游戏生成。</small></div><div>{config.apiKeyConfigured && <button className="admin-danger-button" type="button" onClick={() => { if (window.confirm('确定清除已保存的 API Key？前台会回退到本地题卡。')) void saveConfig({ clearApiKey: true }); }} disabled={busy !== null}>清除 Key</button>}<button className="admin-primary-button" type="submit" disabled={busy !== null}>{saveLabel}</button></div></footer>}
+        </form>
+      </section>
+    </main>
+  );
+}
+
+function OverviewPage({ config, gameTypes, onNavigate }: { config: AdminConfig; gameTypes: AdminGameType[]; onNavigate: (path: string) => void }) {
+  const cards = [
+    { label: '模型接口', value: config.apiKeyConfigured ? '已配置' : '待配置', detail: config.apiKeyConfigured ? config.model : '配置 Key 后开启 AI 生成', path: '/admin/provider', accent: 'purple' },
+    { label: '游戏模板', value: `${gameTypes.filter((item) => item.enabled).length} 个启用`, detail: `共 ${gameTypes.length} 个模板`, path: '/admin/game-types', accent: 'orange' },
+    { label: '系统提示词', value: `${config.systemPrompt.length} 字`, detail: '统一控制生成风格与边界', path: '/admin/prompt', accent: 'green' },
+  ];
+  return <div className="admin-content admin-content--overview">
+    <section className="admin-welcome-card"><div><span className="admin-kicker">控制台概览</span><h2>把配置工作拆开，逐页完成。</h2><p>从接口连接到游戏模板，再到系统规则，每一项设置都拥有清晰的入口。左侧目录会始终保留，随时切换功能区。</p></div><div className="admin-welcome-mark">良<span>AI GAME<br />STUDIO</span></div></section>
+    <div className="admin-stat-grid">{cards.map((card) => <button className={`admin-stat-card is-${card.accent}`} key={card.path} type="button" onClick={() => onNavigate(card.path)}><span className="admin-stat-card__label">{card.label}<b>→</b></span><strong>{card.value}</strong><small>{card.detail}</small></button>)}</div>
+    <section className="admin-panel admin-overview-note"><div className="admin-panel__heading"><div><span>01</span><h2>建议配置顺序</h2></div><small>从上到下完成</small></div><div className="admin-overview-steps"><button type="button" onClick={() => onNavigate('/admin/provider')}><b>1</b><span><strong>先接入模型</strong><small>填写 Base URL、API Key 与模型名称。</small></span>→</button><button type="button" onClick={() => onNavigate('/admin/game-types')}><b>2</b><span><strong>再整理玩法</strong><small>启用需要展示给用户的游戏模板。</small></span>→</button><button type="button" onClick={() => onNavigate('/admin/prompt')}><b>3</b><span><strong>最后调整规则</strong><small>统一约束语气、安全边界与生成目标。</small></span>✓</button></div></section>
+  </div>;
+}
+
+function ProviderPage({ config, apiBaseUrl, apiKey, model, models, busy, setApiBaseUrl, setApiKey, setModel, loadModels }: { config: AdminConfig; apiBaseUrl: string; apiKey: string; model: string; models: string[]; busy: string | null; setApiBaseUrl: (value: string) => void; setApiKey: (value: string) => void; setModel: (value: string) => void; loadModels: () => void }) {
+  return <div className="admin-content"><section className="admin-panel admin-panel--wide"><div className="admin-panel__heading"><div><span>01</span><h2>模型接口</h2></div><small>更新于 {formatUpdatedAt(config.updatedAt)}</small></div><p className="admin-panel__intro">配置兼容 OpenAI Chat Completions 的服务地址。API Key 只会在服务端加密保存，浏览器不会读取已保存的密钥。</p>
+    <div className="admin-form-grid"><label className="admin-field"><span>API Base URL</span><input type="url" value={apiBaseUrl} onChange={(event) => setApiBaseUrl(event.target.value)} required /><small>填写服务根地址，或以 /v1 结尾的地址。</small></label><label className="admin-field"><span>API Key <em>{config.apiKeyConfigured ? '已安全配置' : '尚未配置'}</em></span><input type="password" name="api-key" autoComplete="new-password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={config.apiKeyConfigured ? '留空即可保留当前 Key' : '粘贴新的 API Key'} /><small>保存后输入框会立即清空，服务端也不会把 Key 返回页面。</small></label></div>
+    <div className="admin-field"><span>模型</span><div className="admin-inline-field"><input list="available-models" value={model} onChange={(event) => setModel(event.target.value)} required /><datalist id="available-models">{models.map((item) => <option value={item} key={item} />)}</datalist><button type="button" onClick={loadModels} disabled={!config.apiKeyConfigured || busy === 'models'}>{busy === 'models' ? '检测中…' : '检测模型'}</button></div><small>检测使用“已保存”的 Key。新 Key 请先点击底部保存，再回来检测。</small></div>
+    <div className="admin-security-strip"><span>✓ Key 加密落盘</span><span>✓ 仅后端调用</span><span>✓ 上游拒绝重定向</span></div>{models.length > 0 && <div className="admin-model-results"><strong>可用模型</strong>{models.map((item) => <button type="button" key={item} onClick={() => setModel(item)}>{item}</button>)}</div>}
+  </section></div>;
+}
+
+function GameTypesPage({ gameTypes, setGameTypes }: { gameTypes: AdminGameType[]; setGameTypes: React.Dispatch<React.SetStateAction<AdminGameType[]>> }) {
+  return <div className="admin-content"><section className="admin-panel admin-panel--wide"><div className="admin-panel__heading"><div><span>02</span><h2>游戏模板</h2></div><small>{gameTypes.filter((item) => item.enabled).length}/{gameTypes.length} 个启用</small></div><p className="admin-panel__intro">模板 ID 和交互机制保持稳定，滚动展示词与每个模板的生成要求可以随时修改。</p><div className="admin-template-list">{gameTypes.map((item, index) => <article className={`admin-template-card ${item.enabled ? 'is-enabled' : ''}`} key={item.id}><header><div><code>{item.id}</code><strong>{item.label}</strong></div><label className="admin-template-toggle"><input type="checkbox" checked={item.enabled} onChange={(event) => setGameTypes((current) => current.map((entry, entryIndex) => entryIndex === index ? { ...entry, enabled: event.target.checked } : entry))} /><span>{item.enabled ? '已启用' : '已隐藏'}</span></label></header><label className="admin-field"><span>聊天页滚动关键词</span><input value={item.label} maxLength={60} onChange={(event) => setGameTypes((current) => current.map((entry, entryIndex) => entryIndex === index ? { ...entry, label: event.target.value } : entry))} /></label><label className="admin-field"><span>该模板生成要求</span><textarea value={item.generationPrompt} rows={5} maxLength={4000} onChange={(event) => setGameTypes((current) => current.map((entry, entryIndex) => entryIndex === index ? { ...entry, generationPrompt: event.target.value } : entry))} /></label>{item.id === 'custom' && <small className="admin-template-card__waiting">专属小游戏已接入 AI 游戏工坊和双端系列。这里配置入口名称和通用生成要求，用户发起前仍可编辑本局 Prompt。</small>}</article>)}</div></section></div>;
+}
+
+function PromptPage({ systemPrompt, setSystemPrompt }: { systemPrompt: string; setSystemPrompt: (value: string) => void }) {
+  return <div className="admin-content"><section className="admin-panel admin-panel--wide admin-panel--prompt"><div className="admin-panel__heading"><div><span>03</span><h2>系统提示词</h2></div><small>{systemPrompt.length} 字</small></div><p className="admin-panel__intro">这里控制 AI 的整体语气、回合节奏、内容边界和业务目标。前端局部 Prompt 只负责描述本局玩法，安全规则仍以服务端注入为准。</p><label className="admin-field admin-field--grow"><span>游戏设计要求</span><textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} rows={24} /><small>建议保留明确的安全边界，并让输出保持轻松、简短、可跳过。</small></label></section></div>;
+}
+
+function FlowPage({ onNavigate }: { onNavigate: (path: string) => void }) {
+  const steps = useMemo(() => [
+    ['01', '理解两个人', '读取最近公开聊天与非敏感资料信号，不发送原始私密资料。'],
+    ['02', '锁定玩法模板', '使用稳定 ID 对应的猜谜、转盘或五秒二选一玩法。'],
+    ['03', '用户确认 Prompt', '先生成安全简报，允许本人修改后再开始。'],
+    ['04', '本地安全校验', '不合规输出不会进入前台，自动回退到本地题卡。'],
+  ], []);
+  return <div className="admin-content"><section className="admin-panel admin-panel--wide"><div className="admin-panel__heading"><div><span>04</span><h2>生成流程</h2></div><small>安全优先</small></div><div className="admin-flow-list admin-flow-list--large">{steps.map(([number, title, description]) => <div className="admin-flow-step" key={number}><span>{number}</span><div><strong>{title}</strong><p>{description}</p></div></div>)}</div><div className="admin-flow-footer"><div><strong>准备好体验完整链路了吗？</strong><small>返回聊天页，生成一局属于这两个人的轻量小游戏。</small></div><button className="admin-primary-button" type="button" onClick={() => { window.location.href = '/'; }}>打开聊天演示 ↗</button></div></section></div>;
 }
