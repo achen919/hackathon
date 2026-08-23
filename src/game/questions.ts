@@ -3,6 +3,8 @@ import type {
   GameQuestion,
   GameTemplateId,
   MatchPayload,
+  ParticipantId,
+  ProfileRiddleChoiceGroup,
 } from '../types';
 
 const publicTopics = ['博物馆', '逛展', '徒步', '做饭', '摄影', '旅行', '咖啡', '电影', '运动', '阅读'];
@@ -12,26 +14,120 @@ function findPublicTopic(match: MatchPayload) {
   return publicTopics.find((topic) => chat.includes(topic)) ?? '周末安排';
 }
 
-const profileQuestions: GameQuestion[] = [
+interface ProfileDirection {
+  id: string;
+  category: 'interaction' | 'planning' | 'lifestyle';
+  signals: readonly string[];
+  options: readonly [string, string, string];
+}
+
+const profileDirections: readonly ProfileDirection[] = [
   {
-    id: 'first-impression', label: '第一感觉', source: '从公开资料提炼的中性描述词',
-    prompt: '哪个词更接近你对 TA 的第一感觉？', options: ['真诚', '有趣', '慢热', '直率'],
-    matchedFollowUp: '你们想到了一起。是哪个细节让你有这种感觉？',
-    differentFollowUp: '这个词很有意思。你是从哪个细节感受到的？',
+    id: 'profile-social-state', category: 'interaction', signals: ['朋友', '聚会', '桌游', '派对', '唱歌', 'KTV', '社团'],
+    options: ['人多时先观察', '很快接上大家话题', '更喜欢一对一聊'],
   },
   {
-    id: 'getting-along', label: '相处方式', source: '只描述相处体验，不给人格下结论',
-    prompt: '如果用一个词形容 TA 的相处方式，你会选？', options: ['细腻', '会倾听', '有行动力', '有分寸'],
-    matchedFollowUp: '这个观察很具体。你愿意说说对应的聊天瞬间吗？',
-    differentFollowUp: '原来你看到的是这一面。哪句话让你有这个印象？',
+    id: 'profile-communication', category: 'interaction', signals: ['倾听', '分享', '直接说', '语音', '长消息', '慢慢聊'],
+    options: ['有话喜欢直接说', '先听完再回应', '想清楚再开口'],
   },
   {
-    id: 'life-energy', label: '生活状态', source: '一组不涉及敏感身份的生活方式词',
-    prompt: 'TA 给你的生活状态更像哪一个词？', options: ['热爱生活', '有好奇心', '松弛', '有计划'],
-    matchedFollowUp: '你们都留意到了这一点。它对你来说为什么重要？',
-    differentFollowUp: '这个角度我之前没想到。你为什么会选它？',
+    id: 'profile-weekend', category: 'planning', signals: ['周末', '宅家', '逛展', '散步', 'citywalk', 'Citywalk'],
+    options: ['周末临时再安排', '会提前约好行程', '想留半天给自己'],
+  },
+  {
+    id: 'profile-travel', category: 'planning', signals: ['旅行', '旅游', '出游', '攻略', '露营', '徒步', '爬山', '骑行'],
+    options: ['出门先做好攻略', '到地方再看心情', '随时愿意改路线'],
+  },
+  {
+    id: 'profile-food', category: 'lifestyle', signals: ['美食', '吃饭', '火锅', '咖啡', '做饭', '烘焙', '夜宵', '探店'],
+    options: ['为了吃愿意绕远', '就近找家顺眼的', '先问大家想吃啥'],
+  },
+  {
+    id: 'profile-interest', category: 'lifestyle', signals: ['电影', '音乐', '阅读', '摄影', '画画', '动漫', '游戏', '运动', '健身', '跑步', '博物馆'],
+    options: ['感兴趣会查到底', '会拉朋友一起体验', '有空再慢慢研究'],
+  },
+  {
+    id: 'profile-life-pace', category: 'planning', signals: ['早起', '熬夜', '夜猫', '晨跑', '作息', '下班'],
+    options: ['一早就安排当天', '忙完才开始放松', '晚上更容易来劲'],
+  },
+  {
+    id: 'profile-decision', category: 'planning', signals: ['计划', '选择', '决定', '随机', '临时', '安排'],
+    options: ['先比较再做决定', '通常凭第一感觉', '会先听听别人意见'],
+  },
+  {
+    id: 'profile-date', category: 'interaction', signals: ['约会', '看展', '看电影', '约饭', '见面'],
+    options: ['喜欢边走边聊天', '更想一起做点事', '找家小店慢慢聊'],
+  },
+  {
+    id: 'profile-emotion', category: 'interaction', signals: ['开心', '心情', '情绪', '难过', '压力'],
+    options: ['开心会马上分享', '会先自己消化下', '更习惯边聊边理清'],
   },
 ];
+
+const fallbackProfileDirectionIds = ['profile-weekend', 'profile-food', 'profile-social-state', 'profile-decision'];
+const guessLabels = ['小猜测一', '小猜测二', '小猜测三'];
+
+function profileSignalText(match: MatchPayload, target: ParticipantId) {
+  const user = target === 'a' ? match.user_a : match.user_b;
+  return [
+    user?.profile,
+    ...match.messages
+      .filter((message) => message.type === 'text' && message.from === target)
+      .map((message) => message.content),
+  ].filter((value): value is string => typeof value === 'string').join(' ');
+}
+
+function selectProfileDirections(match: MatchPayload, target: ParticipantId) {
+  const signalText = profileSignalText(match, target);
+  const scored = profileDirections
+    .map((direction, index) => ({
+      direction,
+      index,
+      score: direction.signals.reduce((score, signal) => score + (signalText.includes(signal) ? 1 : 0), 0),
+    }))
+    .filter(({ score }) => score > 0)
+    .sort((left, right) => right.score - left.score || left.index - right.index);
+  const selected: ProfileDirection[] = [];
+  const selectedCategories = new Set<ProfileDirection['category']>();
+  for (const { direction } of scored) {
+    if (selected.length === 3) break;
+    if (!selectedCategories.has(direction.category)) {
+      selected.push(direction);
+      selectedCategories.add(direction.category);
+    }
+  }
+  const fallbackDirections = fallbackProfileDirectionIds
+    .map((id) => profileDirections.find((candidate) => candidate.id === id))
+    .filter((direction): direction is ProfileDirection => Boolean(direction));
+  for (const direction of fallbackDirections) {
+    if (selected.length === 3) break;
+    if (!selectedCategories.has(direction.category) && !selected.some((candidate) => candidate.id === direction.id)) {
+      selected.push(direction);
+      selectedCategories.add(direction.category);
+    }
+  }
+  for (const { direction } of scored) {
+    if (selected.length === 3) break;
+    if (!selected.some((candidate) => candidate.id === direction.id)) selected.push(direction);
+  }
+  for (const direction of fallbackDirections) {
+    if (selected.length === 3) break;
+    if (!selected.some((candidate) => candidate.id === direction.id)) selected.push(direction);
+  }
+  return selected;
+}
+
+function profileQuestions(match: MatchPayload, target: ParticipantId): GameQuestion[] {
+  return selectProfileDirections(match, target).map((direction, index) => ({
+    id: direction.id,
+    label: guessLabels[index],
+    source: '根据公开资料延伸的轻松行为候选',
+    prompt: '凭第一感觉，选一个更像 TA 的日常片段。',
+    options: [...direction.options],
+    matchedFollowUp: '这条猜得挺准。你愿意补充一个具体的小故事吗？',
+    differentFollowUp: '这条猜反了也很好聊。你实际更接近哪种情况？',
+  }));
+}
 
 function wheelQuestions(topic: string): GameQuestion[] {
   return [
@@ -114,15 +210,31 @@ function unique(values: string[], maximum = 12) {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))].slice(0, maximum);
 }
 
-function mechanicsFor(templateId: GameTemplateId, questions: GameQuestion[], topics: string[]): GameDefinition['mechanics'] {
+function choiceGroupsFor(questions: GameQuestion[]) {
+  return questions.map((question) => ({
+    id: question.id,
+    options: [question.options[0], question.options[1], question.options[2]] as [string, string, string],
+  })) as [ProfileRiddleChoiceGroup, ProfileRiddleChoiceGroup, ProfileRiddleChoiceGroup];
+}
+
+function mechanicsFor(
+  templateId: GameTemplateId,
+  questions: GameQuestion[],
+  topics: string[],
+  profileQuestionsByTarget?: Record<ParticipantId, GameQuestion[]>,
+): GameDefinition['mechanics'] {
   if (templateId === 'profile-riddle') {
+    const choiceGroupsByTarget = {
+      a: choiceGroupsFor(profileQuestionsByTarget?.a ?? questions),
+      b: choiceGroupsFor(profileQuestionsByTarget?.b ?? questions),
+    };
+    const choiceGroups = choiceGroupsByTarget.b;
     return {
       kind: 'profile-riddle',
-      keywordOptions: unique([
-        ...questions.flatMap((question) => question.options),
-        '真诚', '有趣', '细腻', '有分寸', '热爱生活', '有好奇心',
-      ]),
-      sentencePattern: '我猜你是一个「关键词一」、有点「关键词二」，还很「关键词三」的人。',
+      choiceGroups,
+      choiceGroupsByTarget,
+      keywordOptions: unique(choiceGroups.flatMap((group) => group.options)),
+      sentencePattern: '我觉得{昵称}是一个{猜测一}、{猜测二}，而且{猜测三}的人。',
     };
   }
   if (templateId === 'keyword-wheel') {
@@ -146,13 +258,16 @@ export function buildFallbackGame(
   label?: string,
 ): GameDefinition {
   const topic = findPublicTopic(match);
+  const profileQuestionsByTarget = templateId === 'profile-riddle'
+    ? { a: profileQuestions(match, 'a'), b: profileQuestions(match, 'b') }
+    : undefined;
   const questions = templateId === 'keyword-wheel'
     ? wheelQuestions(topic)
     : templateId === 'rapid-choice'
       ? rapidQuestions
       : templateId === 'custom'
         ? customQuestions
-        : profileQuestions;
+        : profileQuestionsByTarget?.b ?? profileQuestions(match, 'b');
   const gameType = label ?? (
     templateId === 'keyword-wheel' ? '关键词深挖' : templateId === 'rapid-choice' ? '极限2选1' : templateId === 'custom' ? '专属小游戏' : '资料猜谜局'
   );
@@ -162,7 +277,7 @@ export function buildFallbackGame(
       ? ['周末模式', '情绪节奏', '记录瞬间', '约会灵感']
       : templateId === 'custom'
         ? ['Prompt 生成', '可玩交互', topic]
-        : ['第一感觉', '相处方式', '生活状态'];
+        : guessLabels;
 
   return {
     schemaVersion: 2,
@@ -171,7 +286,7 @@ export function buildFallbackGame(
     templateId,
     gameType,
     title: templateId === 'profile-riddle'
-      ? '用 3 个词，说说眼中的 TA'
+      ? '凭第一感觉，猜 TA 的 3 个小细节'
       : templateId === 'keyword-wheel'
         ? '转一下，把一个话题聊深一点'
         : templateId === 'rapid-choice'
@@ -179,17 +294,19 @@ export function buildFallbackGame(
           : '写一句 Prompt，现场变成游戏',
     eyebrow: `${gameType} · 双人破冰`,
     description: templateId === 'profile-riddle'
-      ? '双方根据对方资料各选三个关键词，拼成一句印象描述，完成后一起揭晓。'
+      ? '从三组日常片段中各选一个小猜测，发给 TA 看看哪里挺准、哪里正好聊开。'
       : templateId === 'keyword-wheel'
         ? '转盘会从公开聊天线索中抽一个关键词，再给出一条低压力追问。'
         : templateId === 'rapid-choice'
           ? '双方分别完成 3–5 道五秒二选一，最后一起查看答案和可以继续聊的原因。'
           : '在当前案例页编辑 Prompt，让 AI 编写完整 HTML/CSS/JavaScript 小游戏并在隔离沙箱中直接试玩，无需登录。',
-    whyItFits: `从你们已经聊过的「${topic}」开始，不需要准备标准答案。`,
+    whyItFits: templateId === 'profile-riddle'
+      ? '三个小猜测都来自轻松日常，猜反了也能自然接着聊。'
+      : `从你们已经聊过的「${topic}」开始，不需要准备标准答案。`,
     estimatedMinutes: templateId === 'rapid-choice' ? 4 : 3,
     topics,
     questions,
-    mechanics: mechanicsFor(templateId, questions, topics),
+    mechanics: mechanicsFor(templateId, questions, topics, profileQuestionsByTarget),
     generatedBy: 'fallback',
     generatedAt: new Date().toISOString(),
   };
@@ -199,7 +316,14 @@ function validMechanics(game: Partial<GameDefinition>) {
   const mechanics = game.mechanics;
   if (!mechanics || typeof mechanics !== 'object' || !('kind' in mechanics) || mechanics.kind !== game.templateId) return false;
   if (mechanics.kind === 'profile-riddle') {
-    return Array.isArray(mechanics.keywordOptions) && mechanics.keywordOptions.length >= 6 && mechanics.keywordOptions.length <= 12 &&
+    const groupsValid = mechanics.choiceGroups === undefined || validProfileGroups(mechanics.choiceGroups);
+    const targetMap = mechanics.choiceGroupsByTarget;
+    const targetGroupsValid = targetMap === undefined || (
+      typeof targetMap === 'object' && targetMap !== null && !Array.isArray(targetMap) &&
+      Object.keys(targetMap).length === 2 && 'a' in targetMap && 'b' in targetMap &&
+      validProfileGroups(targetMap.a) && validProfileGroups(targetMap.b)
+    );
+    return groupsValid && targetGroupsValid && Array.isArray(mechanics.keywordOptions) && mechanics.keywordOptions.length >= 6 && mechanics.keywordOptions.length <= 12 &&
       mechanics.keywordOptions.every((item) => typeof item === 'string' && item.length > 0 && item.length <= 60) &&
       typeof mechanics.sentencePattern === 'string' && mechanics.sentencePattern.length >= 10 && mechanics.sentencePattern.length <= 160;
   }
@@ -210,6 +334,36 @@ function validMechanics(game: Partial<GameDefinition>) {
   }
   if (mechanics.kind === 'rapid-choice') return mechanics.roundSeconds === 5;
   return mechanics.kind === 'custom';
+}
+
+const broadProfileLabelRoots = [
+  '慢热', '外向', '内向', '理性', '感性', '随性', '有计划', '直率', '真诚',
+  '细腻', '松弛', '有分寸', '热爱生活', '有好奇心', '有行动力', '会倾听',
+];
+const interestingScene = /有趣(?:的)?(?:小店|店|地方|展览|展|电影|书|音乐|游戏|话题|活动|东西|故事|点子|路线|招牌|菜单|餐厅|体验|事情|内容|作品)/gu;
+
+function isBehaviorLabel(value: string) {
+  const normalized = value.trim();
+  const length = [...normalized].length;
+  const comparable = normalized.replace(/[\s\p{P}\p{S}]+/gu, '');
+  const withoutInterestingScene = comparable.replace(interestingScene, '');
+  return length >= 4 && length <= 12 &&
+    !/[\r\n，。！？、；：,.!?;:]/u.test(normalized) &&
+    !broadProfileLabelRoots.some((root) => comparable.includes(root)) &&
+    !withoutInterestingScene.includes('有趣') &&
+    !/控制欲|恋爱脑|妈宝|社恐|难搞|情绪化|不靠谱|黏人|强势|冷漠|自私|幼稚/u.test(normalized) &&
+    !/(?:的人|型人格|性格)$/u.test(normalized);
+}
+
+function validProfileGroups(groups: unknown) {
+  if (!Array.isArray(groups) || groups.length !== 3) return false;
+  const directionIds = new Set(profileDirections.map((direction) => direction.id));
+  const ids = groups.map((group) => group?.id);
+  if (new Set(ids).size !== 3 || !ids.every((id) => typeof id === 'string' && directionIds.has(id))) return false;
+  const categories = new Set(ids.map((id) => profileDirections.find((direction) => direction.id === id)?.category));
+  const options = groups.flatMap((group) => Array.isArray(group?.options) ? group.options : []);
+  return categories.size >= 2 && options.length === 9 && new Set(options).size === 9 &&
+    groups.every((group) => Array.isArray(group.options) && group.options.length === 3 && group.options.every(isBehaviorLabel));
 }
 
 export function isGameDefinition(value: unknown): value is GameDefinition {
@@ -250,7 +404,9 @@ export function isGameDefinition(value: unknown): value is GameDefinition {
     return true;
   });
   if (!questionsValid) return false;
-  if (game.templateId === 'profile-riddle') return game.questions.length === 3 && game.questions.every((question) => question.options.length >= 3);
+  if (game.templateId === 'profile-riddle') {
+    return validProfileGroups(game.questions);
+  }
   if (game.templateId === 'rapid-choice') return game.questions.every((question) => question.options.length === 2);
   return true;
 }

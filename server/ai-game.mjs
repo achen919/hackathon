@@ -11,6 +11,7 @@ import {
   hasUnsafeContactOrLink,
   hasUnsafeGameText,
   isTemplateShapeValid,
+  PROFILE_RIDDLE_DIRECTION_IDS,
   templateForId,
   templateGuidance,
 } from './game-templates.mjs';
@@ -101,6 +102,35 @@ export const GAME_OUTPUT_SCHEMA = {
     },
   },
 };
+
+export const PROFILE_RIDDLE_OUTPUT_SCHEMA = (() => {
+  const schema = structuredClone(GAME_OUTPUT_SCHEMA);
+  const question = schema.properties.questions.items;
+  question.properties.id = { type: 'string', enum: [...PROFILE_RIDDLE_DIRECTION_IDS] };
+  question.properties.options.minItems = 3;
+  question.properties.options.maxItems = 3;
+  question.properties.options.items.minLength = 4;
+  question.properties.options.items.maxLength = 12;
+  const targetQuestions = {
+    type: 'array',
+    minItems: 3,
+    maxItems: 3,
+    items: question,
+  };
+  delete schema.properties.questions;
+  schema.required = schema.required.filter((key) => key !== 'questions');
+  schema.required.push('questionsByTarget');
+  schema.properties.questionsByTarget = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['a', 'b'],
+    properties: {
+      a: targetQuestions,
+      b: structuredClone(targetQuestions),
+    },
+  };
+  return schema;
+})();
 
 function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -202,6 +232,34 @@ export function isGeneratedGamePayload(value) {
   return true;
 }
 
+export function isGeneratedProfileRiddlePayload(value) {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      'gameType',
+      'title',
+      'eyebrow',
+      'description',
+      'whyItFits',
+      'estimatedMinutes',
+      'topics',
+      'questionsByTarget',
+    ]) ||
+    !isRecord(value.questionsByTarget) ||
+    !hasOnlyKeys(value.questionsByTarget, ['a', 'b']) ||
+    Object.keys(value.questionsByTarget).length !== 2 ||
+    !Object.hasOwn(value.questionsByTarget, 'a') ||
+    !Object.hasOwn(value.questionsByTarget, 'b')
+  ) {
+    return false;
+  }
+  const { questionsByTarget, ...metadata } = value;
+  return ['a', 'b'].every((target) => isGeneratedGamePayload({
+    ...metadata,
+    questions: questionsByTarget[target],
+  })) && isTemplateShapeValid(value, 'profile-riddle');
+}
+
 export function isGeneratedPromptGamePayload(value) {
   return isPromptGamePayload(value, { hasUnsafeText: hasUnsafeGameText });
 }
@@ -217,19 +275,24 @@ const SAFE_PERSONALIZATION_SIGNALS = [
   '运动', '阅读', '文学', '宠物', '游戏', '桌游', '动漫', '艺术', '建筑', '历史',
   '科技', '画画', '舞蹈', '手工', '羽毛球', '篮球', '足球', '慢热', '真诚',
   '幽默', '细腻', '倾听', '规划', '随性', '松弛', '好奇', '独立',
+  '白羊座', '金牛座', '双子座', '巨蟹座', '狮子座', '处女座',
+  '天秤座', '天蝎座', '射手座', '摩羯座', '水瓶座', '双鱼座',
+  'INTJ', 'INTP', 'ENTJ', 'ENTP', 'INFJ', 'INFP', 'ENFJ', 'ENFP',
+  'ISTJ', 'ISFJ', 'ESTJ', 'ESFJ', 'ISTP', 'ISFP', 'ESTP', 'ESFP',
 ];
 
-function safePersonalizationSignals(user) {
+function safePersonalizationSignals(user, { includeMemories = true } = {}) {
   const raw = [
     user?.profile,
-    ...(Array.isArray(user?.memories_self) ? user.memories_self : []),
-    ...(Array.isArray(user?.memories_ideal) ? user.memories_ideal : []),
+    ...(includeMemories && Array.isArray(user?.memories_self) ? user.memories_self : []),
+    ...(includeMemories && Array.isArray(user?.memories_ideal) ? user.memories_ideal : []),
     ...(Array.isArray(user?.public_profile_signals) ? user.public_profile_signals : []),
   ].filter((value) => typeof value === 'string').join(' ');
-  return SAFE_PERSONALIZATION_SIGNALS.filter((signal) => raw.includes(signal)).slice(0, 20);
+  const comparable = raw.toUpperCase();
+  return SAFE_PERSONALIZATION_SIGNALS.filter((signal) => comparable.includes(signal.toUpperCase())).slice(0, 20);
 }
 
-export function compactMatchForAi(match) {
+export function compactMatchForAi(match, { publicOnly = false } = {}) {
   const messages = match.messages
     .filter((message) => !hasUnsafeContactOrLink(message.content))
     .slice(-60)
@@ -240,7 +303,7 @@ export function compactMatchForAi(match) {
       sent_at: clip(message.sent_at, 40),
     }));
   const compactUser = (user) => ({
-    public_profile_signals: safePersonalizationSignals(user),
+    public_profile_signals: safePersonalizationSignals(user, { includeMemories: !publicOnly }),
   });
   return {
     match_id: clip(match.match_id, 200),
@@ -346,7 +409,9 @@ function parseGameJson(content, templateId, seriesId) {
   const arcade = templateId === 'custom' && seriesId === ARCADE_GAME_SERIES_ID;
   const structurallyValid = templateId === 'custom'
     ? arcade ? isArcadeGamePayload(parsed, { hasUnsafeText: hasUnsafeGameText }) : isGeneratedPromptGamePayload(parsed)
-    : isGeneratedGamePayload(parsed);
+    : templateId === 'profile-riddle'
+      ? isGeneratedProfileRiddlePayload(parsed)
+      : isGeneratedGamePayload(parsed);
   if (!structurallyValid) throw new Error('AI game did not match the required schema');
   if (!arcade && !isTemplateShapeValid(parsed, templateId, seriesId)) {
     throw new Error('AI game did not follow the selected template');
@@ -380,13 +445,57 @@ function leaksPrivateContext(game, match) {
   return false;
 }
 
+function directlyRestatesProfileSignal(game, match) {
+  if (!isRecord(game?.questionsByTarget)) return false;
+  return ['a', 'b'].some((target) => {
+    const user = target === 'a' ? match.user_a : match.user_b;
+    const targetChatText = match.messages
+      .filter((message) => message.from === target)
+      .map((message) => message.content)
+      .join(' ')
+      .toUpperCase();
+    const signals = [
+      ...safePersonalizationSignals(user, { includeMemories: false }),
+      ...SAFE_PERSONALIZATION_SIGNALS.filter((signal) => targetChatText.includes(signal.toUpperCase())),
+    ].map((value) => normalizedLeakText(value)).filter(Boolean);
+    const labels = (game.questionsByTarget[target] ?? [])
+      .flatMap((question) => question.options ?? [])
+      .map((value) => normalizedLeakText(value));
+    return labels.some((label) => signals.some((signal) => label.includes(signal)));
+  });
+}
+
+function publicProfileRiddleCopy(game) {
+  const guessLabels = ['小猜测一', '小猜测二', '小猜测三'];
+  const neutralQuestions = (questions) => questions.map((question, index) => ({
+    ...question,
+    label: guessLabels[index],
+    source: '根据公开资料延伸的轻松行为候选',
+    prompt: '凭第一感觉，选一个更像 TA 的日常片段。',
+  }));
+  const questionsByTarget = {
+    a: neutralQuestions(game.questionsByTarget.a),
+    b: neutralQuestions(game.questionsByTarget.b),
+  };
+  return {
+    ...game,
+    title: '凭第一感觉，猜 TA 的 3 个小细节',
+    eyebrow: '资料猜谜 · 三个生活小猜测',
+    description: '每一组都有三种合理可能。选你的第一感觉，猜准或猜反都能自然接着聊。',
+    whyItFits: '三个小猜测只落在轻松日常里，不给性格或关系下结论。',
+    topics: guessLabels,
+    questionsByTarget,
+    questions: questionsByTarget.b,
+  };
+}
+
 function messagesFor(config, match, selection = {}) {
-  const context = compactMatchForAi(match);
   const configuredType = config.gameTypes.find(
     (item) => item.id === selection.templateId && item.enabled !== false,
   ) ?? config.gameTypes.find((item) => item.enabled !== false) ?? config.gameTypes[0];
   const template = templateForId(selection.templateId ?? configuredType.id);
   if (!template) throw new Error('Unknown game template');
+  const context = compactMatchForAi(match, { publicOnly: template.id === 'profile-riddle' });
   const series = template.id === 'custom' ? requireExclusiveSeries(selection.seriesId) : null;
   const gameLabel = selection.gameLabel ?? configuredType.label;
   const playerPrompt = selection.prompt ?? buildPromptPreview(
@@ -439,7 +548,11 @@ export function createAiGameService({ fetchImpl = globalThis.fetch, timeoutMs = 
       model: config.model,
       messages: messagesFor(config, match, selection),
       temperature: 0.75,
-      max_tokens: series?.seriesId === ARCADE_GAME_SERIES_ID ? 6_000 : 1_500,
+      max_tokens: series?.seriesId === ARCADE_GAME_SERIES_ID
+        ? 6_000
+        : template.id === 'profile-riddle'
+          ? 2_500
+          : 1_500,
     };
     const deadline = Date.now() + timeoutMs;
     const remainingMs = () => Math.max(1, deadline - Date.now());
@@ -458,7 +571,9 @@ export function createAiGameService({ fetchImpl = globalThis.fetch, timeoutMs = 
                 ? series.seriesId === ARCADE_GAME_SERIES_ID
                   ? ARCADE_GAME_OUTPUT_SCHEMA
                   : PROMPT_GAME_OUTPUT_SCHEMA
-                : GAME_OUTPUT_SCHEMA,
+                : template.id === 'profile-riddle'
+                  ? PROFILE_RIDDLE_OUTPUT_SCHEMA
+                  : GAME_OUTPUT_SCHEMA,
             },
           },
         },
@@ -477,6 +592,9 @@ export function createAiGameService({ fetchImpl = globalThis.fetch, timeoutMs = 
     }
     const game = parseGameJson(content, template.id, series?.seriesId);
     if (leaksPrivateContext(game, match)) throw new Error('AI game exposed private source material');
+    if (template.id === 'profile-riddle' && directlyRestatesProfileSignal(game, match)) {
+      throw new Error('AI profile riddle directly restated a known profile signal');
+    }
     if (series?.seriesId === ARCADE_GAME_SERIES_ID) {
       return buildArcadeGameDefinition(game, {
         id: randomUUID(),
@@ -486,16 +604,17 @@ export function createAiGameService({ fetchImpl = globalThis.fetch, timeoutMs = 
         generatedAt: new Date().toISOString(),
       });
     }
+    const publicGame = template.id === 'profile-riddle' ? publicProfileRiddleCopy(game) : game;
     return {
       schemaVersion: series ? PROMPT_GAME_SCHEMA_VERSION : 2,
       ...(series ? { engine: PROMPT_GAME_ENGINE } : {}),
       id: randomUUID(),
       matchId: match.match_id,
-      ...game,
+      ...publicGame,
       gameType: gameLabel,
       templateId: template.id,
       ...(series ? { seriesId: series.seriesId } : {}),
-      mechanics: buildTemplateMechanics(game, template.id, series?.seriesId),
+      mechanics: buildTemplateMechanics(publicGame, template.id, series?.seriesId),
       generatedBy: 'ai',
       generatedAt: new Date().toISOString(),
     };
@@ -539,7 +658,7 @@ export function createAiGameService({ fetchImpl = globalThis.fetch, timeoutMs = 
       .update('\0')
       .update(selection.prompt ?? '')
       .update('\0')
-      .update(JSON.stringify(compactMatchForAi(match)))
+      .update(JSON.stringify(compactMatchForAi(match, { publicOnly: selection.templateId === 'profile-riddle' })))
       .digest('base64url');
   }
 

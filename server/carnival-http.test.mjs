@@ -163,6 +163,12 @@ test('profile answers remain private until both participants submit', async () =
   await withCarnival(async (baseUrl) => {
     const users = await pairedUsers(baseUrl);
     await unlock(baseUrl, users);
+    await jsonRequest(baseUrl, '/api/carnival/messages', {
+      method: 'POST', token: users.a.token, body: { content: '旅行时我很想去徒步和露营。' },
+    });
+    await jsonRequest(baseUrl, '/api/carnival/messages', {
+      method: 'POST', token: users.b.token, body: { content: '最近想研究火锅和烘焙。' },
+    });
     const preview = await jsonRequest(baseUrl, '/api/carnival/prompt', {
       method: 'POST', token: users.a.token, body: { templateId: 'profile-riddle' },
     });
@@ -172,35 +178,51 @@ test('profile answers remain private until both participants submit', async () =
       body: { templateId: 'profile-riddle', prompt: preview.payload.prompt },
     });
     const inviteId = created.payload.invite.inviteId;
-    await jsonRequest(baseUrl, '/api/carnival/games/action', {
+    const joined = await jsonRequest(baseUrl, '/api/carnival/games/action', {
       method: 'POST', token: users.b.token, body: { inviteId, action: 'join' },
     });
+    const creatorState = await jsonRequest(baseUrl, '/api/carnival/state', { token: users.a.token });
+    const creatorInvite = creatorState.payload.room.invites.find((invite) => invite.inviteId === inviteId);
+    const creatorGroups = creatorInvite.game.definition.choiceGroups;
+    const joinerGroups = joined.payload.invite.game.definition.choiceGroups;
+    assert.deepEqual(creatorGroups.map((group) => group.options.length), [3, 3, 3]);
+    assert.deepEqual(joinerGroups.map((group) => group.options.length), [3, 3, 3]);
+    assert.notDeepEqual(creatorGroups, joinerGroups);
+    assert.deepEqual(creatorInvite.game.definition.keywordOptions, creatorGroups.flatMap((group) => group.options));
+    assert.deepEqual(joined.payload.invite.game.definition.keywordOptions, joinerGroups.flatMap((group) => group.options));
+    const firstKeywords = creatorGroups.map((group) => group.options[0]);
+    const secondKeywords = joinerGroups.map((group) => group.options[1]);
+    const firstSentence = `我觉得阿川是一个${firstKeywords[0]}、${firstKeywords[1]}，而且${firstKeywords[2]}的人。`;
     const first = await jsonRequest(baseUrl, '/api/carnival/games/action', {
       method: 'POST', token: users.a.token,
       body: {
         inviteId,
         action: 'profile-riddle.submit',
-        payload: { keywords: ['真诚', '有趣', '细腻'], sentence: '我觉得你真诚、有趣，而且很细腻。' },
+        payload: { keywords: firstKeywords, sentence: '客户端不能覆盖这句话 unsafe_12345' },
       },
     });
     assert.equal(first.response.status, 200);
     const peerView = await jsonRequest(baseUrl, '/api/carnival/state', { token: users.b.token });
     const peerInvite = peerView.payload.room.invites.find((invite) => invite.inviteId === inviteId);
     assert.equal(peerInvite.game.definition.phase, 'collecting');
-    assert.equal(JSON.stringify(peerInvite).includes('我觉得你真诚'), false);
+    assert.equal(JSON.stringify(peerInvite).includes(firstSentence), false);
 
     const second = await jsonRequest(baseUrl, '/api/carnival/games/action', {
       method: 'POST', token: users.b.token,
       body: {
         inviteId,
         action: 'profile-riddle.submit',
-        payload: { keywords: ['会倾听', '有分寸', '有计划'], sentence: '我猜你会倾听、有分寸，也很有计划。' },
+        payload: { keywords: secondKeywords },
       },
     });
     assert.equal(second.response.status, 200);
     assert.equal(second.payload.invite.game.definition.phase, 'revealed');
-    assert.match(JSON.stringify(second.payload.invite.game.definition.revealedSubmissions), /我觉得你真诚/);
-    assert.match(JSON.stringify(second.payload.invite.game.definition.revealedSubmissions), /我猜你会倾听/);
+    assert.match(JSON.stringify(second.payload.invite.game.definition.revealedSubmissions), new RegExp(firstKeywords[0]));
+    assert.match(JSON.stringify(second.payload.invite.game.definition.revealedSubmissions), new RegExp(secondKeywords[0]));
+    const revealed = JSON.stringify(second.payload.invite.game.definition.revealedSubmissions);
+    assert.equal(revealed.includes('unsafe_12345'), false);
+    assert.match(revealed, /我觉得小雨是一个/);
+    assert.match(revealed, /我觉得阿川是一个/);
   });
 });
 

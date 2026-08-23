@@ -307,6 +307,13 @@
   gap: 19px;
 }
 
+.carnival-profile-helper {
+  margin: 7px 0 0;
+  color: var(--cg-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .carnival-profile-selects {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -328,7 +335,7 @@
 }
 
 .carnival-profile-selects select,
-.carnival-profile-sentence textarea {
+.carnival-profile-sentence p {
   width: 100%;
   min-width: 0;
   border: 1px solid var(--cg-line);
@@ -342,17 +349,11 @@
   padding: 0 34px 0 12px;
 }
 
-.carnival-profile-sentence textarea {
-  min-height: 96px;
+.carnival-profile-sentence p {
+  min-height: 76px;
+  margin: 0;
   padding: 12px 13px;
-  resize: vertical;
   line-height: 1.55;
-}
-
-.carnival-profile-sentence small {
-  color: var(--cg-muted);
-  font-size: 10px;
-  text-align: right;
 }
 
 .carnival-game-privacy {

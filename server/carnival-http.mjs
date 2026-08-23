@@ -188,6 +188,38 @@ function roleMap(state) {
   ]);
 }
 
+const PROFILE_GROUP_FALLBACKS = Object.freeze([
+  '睡醒再决定安排', '约好一件事就够', '喜欢把一天排满',
+  '先看评价再选店', '想吃什么当场定', '会为一家店绕路',
+  '先列几个选项再定', '听完建议马上决定', '容易当场改变主意',
+]);
+
+function publicProfileChoiceGroups(mechanics, targetKey) {
+  const targetGroups = mechanics?.choiceGroupsByTarget?.[targetKey];
+  if (Array.isArray(targetGroups) && targetGroups.length === 3) {
+    const groups = targetGroups.map((group) => ({
+      id: group.id,
+      options: Array.isArray(group.options) ? group.options.slice(0, 3) : [],
+    }));
+    if (groups.every((group) => group.options.length === 3)) return groups;
+  }
+  if (Array.isArray(mechanics?.choiceGroups) && mechanics.choiceGroups.length === 3) {
+    const groups = mechanics.choiceGroups.map((group) => ({
+      id: group.id,
+      options: Array.isArray(group.options) ? group.options.slice(0, 3) : [],
+    }));
+    if (groups.every((group) => group.options.length === 3)) return groups;
+  }
+  const candidates = [...new Set([
+    ...(Array.isArray(mechanics?.keywordOptions) ? mechanics.keywordOptions : []),
+    ...PROFILE_GROUP_FALLBACKS,
+  ])];
+  return [0, 1, 2].map((index) => ({
+    id: `legacy-profile-group-${index + 1}`,
+    options: candidates.slice(index * 3, index * 3 + 3),
+  }));
+}
+
 function networkGameState(rawInvite, state, serverNowMs) {
   const roles = roleMap(state);
   const game = rawInvite.game;
@@ -206,6 +238,8 @@ function networkGameState(rawInvite, state, serverNowMs) {
     generatedBy: game.generatedBy,
   };
   if (rawInvite.templateId === 'profile-riddle') {
+    const targetKey = state.peer.id === rawInvite.creatorId ? 'a' : 'b';
+    const choiceGroups = publicProfileChoiceGroups(game.mechanics, targetKey);
     const answerFor = (personId) => {
       const value = rawInvite.reveal?.answers?.[personId];
       if (!value?.keywords) return undefined;
@@ -216,7 +250,7 @@ function networkGameState(rawInvite, state, serverNowMs) {
         author,
         target,
         keywords,
-        sentence: value.sentence || `我觉得 TA 是一个${keywords[0]}、${keywords[1]}，而且很${keywords[2]}的人。`,
+        sentence: value.sentence || `我觉得TA是一个${keywords[0]}、${keywords[1]}，而且${keywords[2]}的人。`,
       };
     };
     const revealedA = answerFor(state.self.id);
@@ -225,7 +259,8 @@ function networkGameState(rawInvite, state, serverNowMs) {
       ...base,
       phase: revealed ? 'revealed' : 'collecting',
       target: { participantId: 'b', nickname: state.peer.nickname },
-      keywordOptions: game.mechanics.keywordOptions,
+      choiceGroups,
+      keywordOptions: choiceGroups.flatMap((group) => group.options),
       submitted: {
         a: Boolean(rawInvite.progress?.selfSubmitted),
         b: Boolean(rawInvite.progress?.peerSubmitted),
@@ -1010,7 +1045,7 @@ export function createCarnivalHttpHandler({
             const payload = isRecord(body.payload) ? body.payload : {};
             let result;
             if (body.action === 'join') result = await service.joinInvite(token, body.inviteId);
-            else if (body.action === 'profile-riddle.submit') result = await service.gameAction(token, body.inviteId, { type: 'profile-submit', keywords: payload.keywords, sentence: payload.sentence });
+            else if (body.action === 'profile-riddle.submit') result = await service.gameAction(token, body.inviteId, { type: 'profile-submit', keywords: payload.keywords });
             else if (body.action === 'keyword-wheel.spin') result = await service.gameAction(token, body.inviteId, { type: 'wheel-spin' });
             else if (body.action === 'keyword-wheel.next-follow-up' || body.action.endsWith('.confirm-reveal')) result = await service.getInvite(token, body.inviteId);
             else if (body.action === 'rapid-choice.answer') result = await service.gameAction(token, body.inviteId, { type: 'rapid-answer', questionId: payload.questionId, answer: payload.answer });

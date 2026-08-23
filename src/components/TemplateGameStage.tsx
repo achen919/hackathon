@@ -6,14 +6,16 @@ import {
   useState,
   type CSSProperties,
 } from 'react';
-import type { GameTemplateId, ParticipantId } from '../types';
+import type { GameTemplateId, ParticipantId, ProfileRiddleChoiceGroup } from '../types';
 import '../template-games.css';
 
 export type TemplateGameType = Exclude<GameTemplateId, 'custom'>;
 
 export interface TemplateGamePlayer {
   nickname: string;
-  /** 可从个人资料、择偶偏好与公开聊天中提取，建议 6–12 个。 */
+  /** Three hidden-dimension groups; the UI deliberately shows only their order. */
+  profileChoiceGroups?: ProfileRiddleChoiceGroup[];
+  /** Legacy flat candidates for persisted games created before grouped choices. */
   profileKeywords: string[];
 }
 
@@ -70,7 +72,22 @@ export interface TemplateGameStageProps {
   onExit?: () => void;
 }
 
-const DEFAULT_PROFILE_KEYWORDS = ['真诚', '有趣', '细腻', '有行动力', '热爱生活', '善于倾听'];
+const DEFAULT_PROFILE_CHOICE_GROUPS: ProfileRiddleChoiceGroup[] = [
+  {
+    id: 'profile-weekend',
+    options: ['睡醒再决定安排', '约好一件事就够', '喜欢把一天排满'],
+  },
+  {
+    id: 'profile-food',
+    options: ['先看评价再选店', '想吃什么当场定', '会为一家店绕路'],
+  },
+  {
+    id: 'profile-decision',
+    options: ['先列几个选项再定', '听完建议马上决定', '容易当场改变主意'],
+  },
+];
+
+const DEFAULT_PROFILE_KEYWORDS = DEFAULT_PROFILE_CHOICE_GROUPS.flatMap((group) => group.options);
 
 const DEFAULT_DEEP_DIVE_TOPICS: DeepDiveTopic[] = [
   {
@@ -168,7 +185,21 @@ function normalizeTwoChoiceQuestions(questions?: TwoChoiceQuestion[]) {
 
 function buildGuessSentence(targetName: string, keywords: string[]) {
   const [first, second, third] = keywords;
-  return `我觉得 ${targetName} 是一个${first}、${second}，而且很${third}的人。`;
+  return `我觉得${targetName}是一个${first}、${second}，而且${third}的人。`;
+}
+
+function normalizeProfileChoiceGroups(player: TemplateGamePlayer): ProfileRiddleChoiceGroup[] {
+  const grouped = player.profileChoiceGroups?.slice(0, 3).map((group) => ({
+    id: group.id,
+    options: uniqueText(group.options, [], 3),
+  })).filter((group) => group.options.length === 3);
+  if (grouped?.length === 3) return grouped as ProfileRiddleChoiceGroup[];
+
+  const flat = uniqueText(player.profileKeywords, DEFAULT_PROFILE_KEYWORDS);
+  return DEFAULT_PROFILE_CHOICE_GROUPS.map((fallback, index) => ({
+    id: fallback.id,
+    options: flat.slice(index * 3, index * 3 + 3) as [string, string, string],
+  }));
 }
 
 function usePrefersReducedMotion() {
@@ -525,7 +556,7 @@ export function TemplateGameStage({
   }).join(', ')})`;
 
   const titleByTemplate: Record<TemplateGameType, string> = {
-    'profile-riddle': '用 3 个词，说说眼中的 TA',
+    'profile-riddle': '凭第一感觉，猜 TA 的 3 个小细节',
     'keyword-wheel': '转一下，把一个话题聊深一点',
     'rapid-choice': '5 秒凭直觉，看看你们怎么选',
   };
@@ -558,17 +589,15 @@ export function TemplateGameStage({
                 detail={`正在描述 ${players[OTHER_PLAYER[profileActivePlayer]].nickname}`}
               />
               <p className="template-game__lead">
-                根据你对 TA 的了解，从资料关键词中选 3 个。对方作答前不会看到。
+                每一框都是不同生活场景。没有标准答案，选你的第一感觉就好。
               </p>
               <div className="template-game__selects">
                 {[0, 1, 2].map((slot) => {
-                  const keywordOptions = uniqueText(
-                    players[OTHER_PLAYER[profileActivePlayer]].profileKeywords,
-                    DEFAULT_PROFILE_KEYWORDS,
-                  );
+                  const choiceGroup = normalizeProfileChoiceGroups(players[OTHER_PLAYER[profileActivePlayer]])[slot]
+                    ?? DEFAULT_PROFILE_CHOICE_GROUPS[slot];
                   return (
                     <label key={slot} className="template-game__field">
-                      <span>第 {slot + 1} 个关键词</span>
+                      <span>小猜测 {slot + 1}</span>
                       <select
                         value={profileSelections[slot]}
                         onChange={(event) => {
@@ -578,12 +607,8 @@ export function TemplateGameStage({
                         }}
                       >
                         <option value="">请选择</option>
-                        {keywordOptions.map((keyword) => (
-                          <option
-                            key={keyword}
-                            value={keyword}
-                            disabled={profileSelections.some((selection, index) => index !== slot && selection === keyword)}
-                          >
+                        {choiceGroup.options.map((keyword) => (
+                          <option key={keyword} value={keyword}>
                             {keyword}
                           </option>
                         ))}
@@ -597,7 +622,7 @@ export function TemplateGameStage({
                 <p>
                   {profileSelections.every(Boolean)
                     ? buildGuessSentence(players[OTHER_PLAYER[profileActivePlayer]].nickname, profileSelections)
-                    : '选满 3 个词后，这里会自动组成一句话。'}
+                    : '选满 3 个小猜测后，这里会自动组成一句话。'}
                 </p>
               </div>
               <button
@@ -624,7 +649,7 @@ export function TemplateGameStage({
               <span className="template-game__big-icon" aria-hidden="true">🤝</span>
               <p className="template-game__eyebrow">两份印象都已保密保存</p>
               <h3>把手机放在你们中间</h3>
-              <p>接下来会同时显示双方的三个关键词。确认两个人都准备好，再一起揭晓。</p>
+              <p>接下来会同时显示双方的三个小猜测。确认两个人都准备好，再一起揭晓。</p>
               <button className="template-game__primary" type="button" onClick={revealProfileGuesses}>
                 我们准备好了，一起揭晓
               </button>
@@ -653,7 +678,7 @@ export function TemplateGameStage({
                 })}
               </div>
               <p className="template-game__discussion">
-                可以聊聊：哪个词最让你意外？又是哪个瞬间，让 TA 对你有了这个印象？
+                想回哪句都可以：“这个挺准”“你猜反了”“我其实只有出去玩时会这样”。
               </p>
               <button className="template-game__primary" type="button" onClick={restartProfileGuess}>
                 换一组词再玩

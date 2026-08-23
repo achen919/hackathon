@@ -13,6 +13,7 @@ function liangpeiMatchProxy(env) {
       stateDir: env.STATE_DIR || 'data',
       encryptionKey: env.CONFIG_ENCRYPTION_KEY,
       allowedOrigins: env.AI_ALLOWED_ORIGINS,
+      imageAllowedOrigins: env.IMAGE_AI_ALLOWED_ORIGINS,
     }),
   });
 
