@@ -87,7 +87,6 @@ export function GamePromptStudio({
       >
         <header className="prompt-studio__header">
           <div>
-            <p className="eyebrow">GAME BRIEF · 可编辑</p>
             <h2 id="prompt-studio-title">先决定这一局怎么玩</h2>
           </div>
           <button className="icon-button" type="button" onClick={onClose} aria-label="关闭游戏设置">×</button>
@@ -124,7 +123,7 @@ export function GamePromptStudio({
             placeholder={status === 'loading' ? '正在从公开聊天线索生成 Prompt…' : '写下你希望这一局更关注什么'}
             onChange={(event) => onPromptChange(event.target.value)}
           />
-          <small>{prompt.length}/1500 · 完整资料不会直接出现在编辑框中</small>
+          <small>{prompt.length}/1500</small>
         </label>
 
         {error && <p className="prompt-studio__error" role="alert">{error}</p>}

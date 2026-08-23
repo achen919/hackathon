@@ -76,12 +76,7 @@ const DEFAULT_GAME_TYPES: CarnivalGameType[] = [
   },
 ];
 
-const PROMPT_GAME_STAGES = [
-  ['理解你们', '整理公开聊天与这次 Prompt'],
-  ['选择玩法', '匹配最适合的互动引擎'],
-  ['搭建场景', '生成视觉、题面与动效'],
-  ['试玩检查', '锁定可邀请的同一版本'],
-] as const;
+const PROMPT_GAME_STAGES = ['理解你们', '选择玩法', '搭建场景', '试玩检查'] as const;
 
 const PROMPT_GAME_ESTIMATE_SECONDS = 3;
 
@@ -704,18 +699,6 @@ export default function CarnivalPage({
   }, [partner, room, self]);
 
   useEffect(() => {
-    if (!room) return;
-    const previous = previousGateRef.current;
-    if (!previous || previous.roomId !== room.roomId) {
-      previousGateRef.current = { roomId: room.roomId, unlocked: gameUnlocked };
-      setUnlockAnnounced(gameUnlocked);
-      return;
-    }
-    if (!previous.unlocked && gameUnlocked) setUnlockAnnounced(true);
-    previousGateRef.current = { roomId: room.roomId, unlocked: gameUnlocked };
-  }, [gameUnlocked, room]);
-
-  useEffect(() => {
     const timelineElement = timelineRef.current;
     if (timelineElement && nearBottomRef.current) {
       timelineElement.scrollTop = timelineElement.scrollHeight;
@@ -865,7 +848,7 @@ export default function CarnivalPage({
       setPrompt(localPrompt(option, room?.messages ?? [], seriesId));
       setPromptMaxLength(1_500);
       setPromptStatus('editing');
-      setPromptError(`${carnivalErrorMessage(error)} 已放入本地安全简报，可重试或直接修改。`);
+      setPromptError(`${carnivalErrorMessage(error)} 已准备本地版本，可重试或直接修改。`);
     } finally {
       releaseController(controller);
       if (promptControllerRef.current === controller) promptControllerRef.current = null;
@@ -1205,7 +1188,7 @@ export default function CarnivalPage({
         <div className="carnival-lantern carnival-lantern--one" aria-hidden="true" />
         <div className="carnival-lantern carnival-lantern--two" aria-hidden="true" />
         <section className="carnival-register-card">
-          <div className="carnival-brand"><span aria-hidden="true">游</span><div><p>良配 · 黑客松现场</p><strong>心动游园会</strong></div></div>
+          <div className="carnival-brand"><span aria-hidden="true">游</span><div><strong>心动游园会</strong></div></div>
           <div className="carnival-register-card__intro">
             <p className="carnival-eyebrow">先遇见，再慢慢聊</p>
             <h1>领一张今晚的入园票</h1>
@@ -1255,7 +1238,6 @@ export default function CarnivalPage({
               {joining ? '正在领取入园票…' : '进入游园会'} <span aria-hidden="true">→</span>
             </button>
           </form>
-          <p className="carnival-register-card__foot">刷新后会自动恢复本次身份；退出游园会后令牌立即清除。</p>
         </section>
       </main>
     );
@@ -1272,7 +1254,6 @@ export default function CarnivalPage({
           </div>
           <p className="carnival-eyebrow">匹配摊位 · 寻找中</p>
           <h1>{carnivalState.self.nickname}，正在为你找一位异性伙伴</h1>
-          <p>匹配成功后会自动进入聊天。页面约每秒同步一次，刷新也不会退出队列。</p>
           <div className="carnival-waiting-note" role="status" aria-live="polite"><span aria-hidden="true">◌</span> 等待对方也走进游园会…</div>
           {syncError && <p className="carnival-error" role="alert">{syncError} <button type="button" onClick={() => void retrySync()} disabled={manualSyncing}>{manualSyncing ? '正在重试' : '立即重试'}</button></p>}
           {leaveError && <p className="carnival-error" role="alert">{leaveError}</p>}
@@ -1295,7 +1276,7 @@ export default function CarnivalPage({
         <header className="carnival-chat-header">
           <div className="carnival-chat-person">
             <CarnivalAvatar participant={partner} />
-            <div><span>今晚的游园伙伴</span><strong>{partner.nickname}</strong><small><i /> 已匹配 · 消息约每秒同步</small></div>
+            <div><span>今晚的游园伙伴</span><strong>{partner.nickname}</strong><small><i /> 已匹配</small></div>
           </div>
           <div className="carnival-chat-header__actions">
             <button type="button" onClick={() => void retrySync()} disabled={manualSyncing} aria-label={manualSyncing ? '正在同步聊天' : '立即同步聊天'}>↻</button>
@@ -1414,13 +1395,6 @@ export default function CarnivalPage({
             );
           })}
 
-          {unlockAnnounced && gameUnlocked && (
-            <div className="carnival-unlock-message" role="status">
-              <span aria-hidden="true">🎡</span><div><strong>游戏摊位亮灯了</strong><p>你们都可以发邀请，而且时间线能同时保留多张。</p></div>
-              <button type="button" onClick={openStudio} disabled={inviteSending || !hasAvailableGame}>去挑游戏</button>
-            </div>
-          )}
-
           {(inviteSending || inviteError) && pendingInvite && (
             <div className={`carnival-pending-invite ${inviteError ? 'is-error' : ''}`} role={inviteError ? 'alert' : 'status'}>
               <span aria-hidden="true">{inviteError ? '!' : '✦'}</span>
@@ -1438,7 +1412,6 @@ export default function CarnivalPage({
           )}
 
           {openInviteError && <p className="carnival-error carnival-error--timeline" role="alert">{openInviteError}</p>}
-          <p className="carnival-invite-rule"><span aria-hidden="true">☝</span>点谁的邀请，就玩谁发起的那一局</p>
         </section>
 
         <footer className="carnival-composer">
@@ -1464,7 +1437,6 @@ export default function CarnivalPage({
       </section>
 
       <ModalShell open={studioOpen} title="挑一局，发给 TA" onClose={closeStudio} className="carnival-game-studio">
-        <div className="carnival-game-studio__rule"><span aria-hidden="true">↗</span><p><strong>邀请会进入双方共同时间线</strong>每一张都有独立 inviteId，不会覆盖之前的游戏。</p></div>
         <div className="carnival-game-types" role="group" aria-label="选择游戏类型">
           {gameTypes.map((option) => (
             <button
@@ -1489,12 +1461,7 @@ export default function CarnivalPage({
                 <span>专属小游戏 · 从聊天里现做</span>
                 <h3 id="carnival-exclusive-picker-title">这段对话，适合玩哪一局？</h3>
               </div>
-              <p>
-                已读取 <strong>{room.messages.length}</strong> 条公开聊天
-                {exclusiveTopics.length > 0 ? ` · 发现 ${exclusiveTopics.join('、')}` : ' · 从安全日常题开始'}
-              </p>
             </div>
-            <p className="carnival-exclusive-picker__reason">推荐理由：{exclusiveRecommendation.reason}</p>
             <div className="carnival-exclusive-series" role="radiogroup" aria-label="选择专属小游戏系列">
               {exclusiveSeriesOptions.map((series) => (
                 <button
@@ -1517,7 +1484,6 @@ export default function CarnivalPage({
                 </button>
               ))}
             </div>
-            <p className="carnival-exclusive-picker__safety"><span aria-hidden="true">☂</span>只围绕双方公开聊过的内容组局；不做匹配度考试，不生成敏感推断。</p>
           </section>
         )}
 
@@ -1538,7 +1504,7 @@ export default function CarnivalPage({
           />
           <small>{prompt.length}/{promptMaxLength}</small>
         </label>
-        {promptStatus === 'loading' && <p className="carnival-studio-status" role="status">正在准备安全、低压力的玩法简报…</p>}
+        {promptStatus === 'loading' && <p className="carnival-studio-status" role="status">正在准备游戏内容…</p>}
         {promptError && (
           <div className="carnival-studio-error" role="alert">
             <span>{promptError}</span>
@@ -1548,13 +1514,13 @@ export default function CarnivalPage({
           </div>
         )}
         {selectedGameType?.templateId === 'custom' && gamePreviewStatus === 'generating' && (
-          <section className="carnival-prompt-game-building" role="status" aria-live="polite" aria-label={`正在${PROMPT_GAME_STAGES[gamePreviewStage]?.[0] ?? '生成游戏'}`}>
-            <header><span aria-hidden="true">✦</span><div><strong>正在把 Prompt 变成可玩的游戏</strong><small>不只是生成题目，还会现做玩法、场景和动效</small></div><b className="carnival-prompt-game-building__countdown">{gamePreviewCountdown > 0 ? `预计 ${gamePreviewCountdown} 秒` : '马上就好'}</b></header>
+          <section className="carnival-prompt-game-building" role="status" aria-live="polite" aria-label={`正在${PROMPT_GAME_STAGES[gamePreviewStage] ?? '生成游戏'}`}>
+            <header><span aria-hidden="true">✦</span><div><strong>正在把 Prompt 变成可玩的游戏</strong></div><b className="carnival-prompt-game-building__countdown">{gamePreviewCountdown > 0 ? `预计 ${gamePreviewCountdown} 秒` : '马上就好'}</b></header>
             <ol>
-              {PROMPT_GAME_STAGES.map(([title, detail], index) => (
+              {PROMPT_GAME_STAGES.map((title, index) => (
                 <li key={title} className={index < gamePreviewStage ? 'is-complete' : index === gamePreviewStage ? 'is-current' : ''}>
                   <i aria-hidden="true">{index < gamePreviewStage ? '✓' : index + 1}</i>
-                  <span><strong>{title}</strong><small>{detail}</small></span>
+                  <span><strong>{title}</strong></span>
                 </li>
               ))}
             </ol>
@@ -1594,7 +1560,7 @@ export default function CarnivalPage({
               ? hasCurrentGamePreview
                 ? '用这个版本发邀请'
                 : gamePreviewStatus === 'generating'
-                  ? `正在${PROMPT_GAME_STAGES[gamePreviewStage]?.[0] ?? '生成'}`
+                  ? `正在${PROMPT_GAME_STAGES[gamePreviewStage] ?? '生成'}`
                   : gamePreviewExpired
                     ? '重新生成可玩预览'
                     : '生成可玩预览'

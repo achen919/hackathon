@@ -453,8 +453,6 @@
 .carnival-pending-invite__actions { display: flex; gap: 6px; }
 .carnival-pending-invite__actions button:last-child { background: #fff; color: var(--carnival-muted); }
 .carnival-error--timeline { margin: 12px 0; }
-.carnival-invite-rule { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 24px 0 4px; color: var(--carnival-violet-deep); font-size: 10px; font-weight: 850; text-align: center; }
-
 .carnival-composer {
   position: relative;
   z-index: 5;
@@ -515,11 +513,6 @@
 .carnival-modal__header > button { display: grid; width: 44px; height: 44px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 14px; background: #f2efec; color: var(--carnival-muted); font-size: 21px; cursor: pointer; }
 
 .carnival-game-studio { padding-bottom: calc(18px + env(safe-area-inset-bottom)); }
-.carnival-game-studio__rule { display: flex; align-items: center; gap: 10px; margin: 16px 18px 0; padding: 11px 12px; border-radius: 14px; background: linear-gradient(135deg, #f3f0ff, #fff2ed); }
-.carnival-game-studio__rule > span { color: var(--carnival-violet-deep); font-size: 18px; }
-.carnival-game-studio__rule p { display: grid; gap: 2px; margin: 0; color: var(--carnival-muted); font-size: 9px; line-height: 1.45; }
-.carnival-game-studio__rule strong { color: var(--carnival-ink); font-size: 10px; }
-
 .carnival-game-types { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; padding: 16px 18px 0; }
 .carnival-game-types button { display: grid; min-width: 0; min-height: 100px; align-content: center; justify-items: start; gap: 4px; padding: 13px; border: 1px solid var(--carnival-line); border-radius: 17px; background: #fff; color: var(--carnival-ink); text-align: left; cursor: pointer; }
 .carnival-game-types button.is-selected { border-color: rgba(102, 87, 216, 0.55); background: #f5f3ff; box-shadow: inset 0 0 0 1px rgba(102, 87, 216, 0.08); }
@@ -542,7 +535,6 @@
 .carnival-exclusive-picker__intro h3 { margin: 0; font-size: 17px; letter-spacing: -0.035em; }
 .carnival-exclusive-picker__intro p { max-width: 230px; margin: 0; color: var(--carnival-muted); font-size: 8px; line-height: 1.5; text-align: right; }
 .carnival-exclusive-picker__intro p strong { color: var(--carnival-violet-deep); font-size: 11px; }
-.carnival-exclusive-picker__reason { margin: -3px 0 0; color: #655f69; font-size: 10px; line-height: 1.55; }
 .carnival-exclusive-series { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .carnival-exclusive-series > button {
   --exclusive-accent: #6657d8;
@@ -577,8 +569,6 @@
 .carnival-exclusive-series__foot { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-top: auto; }
 .carnival-exclusive-series__foot i { color: var(--carnival-muted); font-size: 7px; font-style: normal; }
 .carnival-exclusive-series__foot b { color: var(--exclusive-accent); font-size: 8px; }
-.carnival-exclusive-picker__safety { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: #687a74; font-size: 8px; line-height: 1.5; }
-
 .carnival-prompt-field { display: grid; gap: 8px; padding: 17px 18px 0; }
 .carnival-prompt-field > span { font-size: 11px; font-weight: 850; }
 .carnival-prompt-field em { color: var(--carnival-muted); font-size: 9px; font-style: normal; font-weight: 500; }

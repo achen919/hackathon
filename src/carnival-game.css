@@ -76,7 +76,6 @@
   line-height: 1.22;
 }
 
-.carnival-game-kicker,
 .carnival-game-eyebrow {
   margin: 0 0 6px;
   color: var(--cg-violet-dark);
@@ -743,8 +742,7 @@
 .carnival-exclusive-game.scene-cinema .carnival-exclusive-round { background: linear-gradient(180deg, #fff, #eef8f5); }
 .carnival-exclusive-game.scene-lab .carnival-exclusive-round { background: linear-gradient(180deg, #fff, #fff9e9); }
 .carnival-exclusive-game.scene-cosmos .carnival-exclusive-round { background: linear-gradient(180deg, #fff, #f1efff); }
-.carnival-exclusive-game .carnival-game-kicker,
-.carnival-exclusive-game .carnival-game-eyebrow { color: var(--exclusive-accent); }
+.carnival-exclusive-game .carnival-exclusive-game .carnival-game-eyebrow { color: var(--exclusive-accent); }
 .carnival-exclusive-game .carnival-game-primary { background: linear-gradient(135deg, var(--exclusive-accent), color-mix(in srgb, var(--exclusive-accent) 78%, #26222c)); }
 
 .carnival-exclusive-progress { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
