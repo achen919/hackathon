@@ -178,6 +178,8 @@ export function GeneratedGameSandbox({
   const sequenceRef = useRef(0);
   const rateRef = useRef({ startedAt: performance.now(), count: 0 });
   const blockedRef = useRef(false);
+  const frameLoadCountRef = useRef(0);
+  const bootstrapAcceptedRef = useRef(false);
   const timeoutRef = useRef<number | null>(null);
   const preflightRef = useRef<AbortController | null>(null);
   const runtimeUrl = useMemo(() => safeRuntimeUrl(artifact.runtimePath), [artifact.runtimePath]);
@@ -235,6 +237,8 @@ export function GeneratedGameSandbox({
     setStatus('verifying');
     setVerifiedRuntimeUrl(null);
     setErrorMessage(null);
+    frameLoadCountRef.current = 0;
+    bootstrapAcceptedRef.current = false;
     const boundedTimeout = Math.max(3_000, Math.min(20_000, timeoutMs));
     const verificationTimer = window.setTimeout(() => {
       if (disposed) return;
@@ -301,6 +305,11 @@ export function GeneratedGameSandbox({
 
       // Bootstrap contains no data and is accepted only from this exact iframe.
       if (data.pairplay === PAIRPLAY_VERSION && data.type === 'game.bootstrap-ready' && hasOnlyKeys(data, ['pairplay', 'type'])) {
+        if (bootstrapAcceptedRef.current) {
+          reportError('游戏运行页发生了异常重载，已停止同步状态。');
+          return;
+        }
+        bootstrapAcceptedRef.current = true;
         sendInit();
         return;
       }
@@ -359,6 +368,8 @@ export function GeneratedGameSandbox({
     sequenceRef.current = 0;
     rateRef.current = { startedAt: performance.now(), count: 0 };
     blockedRef.current = false;
+    frameLoadCountRef.current = 0;
+    bootstrapAcceptedRef.current = false;
     setErrorMessage(null);
     setVerifiedRuntimeUrl(null);
     setStatus('verifying');
@@ -378,6 +389,20 @@ export function GeneratedGameSandbox({
     setErrorMessage(null);
   };
 
+  const handleFrameLoad = () => {
+    frameLoadCountRef.current += 1;
+    if (frameLoadCountRef.current > 1) {
+      reportError('游戏运行页尝试离开已校验版本，已立即停止。');
+      return;
+    }
+    // Some browsers can finish the frame load before the bootstrap message is
+    // observed. Initialize once, but never send state after a second load.
+    if (!bootstrapAcceptedRef.current) {
+      bootstrapAcceptedRef.current = true;
+      sendInit();
+    }
+  };
+
   return (
     <section className={`generated-game-sandbox ${className}`.trim()} aria-label={title} data-code-hash={artifact.codeHash}>
       <header>
@@ -395,7 +420,7 @@ export function GeneratedGameSandbox({
             allow=""
             referrerPolicy="no-referrer"
             loading="eager"
-            onLoad={sendInit}
+            onLoad={handleFrameLoad}
           />
         ) : (
           <div className="generated-game-sandbox__empty">{fallback ?? <p>这个生成版本暂时无法运行，请重新生成。</p>}</div>

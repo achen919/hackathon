@@ -118,14 +118,22 @@ export function CarnivalArcadeGameDialog({
   const seqRef = useRef(state.self.seq);
   const readySentRef = useRef(false);
   const chainRef = useRef<Promise<unknown>>(Promise.resolve());
-  const lastContinuousAtRef = useRef(0);
-  const continuousTimerRef = useRef<number | null>(null);
-  const queuedContinuousRef = useRef<PairPlayInput | null>(null);
+  const lastContinuousAtRef = useRef(new Map<string, number>());
+  const continuousTimersRef = useRef(new Map<string, number>());
+  const queuedContinuousRef = useRef(new Map<string, PairPlayInput>());
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef(context.close);
   closeRef.current = context.close;
   const roleDefinition = useMemo(() => state.arcade.roles.find((role) => role.id === state.self.role), [state.arcade.roles, state.self.role]);
   const peerRole = useMemo(() => state.arcade.roles.find((role) => role.id === state.peer.role), [state.arcade.roles, state.peer.role]);
+  const rendererState = useMemo(() => ({
+    phase: state.phase,
+    serverNowMs: state.serverNowMs,
+    frame: state.frame,
+    countdownEndsAtMs: state.countdownEndsAtMs,
+    deadlineAtMs: state.deadlineAtMs,
+    outcome: state.outcome,
+  }), [state.countdownEndsAtMs, state.deadlineAtMs, state.frame, state.outcome, state.phase, state.serverNowMs]);
 
   useEffect(() => {
     seqRef.current = Math.max(seqRef.current, state.self.seq);
@@ -133,7 +141,9 @@ export function CarnivalArcadeGameDialog({
   }, [state.self.ready, state.self.seq]);
 
   useEffect(() => () => {
-    if (continuousTimerRef.current !== null) window.clearTimeout(continuousTimerRef.current);
+    continuousTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    continuousTimersRef.current.clear();
+    queuedContinuousRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -197,23 +207,41 @@ export function CarnivalArcadeGameDialog({
     return result;
   };
 
+  const flushContinuous = (control: string) => {
+    const timer = continuousTimersRef.current.get(control);
+    if (timer !== undefined) window.clearTimeout(timer);
+    continuousTimersRef.current.delete(control);
+    const latest = queuedContinuousRef.current.get(control);
+    queuedContinuousRef.current.delete(control);
+    if (!latest) return undefined;
+    lastContinuousAtRef.current.set(control, performance.now());
+    return enqueueAction('arcade.input', {
+      control: latest.control,
+      ...(latest.value !== undefined ? { value: latest.value } : {}),
+    });
+  };
+
   const sendInput = (input: PairPlayInput) => {
     setSyncError(null);
     if (!CONTINUOUS_CONTROLS.has(input.control)) {
+      // A shot/commit must be sequenced after the latest aim, power or selected
+      // cell even when those continuous controls were waiting in the 90ms gate.
+      for (const control of [...queuedContinuousRef.current.keys()]) {
+        void flushContinuous(control)?.catch(() => undefined);
+      }
       return enqueueAction('arcade.input', { control: input.control, ...(input.value !== undefined ? { value: input.value } : {}) });
     }
-    queuedContinuousRef.current = input;
-    const elapsed = performance.now() - lastContinuousAtRef.current;
-    const flush = () => {
-      continuousTimerRef.current = null;
-      const latest = queuedContinuousRef.current;
-      queuedContinuousRef.current = null;
-      if (!latest) return;
-      lastContinuousAtRef.current = performance.now();
-      void enqueueAction('arcade.input', { control: latest.control, ...(latest.value !== undefined ? { value: latest.value } : {}) });
-    };
-    if (elapsed >= 90 && continuousTimerRef.current === null) flush();
-    else if (continuousTimerRef.current === null) continuousTimerRef.current = window.setTimeout(flush, Math.max(0, 90 - elapsed));
+    queuedContinuousRef.current.set(input.control, input);
+    const elapsed = performance.now() - (lastContinuousAtRef.current.get(input.control) ?? 0);
+    if (elapsed >= 90 && !continuousTimersRef.current.has(input.control)) {
+      return flushContinuous(input.control);
+    }
+    if (!continuousTimersRef.current.has(input.control)) {
+      const timer = window.setTimeout(() => {
+        void flushContinuous(input.control)?.catch(() => undefined);
+      }, Math.max(0, 90 - elapsed));
+      continuousTimersRef.current.set(input.control, timer);
+    }
     return undefined;
   };
 
@@ -251,7 +279,7 @@ export function CarnivalArcadeGameDialog({
           playMode="network"
           mode={state.arcade.preset}
           seed={Number.parseInt(state.artifact.codeHash.slice(0, 8), 16)}
-          state={state}
+          state={rendererState}
           remoteEvents={state.events}
           allowedControls={state.self.controls}
           paused={finished}
