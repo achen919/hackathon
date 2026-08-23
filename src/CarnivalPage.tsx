@@ -1009,7 +1009,15 @@ export default function CarnivalPage({
     void fetch('/api/games/result-card', {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ game, result: completion.result, players: completion.players }),
+      body: JSON.stringify({
+        game,
+        result: completion.result,
+        players: completion.players,
+        conversation: (room?.messages ?? []).slice(-20).map((message) => ({
+          speaker: room?.participants.findIndex((participant) => participant.participantId === message.senderId) === 1 ? 'b' : 'a',
+          content: message.content.slice(0, 500),
+        })),
+      }),
     }).then(async (response) => {
       const payload = (await response.json().catch(() => ({}))) as { card?: GameResultCard };
       if (!response.ok || !payload.card) throw new Error('Result card request failed');

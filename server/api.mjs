@@ -635,11 +635,15 @@ export function createApiHandler({
     }
     const game = body?.game;
     const players = body?.players;
+    const conversation = body?.conversation;
     if (!isRecord(body) || !isRecord(game) || !isRecord(players) || !isRecord(body.result) ||
       typeof game.id !== 'string' || game.id.length > 200 || typeof game.matchId !== 'string' || game.matchId.length > 200 ||
       typeof game.templateId !== 'string' || !['profile-riddle', 'keyword-wheel', 'rapid-choice', 'custom'].includes(game.templateId) || typeof game.gameType !== 'string' || game.gameType.length > 200 ||
       typeof game.title !== 'string' || game.title.length > 200 || typeof game.description !== 'string' || game.description.length > 2_000 ||
-      typeof players.a?.nickname !== 'string' || typeof players.b?.nickname !== 'string') {
+      typeof players.a?.nickname !== 'string' || typeof players.b?.nickname !== 'string' ||
+      (conversation !== undefined && (!Array.isArray(conversation) || conversation.length > 24 || conversation.some((item) =>
+        !isRecord(item) || !['a', 'b'].includes(item.speaker) || typeof item.content !== 'string' || item.content.length > 500
+      )))) {
       sendJson(response, 400, { error: 'Invalid game result request', request_id: requestId }, requestId);
       return;
     }
@@ -659,6 +663,9 @@ export function createApiHandler({
           a: { nickname: players.a.nickname.slice(0, 100) },
           b: { nickname: players.b.nickname.slice(0, 100) },
         },
+        conversation: Array.isArray(conversation)
+          ? conversation.map((item) => ({ speaker: item.speaker, content: item.content }))
+          : [],
       });
       sendJson(response, 200, { card }, requestId);
     } catch (error) {

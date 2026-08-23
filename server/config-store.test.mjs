@@ -32,6 +32,7 @@ test('AI config encrypts both provider keys at rest and never exposes them publi
       imageApiKey,
       imageProtocol: 'ark:image-generations',
       imageModel: 'seedream-5.0-pro',
+      resultCardImagePrompt: '使用暖色纸雕风格，根据最近公开对话和本局结果生成无文字背景。',
       systemPrompt: '请设计一局安全、轻松、尊重双方边界的三轮破冰游戏。'.repeat(4),
       gameTypes: [
         gameType('profile-riddle', '资料猜谜局'),
@@ -47,6 +48,7 @@ test('AI config encrypts both provider keys at rest and never exposes them publi
     const reloaded = await createConfigStore({ stateDir, encryptionKey }).get();
     assert.equal(reloaded.apiKey, apiKey);
     assert.equal(reloaded.imageApiKey, imageApiKey);
+    assert.match(reloaded.resultCardImagePrompt, /暖色纸雕/);
     assert.equal(publicConfig(reloaded).apiKeyConfigured, true);
     assert.equal(publicConfig(reloaded).imageApiKeyConfigured, true);
     assert.equal(JSON.stringify(publicConfig(reloaded)).includes(apiKey), false);
@@ -125,6 +127,19 @@ test('image provider origin and request route are validated separately', async (
   } finally {
     await rm(stateDir, { recursive: true });
   }
+});
+
+test('result-card image prompt is public configuration with bounded validation', async () => {
+  const store = createMemoryConfigStore();
+  const current = await store.get();
+  const prompt = '用抽象纸雕画面呈现双方公开聊天主题和这局游戏结果，不生成文字。';
+  const updated = await store.update({ ...current, resultCardImagePrompt: prompt });
+  assert.equal(updated.resultCardImagePrompt, prompt);
+  assert.equal(publicConfig(updated).resultCardImagePrompt, prompt);
+  await assert.rejects(
+    () => store.update({ ...updated, resultCardImagePrompt: '太短' }),
+    /resultCardImagePrompt must be between 20 and 6000 characters/,
+  );
 });
 
 test('renaming a rolling keyword preserves its stable template id and generation prompt', async () => {

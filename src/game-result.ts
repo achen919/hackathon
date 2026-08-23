@@ -5,6 +5,7 @@ export interface ResultCardRequest {
   game: Pick<GameDefinition, 'id' | 'matchId' | 'templateId' | 'gameType' | 'title' | 'description'>;
   result: unknown;
   players: Record<ParticipantId, Pick<MatchUser, 'nickname'>>;
+  conversation?: Array<{ speaker: ParticipantId; content: string }>;
 }
 
 function clean(value: unknown, fallback: string) {
