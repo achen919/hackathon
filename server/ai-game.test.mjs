@@ -304,12 +304,20 @@ test('prompt arcade AI returns a hashed isolated code artifact and uses the larg
     seriesId: 'prompt-arcade',
     prompt: '生成一局真正能操作的篮球游戏，一人投篮，另一人移动篮筐。',
   });
-  assert.equal(requestBody.max_tokens, 6_000);
+  assert.equal(requestBody.max_tokens, 4_500);
+  assert.equal(requestBody.reasoning_effort, undefined);
+  assert.equal(requestBody.temperature, 0.75);
   assert.equal(requestBody.response_format.json_schema.schema.properties.document.maxLength, 50_000);
   assert.match(JSON.stringify(requestBody.messages), /PairPlay v1/);
   assert.match(JSON.stringify(requestBody.messages), /game\.bootstrap-ready/);
   assert.match(JSON.stringify(requestBody.messages), /playMode.*preview/);
   assert.match(JSON.stringify(requestBody.messages), /playMode.*network/);
+  assert.match(JSON.stringify(requestBody.messages), /顶层键必须恰好是.*title.*document/);
+  assert.match(JSON.stringify(requestBody.messages), /不要输出 schemaVersion、type、players、roles、controls/);
+  assert.match(JSON.stringify(requestBody.messages), /tuning 必须恰好包含 durationSeconds、speedPercent、targetScore、maxRounds/);
+  assert.match(JSON.stringify(requestBody.messages), /durationSeconds 范围 20-90/);
+  assert.match(JSON.stringify(requestBody.messages), /known_good_pairplay_document/);
+  assert.match(JSON.stringify(requestBody.messages), /<!doctype html>/);
   assert.match(requestBody.messages.at(-2).content, /PairPlay v1/);
   assert.doesNotMatch(JSON.stringify(requestBody.messages), /固定三轮/);
   assert.equal(isArcadeGamePayload(validArcadePayload), true);
@@ -321,6 +329,62 @@ test('prompt arcade AI returns a hashed isolated code artifact and uses the larg
   assert.match(game.artifact.codeHash, /^[a-f0-9]{64}$/);
   assert.equal(game.artifact.document, FALLBACK_ARCADE_DOCUMENT);
   assert.equal(game.generatedBy, 'ai');
+});
+
+test('prompt arcade accepts a safe generated document from schema-loose providers and rebuilds authority server-side', async () => {
+  let requestBody;
+  const legacyProviderPayload = {
+    schemaVersion: 4,
+    type: 'arcade-game',
+    preset: 'provider-invented-preset',
+    rounds: [{ prompt: 'provider-owned rules must be ignored' }],
+    document: FALLBACK_ARCADE_DOCUMENT,
+  };
+  const fetchImpl = async (_url, init) => {
+    requestBody = JSON.parse(init.body);
+    return new Response(JSON.stringify({
+      choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(legacyProviderPayload) } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const glmConfig = {
+    ...config,
+    model: 'glm-5.3',
+    systemPrompt: '这是存量配置：游戏固定三轮，并使用文字选择卡。',
+    gameTypes: [{
+      ...gameType('custom', '专属小游戏'),
+      generationPrompt: templateGuidance('custom'),
+    }],
+  };
+  const game = await createAiGameService({ fetchImpl }).generate(glmConfig, match, {
+    templateId: 'custom',
+    seriesId: 'prompt-arcade',
+    prompt: '生成一局双人策略九宫格小游戏。',
+  });
+  const serializedMessages = JSON.stringify(requestBody.messages);
+  assert.equal(requestBody.max_tokens, 4_500);
+  assert.equal(requestBody.reasoning_effort, 'low');
+  assert.equal(requestBody.do_sample, false);
+  assert.equal(requestBody.temperature, undefined);
+  assert.doesNotMatch(serializedMessages, /这是存量配置：游戏固定三轮/);
+  assert.equal(game.generatedBy, 'ai');
+  assert.equal(game.arcade.preset, 'grid-command');
+  assert.equal(game.arcade.kind, 'strategy');
+  assert.equal(game.artifact.document, FALLBACK_ARCADE_DOCUMENT);
+
+  const unsafeFetch = async () => new Response(JSON.stringify({
+    choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+      ...legacyProviderPayload,
+      document: FALLBACK_ARCADE_DOCUMENT.replace("'use strict';", "'use strict';setTimeout(()=>{},1);"),
+    }) } }],
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  await assert.rejects(
+    () => createAiGameService({ fetchImpl: unsafeFetch }).generate(glmConfig, match, {
+      templateId: 'custom',
+      seriesId: 'prompt-arcade',
+      prompt: '生成一局双人策略九宫格小游戏。',
+    }),
+    /required schema/,
+  );
 });
 
 test('falls back to JSON mode only when structured output is explicitly unsupported', async () => {

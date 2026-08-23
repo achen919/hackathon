@@ -2,8 +2,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   ARCADE_GAME_OUTPUT_SCHEMA,
   ARCADE_GAME_SERIES_ID,
+  FALLBACK_ARCADE_DOCUMENT,
+  buildArcadeFallbackGame,
   buildArcadeGameDefinition,
   isArcadeGamePayload,
+  isSafeArcadeDocument,
 } from './arcade-game.mjs';
 import {
   buildPromptPreview,
@@ -31,6 +34,9 @@ const HARD_SAFETY_PROMPT = `你正在为真实的双人社交场景生成破冰�
 - 题目必须双方都能舒适地跳过，答案没有优劣；只输出指定 JSON。`;
 
 const PAIRPLAY_RUNTIME_PROMPT = `prompt-arcade 的 document 是会在无 allow-same-origin 的 sandbox iframe 中运行的完整 HTML：
+- 即使上游不支持 response_format，你也必须只返回一个 JSON 对象，且顶层键必须恰好是：title、eyebrow、description、whyItFits、estimatedMinutes、topics、kind、preset、theme、difficulty、tuning、document。不要输出 schemaVersion、type、players、roles、controls 或其他键。
+- kind 只能是 competition / cooperation / sport / adventure / strategy；preset 只能是 dash-duel / tandem-rescue / basketball-duel / relic-expedition / grid-command，并保持一一对应。theme 只能是 sunset / neon / forest / ocean / cosmos；difficulty 只能是 easy / normal / hard。
+- tuning 必须恰好包含 durationSeconds、speedPercent、targetScore、maxRounds 四个整数；durationSeconds 范围 20-90，speedPercent 范围 70-140，targetScore 范围 1-20，maxRounds 范围 1-30；estimatedMinutes 必须是 1-3 的整数；topics 必须是 2-4 个短字符串。
 - 必须自包含 HTML/CSS/JavaScript，大小 1000-50000 字符；不得引用任何外部依赖、URL、图片、字体、媒体、iframe、表单、存储或网络 API。
 - 只能有一个无属性的 <script>，第一条语句必须是 'use strict';。动画只使用 requestAnimationFrame；禁止 async/await、Promise、微任务、定时器、动态代码、反射、计算访问全局对象和动态创建资源标签。
 - 只能通过 PairPlay v1 bridge 与父页交互。脚本启动后先发送无 channel 的 {pairplay:1,type:'game.bootstrap-ready'}；收到父页 {pairplay:1,type:'host.init',channel,role,mode,playMode,seed,codeHash,state,events} 后，再发送 {pairplay:1,type:'game.ready',channel}。
@@ -38,7 +44,10 @@ const PAIRPLAY_RUNTIME_PROMPT = `prompt-arcade 的 document 是会在无 allow-s
 - message 监听必须校验 event.source===parent、pairplay===1 和 channel；不得读取父页 DOM。所有角色、control 名和规则都来自所选服务端 preset，不得增加自定义控制协议。
 - playMode==='preview' 时必须在 iframe 内启动可操作的短局，本地模拟另一角色并继续发送 game.input；不得停在“等待双方”。playMode==='network' 时不得本地改比分、胜负或权威状态，只能渲染 host.init/host.sync。
 - basketball-duel 必须画出会飞行的篮球与可移动篮筐：shooter 使用 aim/power/shoot，keeper 使用 move；preview 中 AI 接管未操作角色，network 中状态和比分只读取 host.sync。
-- 只输出 JSON schema 中的 document 字符串，不要使用 Markdown 代码围栏。`;
+- 为保证生成结果真的能运行，请以 <known_good_pairplay_document> 中的完整代码为基线。保留它的 doctype、单一 strict script、消息桥、preview/network 分流和安全 API 用法；可以根据 Prompt 改写 CSS、画面元素、可见文案、绘制函数与动画表现，但不要换成点击页面、alert、Math.random、window、定时器或脱离 PairPlay 的独立小游戏。
+- document 必须是上述 JSON 的普通字符串字段；整个响应不要使用 Markdown 代码围栏，也不要在 JSON 前后添加解释。`;
+
+const PAIRPLAY_REFERENCE_PROMPT = `${PAIRPLAY_RUNTIME_PROMPT}\n<known_good_pairplay_document>\n${FALLBACK_ARCADE_DOCUMENT}\n</known_good_pairplay_document>`;
 
 export const GAME_OUTPUT_SCHEMA = {
   type: 'object',
@@ -398,7 +407,32 @@ async function chatCompletion(config, body, fetchImpl, timeoutMs) {
   throw new Error('AI provider returned no message content');
 }
 
-function parseGameJson(content, templateId, seriesId) {
+function compatibleArcadePayload(parsed, match, gameLabel, playerPrompt) {
+  const document = parsed?.document;
+  if (!isSafeArcadeDocument(document) || hasUnsafeGameText(document)) return null;
+  const baseline = buildArcadeFallbackGame(match, gameLabel, { prompt: playerPrompt });
+  return {
+    title: baseline.title,
+    eyebrow: baseline.eyebrow,
+    description: baseline.description,
+    whyItFits: baseline.whyItFits,
+    estimatedMinutes: baseline.estimatedMinutes,
+    topics: [...baseline.topics],
+    kind: baseline.arcade.kind,
+    preset: baseline.arcade.preset,
+    theme: baseline.arcade.theme,
+    difficulty: baseline.arcade.difficulty,
+    tuning: {
+      durationSeconds: Math.round(baseline.arcade.params.durationMs / 1_000),
+      speedPercent: 100,
+      targetScore: baseline.arcade.params.targetScore,
+      maxRounds: baseline.arcade.params.maxRounds,
+    },
+    document,
+  };
+}
+
+function parseGameJson(content, templateId, seriesId, { match, gameLabel, playerPrompt } = {}) {
   const cleaned = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   let parsed;
   try {
@@ -407,6 +441,10 @@ function parseGameJson(content, templateId, seriesId) {
     throw new Error('AI generated malformed JSON');
   }
   const arcade = templateId === 'custom' && seriesId === ARCADE_GAME_SERIES_ID;
+  if (arcade && !isArcadeGamePayload(parsed, { hasUnsafeText: hasUnsafeGameText })) {
+    const compatible = compatibleArcadePayload(parsed, match, gameLabel, playerPrompt);
+    if (compatible) return compatible;
+  }
   const structurallyValid = templateId === 'custom'
     ? arcade ? isArcadeGamePayload(parsed, { hasUnsafeText: hasUnsafeGameText }) : isGeneratedPromptGamePayload(parsed)
     : templateId === 'profile-riddle'
@@ -535,11 +573,11 @@ function messagesFor(config, match, selection = {}) {
       }];
   return [
     { role: 'system', content: HARD_SAFETY_PROMPT },
-    { role: 'system', content: config.systemPrompt },
+    ...(arcade ? [] : [{ role: 'system', content: config.systemPrompt }]),
     { role: 'system', content: templateGuidance(template.id, series?.seriesId) },
     ...configuredPromptMessages,
     ...(arcade
-      ? [{ role: 'system', content: PAIRPLAY_RUNTIME_PROMPT }]
+      ? [{ role: 'system', content: PAIRPLAY_REFERENCE_PROMPT }]
       : []),
     {
       role: 'user',
@@ -550,7 +588,7 @@ function messagesFor(config, match, selection = {}) {
   ];
 }
 
-export function createAiGameService({ fetchImpl = globalThis.fetch, timeoutMs = 45_000 } = {}) {
+export function createAiGameService({ fetchImpl = globalThis.fetch, timeoutMs = 52_000 } = {}) {
   async function generate(config, match, selection = {}) {
     if (!config.apiKey) {
       const error = new Error('AI game service is not configured');
@@ -564,12 +602,16 @@ export function createAiGameService({ fetchImpl = globalThis.fetch, timeoutMs = 
     if (!template) throw new Error('Unknown game template');
     const series = template.id === 'custom' ? requireExclusiveSeries(selection.seriesId) : null;
     const gameLabel = selection.gameLabel ?? configuredType.label;
+    const arcade = series?.seriesId === ARCADE_GAME_SERIES_ID;
+    const lowReasoningGlm = arcade && /^glm-5\.3(?:$|[-_.])/i.test(config.model);
     const baseBody = {
       model: config.model,
       messages: messagesFor(config, match, selection),
-      temperature: 0.75,
-      max_tokens: series?.seriesId === ARCADE_GAME_SERIES_ID
-        ? 6_000
+      ...(lowReasoningGlm
+        ? { reasoning_effort: 'low', do_sample: false }
+        : { temperature: 0.75 }),
+      max_tokens: arcade
+        ? 4_500
         : template.id === 'profile-riddle'
           ? 2_500
           : 1_500,
@@ -610,7 +652,11 @@ export function createAiGameService({ fetchImpl = globalThis.fetch, timeoutMs = 
         remainingMs(),
       );
     }
-    const game = parseGameJson(content, template.id, series?.seriesId);
+    const game = parseGameJson(content, template.id, series?.seriesId, {
+      match,
+      gameLabel,
+      playerPrompt: selection.prompt ?? '',
+    });
     if (leaksPrivateContext(game, match)) throw new Error('AI game exposed private source material');
     if (template.id === 'profile-riddle' && directlyRestatesProfileSignal(game, match)) {
       throw new Error('AI profile riddle directly restated a known profile signal');
