@@ -117,4 +117,11 @@ test('keeps multiple requested interactions in their written order', () => {
     'mood-dial',
     'orbit-pick',
   ]);
+
+  const themed = promptGamePlan('做一个宇宙主题，三轮依次用左右滑卡、情绪刻度和星球轨道', 'prompt-arcade');
+  assert.deepEqual(themed.interactions.map((item) => item.kind), [
+    'swipe-deck',
+    'mood-dial',
+    'orbit-pick',
+  ]);
 });

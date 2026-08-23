@@ -4,6 +4,8 @@ import test from 'node:test';
 import { hashAdminPassword } from './admin-auth.mjs';
 import { createApiHandler } from './api.mjs';
 import { createMemoryConfigStore } from './config-store.mjs';
+import { buildExclusiveFallbackGame } from './exclusive-series.mjs';
+import { isPromptGameDefinition } from './prompt-game.mjs';
 
 const validMatch = {
   match_id: 'test-match',
@@ -335,7 +337,12 @@ test('custom template requires a stable series id and forwards it to AI', async 
     generate: async (_config, _match, selection) => {
       providerCalls += 1;
       receivedSelection = selection;
-      return { ...generatedGame(validMatch.match_id, 'custom'), seriesId: selection.seriesId };
+      return {
+        ...buildExclusiveFallbackGame(_match, selection.seriesId, selection.gameLabel, {
+          prompt: selection.prompt,
+        }),
+        generatedBy: 'ai',
+      };
     },
     listModels: async () => [],
   };
@@ -369,6 +376,178 @@ test('custom template requires a stable series id and forwards it to AI', async 
       assert.equal((await response.json()).game.seriesId, 'courtside');
       assert.equal(providerCalls, 1);
       assert.equal(receivedSelection.seriesId, 'courtside');
+    },
+  );
+});
+
+test('prompt arcade stays playable without an AI key and compiles edited prompts into safe v3 fallbacks', async () => {
+  const privateMatch = {
+    ...validMatch,
+    message_count: 2,
+    user_a: {
+      ...validMatch.user_a,
+      profile: '# 私密资料标记PROFILE-A-7788，也喜欢摄影',
+      memories_self: ['未公开回忆MEMORY-A-9911'],
+    },
+    user_b: {
+      ...validMatch.user_b,
+      profile: '# 私密资料标记PROFILE-B-6633，也喜欢咖啡',
+      memories_ideal: ['未公开偏好IDEAL-B-4422'],
+    },
+    messages: [
+      { from: 'a', type: 'text', content: '周末可以聊聊摄影', sent_at: '2026-08-23 10:00' },
+      { from: 'b', type: 'text', content: '我也喜欢咖啡和电影', sent_at: '2026-08-23 10:01' },
+    ],
+  };
+  let providerCalls = 0;
+  let capacityCalls = 0;
+  const aiService = {
+    cacheKey: (_config, match, selection) => `${match.match_id}\0${selection.templateId}\0${selection.seriesId}\0${selection.prompt}`,
+    generate: async () => {
+      providerCalls += 1;
+      throw new Error('AI must not run without a key');
+    },
+    listModels: async () => [],
+  };
+  const aiGate = {
+    acquire() {
+      capacityCalls += 1;
+      throw new Error('AI capacity must not be consumed by a local fallback');
+    },
+  };
+
+  await withServer(
+    createApiHandler({
+      token: 'secret',
+      configStore: createMemoryConfigStore({
+        apiKey: '',
+        gameTypes: [gameType('profile-riddle'), gameType('custom')],
+      }),
+      aiService,
+      aiGate,
+      fetchImpl: async () => new Response(JSON.stringify(privateMatch), { status: 200 }),
+    }),
+    async (baseUrl) => {
+      const matchResponse = await fetch(`${baseUrl}/api/match`);
+      const contextId = matchResponse.headers.get('x-game-context-id');
+      assert.ok(contextId);
+
+      const promptResponse = await fetch(`${baseUrl}/api/games/prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: baseUrl },
+        body: JSON.stringify({ contextId, templateId: 'custom', seriesId: 'prompt-arcade' }),
+      });
+      const promptPreview = await promptResponse.json();
+      assert.equal(promptResponse.status, 200);
+      assert.equal(promptPreview.templateId, 'custom');
+      assert.equal(promptPreview.seriesId, 'prompt-arcade');
+      assert.match(promptPreview.prompt, /拍照记录/);
+      assert.match(promptPreview.prompt, /咖啡小坐/);
+      assert.equal(JSON.stringify(promptPreview).includes('PROFILE-A-7788'), false);
+      assert.equal(JSON.stringify(promptPreview).includes('MEMORY-A-9911'), false);
+
+      const generate = (prompt) => fetch(`${baseUrl}/api/games/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: baseUrl },
+        body: JSON.stringify({ contextId, templateId: 'custom', seriesId: 'prompt-arcade', prompt }),
+      });
+      const cosmicPrompt = '做一个宇宙星空主题，三轮都用左右滑卡的二选一，围绕双方公开聊过的摄影与咖啡，保持轻松无输赢。';
+      const cosmicResponse = await generate(cosmicPrompt);
+      const cosmic = await cosmicResponse.json();
+      assert.equal(cosmicResponse.status, 200);
+      assert.equal(cosmic.fallback, true);
+      assert.equal(cosmic.providerUnavailable, 'AI_NOT_CONFIGURED');
+      assert.equal(cosmic.cached, false);
+      assert.equal(isPromptGameDefinition(cosmic.game), true);
+      assert.equal(cosmic.game.presentation.scene, 'cosmos');
+      assert.equal(cosmic.game.questions.every((question) => question.interaction.kind === 'swipe-deck'), true);
+      assert.equal(JSON.stringify(cosmic.game).includes(cosmicPrompt), false);
+      assert.equal(JSON.stringify(cosmic.game).includes('PROFILE-A-7788'), false);
+      assert.equal(JSON.stringify(cosmic.game).includes('IDEAL-B-4422'), false);
+
+      const cachedResponse = await generate(cosmicPrompt);
+      const cached = await cachedResponse.json();
+      assert.equal(cachedResponse.status, 200);
+      assert.equal(cached.cached, true);
+      assert.equal(cached.fallback, true);
+      assert.equal(cached.game.id, cosmic.game.id);
+
+      const cinemaPrompt = '做一个电影票根主题，三轮使用卡片宫格来选轻松话题，只参考公开聊天，不给双方关系下结论。';
+      const cinemaResponse = await generate(cinemaPrompt);
+      const cinema = await cinemaResponse.json();
+      assert.equal(cinemaResponse.status, 200);
+      assert.equal(cinema.game.presentation.scene, 'cinema');
+      assert.equal(cinema.game.questions.every((question) => question.interaction.kind === 'card-grid'), true);
+      assert.equal(cinema.game.questions.every((question) => question.interaction.variant === 'tickets'), true);
+
+      const builtIn = await fetch(`${baseUrl}/api/games/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: baseUrl },
+        body: JSON.stringify({ contextId, templateId: 'profile-riddle' }),
+      });
+      assert.equal(builtIn.status, 503);
+      assert.equal((await builtIn.json()).code, 'AI_NOT_CONFIGURED');
+      assert.equal(providerCalls, 0);
+      assert.equal(capacityCalls, 0);
+    },
+  );
+});
+
+test('prompt arcade falls back on provider authentication failure while built-in errors stay unchanged', async () => {
+  const upstreamUrl = 'https://match.example.test/case';
+  let providerCalls = 0;
+  const fetchImpl = async (url) => {
+    if (String(url) === upstreamUrl) return new Response(JSON.stringify(validMatch), { status: 200 });
+    providerCalls += 1;
+    return new Response(JSON.stringify({ error: { message: 'invalid key' } }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  await withServer(
+    createApiHandler({
+      token: 'secret',
+      upstreamUrl,
+      fetchImpl,
+      configStore: createMemoryConfigStore({
+        apiBaseUrl: 'https://ai.example.test',
+        apiKey: 'bad-key',
+        gameTypes: [gameType('profile-riddle'), gameType('custom')],
+      }),
+    }),
+    async (baseUrl) => {
+      const matchResponse = await fetch(`${baseUrl}/api/match`);
+      const contextId = matchResponse.headers.get('x-game-context-id');
+      assert.ok(contextId);
+      const prompt = '做一个未来星球主题的三轮轨道选择游戏，只使用双方已经公开聊过的轻松内容。';
+      const generate = (templateId, extra = {}) => fetch(`${baseUrl}/api/games/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: baseUrl },
+        body: JSON.stringify({ contextId, templateId, ...extra }),
+      });
+
+      const customResponse = await generate('custom', { seriesId: 'prompt-arcade', prompt });
+      const custom = await customResponse.json();
+      assert.equal(customResponse.status, 200);
+      assert.equal(custom.fallback, true);
+      assert.equal(custom.providerUnavailable, 'AI_AUTH_FAILED');
+      assert.equal(isPromptGameDefinition(custom.game), true);
+      assert.equal(custom.game.presentation.scene, 'cosmos');
+      assert.equal(providerCalls, 1);
+
+      const cachedResponse = await generate('custom', { seriesId: 'prompt-arcade', prompt });
+      const cached = await cachedResponse.json();
+      assert.equal(cachedResponse.status, 200);
+      assert.equal(cached.cached, true);
+      assert.equal(cached.fallback, true);
+      assert.equal(providerCalls, 1);
+
+      const builtInResponse = await generate('profile-riddle');
+      const builtIn = await builtInResponse.json();
+      assert.equal(builtInResponse.status, 502);
+      assert.equal(builtIn.code, 'AI_AUTH_FAILED');
+      assert.equal(providerCalls, 2);
     },
   );
 });

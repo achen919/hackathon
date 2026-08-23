@@ -14,8 +14,8 @@ export const DEFAULT_GAME_TYPES: GameTypeOption[] = [
     description: '双方分别在五秒内完成二选一，最后一起对照答案并继续聊。',
   },
   {
-    id: 'custom', templateId: 'custom', label: '专属小游戏', enabled: true, available: false,
-    description: '团队自定义小游戏的扩展入口，当前由另一模块接入中。',
+    id: 'custom', templateId: 'custom', label: '专属小游戏', enabled: true, available: true,
+    description: '编辑一句 Prompt，系统会将公开聊天线索变成三轮可玩互动；案例页直接试玩，无需登录。',
   },
 ];
 
@@ -35,7 +35,7 @@ export function buildLocalPromptPreview(match: MatchPayload, option: GameTypeOpt
       ? '生成 3–5 个公开聊天关键词作为转盘扇区，每个关键词配一条轻量追问。'
       : option.id === 'rapid-choice'
         ? '生成 3–5 道五秒二选一，每题严格两个短选项，结束后引导双方解释为什么选择 A 或 B。'
-        : '为团队自定义小游戏模块保留生成要求。';
+        : '固定生成 3 轮可玩互动：左右滑卡、情绪刻度和星球轨道。可根据 Prompt 调整主题、场景和交互顺序，但只使用公开聊天线索。';
   return {
     templateId: option.id,
     label: option.label,

@@ -2346,12 +2346,26 @@ p {
   animation: sheet-up 220ms ease-out;
 }
 
+.case-prompt-game-backdrop[hidden] { display: none; }
+.case-prompt-game-dialog {
+  --carnival-ink: #26222c;
+  --carnival-muted: #756d79;
+  --carnival-paper: #fffdfb;
+  --carnival-line: #e9e1dc;
+  --carnival-violet-deep: #5043bd;
+  width: min(760px, 100%);
+  padding-bottom: calc(18px + env(safe-area-inset-bottom));
+  color: var(--carnival-ink);
+}
+.case-prompt-game-dialog .carnival-prompt-game-preview { margin-bottom: 0; }
+
 @media (max-width: 620px) {
   .rolling-game-title__window { max-width: 100%; }
   .prompt-studio-backdrop,
   .template-game-backdrop { align-items: flex-end; padding: 0; }
   .prompt-studio,
-  .template-game-dialog {
+  .template-game-dialog,
+  .case-prompt-game-dialog {
     width: 100%;
     max-height: calc(100dvh - 10px);
     padding-bottom: calc(18px + env(safe-area-inset-bottom));

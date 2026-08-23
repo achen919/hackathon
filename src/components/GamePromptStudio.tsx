@@ -129,7 +129,7 @@ export function GamePromptStudio({
 
         {error && <p className="prompt-studio__error" role="alert">{error}</p>}
         {!selected.available && (
-          <p className="prompt-studio__waiting" role="status">这个模板已保留稳定接口，等待团队中的“专属小游戏”模块接入。</p>
+          <p className="prompt-studio__waiting" role="status">这个模板当前已在管理后台停用，请换一种玩法。</p>
         )}
 
         <footer className="prompt-studio__actions">
@@ -142,7 +142,9 @@ export function GamePromptStudio({
           >
             {status === 'generating'
               ? '正在生成游戏…'
-              : usesAi
+              : selected.id === 'custom'
+                ? '按这个 Prompt 生成并试玩'
+                : usesAi
                 ? '按这个 Prompt 生成并开始'
                 : '使用模板立即开始'}
           </button>

@@ -369,7 +369,10 @@ function requestedInteractions(prompt) {
   const matches = [
     ['swipe-deck', /(?:滑卡|滑动|左滑|右滑|左右|二选一)/u],
     ['mood-dial', /(?:转盘|刻度|指针|仪表|温度|量表|旋钮)/u],
-    ['orbit-pick', /(?:星球|宇宙|轨道|星座|星星|环绕|泡泡|节点)/u],
+    // Broad words such as “宇宙/星空” are presentation hints. Requiring an
+    // explicit orbit UI noun here keeps the interaction order written by the
+    // player (for example: 滑卡、刻度、星球轨道).
+    ['orbit-pick', /(?:星球|轨道|星座|环绕|泡泡|节点)/u],
     ['card-grid', /(?:卡牌|翻牌|票根|宫格|卡片)/u],
   ].flatMap(([kind, pattern]) => {
     const index = text.search(pattern);

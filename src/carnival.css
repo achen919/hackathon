@@ -190,11 +190,14 @@
   background: #fff;
   cursor: pointer;
 }
-.carnival-gender-field label.is-selected { border-color: rgba(102, 87, 216, 0.55); background: #f5f3ff; box-shadow: inset 0 0 0 1px rgba(102, 87, 216, 0.08); }
 .carnival-gender-field input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .carnival-gender-field label:focus-within { outline: 3px solid rgba(102, 87, 216, 0.3); outline-offset: 3px; }
-.carnival-gender-field label > span { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 11px; background: var(--carnival-violet-soft); color: var(--carnival-violet-deep); font-weight: 900; }
-.carnival-gender-field label:last-child > span { background: var(--carnival-coral-soft); color: #bf5143; }
+.carnival-gender-field label.is-female:focus-within { outline-color: rgba(225, 95, 80, 0.3); }
+.carnival-gender-field label.is-selected.is-female { border-color: rgba(225, 95, 80, 0.55); background: #fff4f0; box-shadow: inset 0 0 0 1px rgba(225, 95, 80, 0.08); }
+.carnival-gender-field label.is-selected.is-male { border-color: rgba(102, 87, 216, 0.55); background: #f5f3ff; box-shadow: inset 0 0 0 1px rgba(102, 87, 216, 0.08); }
+.carnival-gender-field label > span { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 11px; font-weight: 900; }
+.carnival-gender-field label.is-female > span { background: var(--carnival-coral-soft); color: #bf5143; }
+.carnival-gender-field label.is-male > span { background: var(--carnival-violet-soft); color: var(--carnival-violet-deep); }
 .carnival-gender-field strong { font-size: 13px; }
 
 .carnival-primary,
@@ -261,7 +264,8 @@
   font-weight: 900;
   box-shadow: 0 8px 20px rgba(91, 76, 197, 0.18);
 }
-.carnival-avatar.is-male { background: linear-gradient(135deg, #e15f50, #f2937f); box-shadow: 0 8px 20px rgba(196, 75, 61, 0.16); }
+.carnival-avatar.is-female { background: linear-gradient(135deg, #e15f50, #f2937f); box-shadow: 0 8px 20px rgba(196, 75, 61, 0.16); }
+.carnival-avatar.is-male { background: linear-gradient(135deg, #6c5ddd, #9486f1); box-shadow: 0 8px 20px rgba(91, 76, 197, 0.18); }
 .carnival-avatar.is-unknown { background: #e7e0dc; color: #847b84; box-shadow: none; }
 .carnival-avatar.is-small { width: 32px; height: 32px; border-radius: 11px; font-size: 11px; }
 

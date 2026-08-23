@@ -6,11 +6,13 @@ import { createConfigStore, publicConfig } from './config-store.mjs';
 import {
   buildPromptPreview,
   configuredGameType,
+  hasUnsafeGameText,
   normalizePlayerPrompt,
   publicGameTypes,
   templateForId,
 } from './game-templates.mjs';
-import { requireExclusiveSeries } from './exclusive-series.mjs';
+import { buildExclusiveFallbackGame, requireExclusiveSeries } from './exclusive-series.mjs';
+import { isPromptGameDefinition } from './prompt-game.mjs';
 
 export const DEFAULT_UPSTREAM_URL =
   'https://intellimatch.cn/api/v7/hackathon/match?format=json';
@@ -205,6 +207,28 @@ function requireAdmin(request, response, requestId, sessions, { csrf = false } =
 function pruneCache(cache, now = Date.now()) {
   if (cache.size < 100) return;
   for (const [key, value] of cache) if (value.expiresAt <= now) cache.delete(key);
+}
+
+function safeCustomFallback(match, selection) {
+  const game = buildExclusiveFallbackGame(
+    match,
+    selection.seriesId,
+    selection.gameLabel,
+    { prompt: selection.prompt },
+  );
+  if (!isPromptGameDefinition(game, { hasUnsafeText: hasUnsafeGameText })) {
+    throw new Error('Safe custom fallback did not match the prompt-game schema');
+  }
+  return game;
+}
+
+function isSafeCustomGame(game, match, selection) {
+  return (
+    isPromptGameDefinition(game, { hasUnsafeText: hasUnsafeGameText }) &&
+    game.matchId === match.match_id &&
+    game.seriesId === selection.seriesId &&
+    game.mechanics?.seriesId === selection.seriesId
+  );
 }
 
 export function createApiHandler({
@@ -402,7 +426,7 @@ export function createApiHandler({
       sendJson(response, error.status ?? 400, { error: error.message, code: 'INVALID_GAME_PROMPT', request_id: requestId }, requestId);
       return;
     }
-    if (!config.apiKey) {
+    if (!config.apiKey && template.id !== 'custom') {
       sendJson(response, 503, { error: 'AI game service is not configured', code: 'AI_NOT_CONFIGURED', request_id: requestId }, requestId);
       return;
     }
@@ -416,7 +440,27 @@ export function createApiHandler({
     const key = aiService.cacheKey(config, match, selection);
     const cached = gameCache.get(key);
     if (!body.fresh && cached?.expiresAt > Date.now()) {
-      sendJson(response, 200, { game: cached.game, cached: true }, requestId);
+      sendJson(response, 200, {
+        game: cached.game,
+        cached: true,
+        ...(cached.fallback ? { fallback: true, providerUnavailable: cached.providerUnavailable } : {}),
+      }, requestId);
+      return;
+    }
+    if (!config.apiKey) {
+      const game = safeCustomFallback(match, selection);
+      gameCache.set(key, {
+        game,
+        expiresAt: Date.now() + 15 * 60_000,
+        fallback: true,
+        providerUnavailable: 'AI_NOT_CONFIGURED',
+      });
+      sendJson(response, 200, {
+        game,
+        cached: false,
+        fallback: true,
+        providerUnavailable: 'AI_NOT_CONFIGURED',
+      }, requestId);
       return;
     }
     let promise = inFlight.get(key);
@@ -446,6 +490,9 @@ export function createApiHandler({
     }
     try {
       const game = await promise;
+      if (template.id === 'custom' && !isSafeCustomGame(game, match, selection)) {
+        throw new Error('AI game did not match the selected prompt-game definition');
+      }
       gameCache.set(key, { game, expiresAt: Date.now() + 15 * 60_000 });
       sendJson(response, 200, { game, cached: false }, requestId);
     } catch (error) {
@@ -458,6 +505,22 @@ export function createApiHandler({
           : status === 429
             ? 'AI_RATE_LIMITED'
             : 'AI_GENERATION_FAILED';
+      if (template.id === 'custom') {
+        const game = safeCustomFallback(match, selection);
+        gameCache.set(key, {
+          game,
+          expiresAt: Date.now() + 15 * 60_000,
+          fallback: true,
+          providerUnavailable: code,
+        });
+        sendJson(response, 200, {
+          game,
+          cached: false,
+          fallback: true,
+          providerUnavailable: code,
+        }, requestId);
+        return;
+      }
       sendJson(
         response,
         timedOut ? 504 : status === 429 ? 503 : 502,
