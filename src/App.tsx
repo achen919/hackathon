@@ -115,7 +115,6 @@ export default function App() {
   const [activeGame, setActiveGame] = useState(() => buildFallbackGame(demoMatch, 'profile-riddle'));
   const [aiStatus, setAiStatus] = useState<AiGameStatus | null>(null);
   const [gameGeneration, setGameGeneration] = useState<'idle' | 'loading' | 'ready' | 'fallback'>('idle');
-  const [gameNotice, setGameNotice] = useState('选择一种玩法，系统会先生成一份可编辑的安全游戏 Prompt。');
   const [promptStatus, setPromptStatus] = useState<'idle' | 'loading' | 'editing' | 'generating' | 'error'>('idle');
   const [promptText, setPromptText] = useState('');
   const [promptError, setPromptError] = useState<string | null>(null);
@@ -208,7 +207,6 @@ export default function App() {
       setViewer('a');
       setDrafts({ a: '', b: '' });
       setProfilesOpen(false);
-      setGameNotice('新案例已载入。选好玩法后，可以先修改系统生成的本局 Prompt。');
       resetSession(payload);
     } catch {
       setMatch(demoMatch);
@@ -219,7 +217,6 @@ export default function App() {
       setViewer('a');
       setDrafts({ a: '', b: '' });
       setProfilesOpen(false);
-      setGameNotice('接口暂时不可用，已切换到稳定演示模板。');
       resetSession(demoMatch);
       setGameGeneration('fallback');
     }
@@ -236,7 +233,6 @@ export default function App() {
     setViewer('a');
     setDrafts({ a: '', b: '' });
     setProfilesOpen(false);
-    setGameNotice('选择一种玩法，系统会先生成一份可编辑的安全游戏 Prompt。');
     resetSession(demoMatch);
   }
 
@@ -302,7 +298,6 @@ export default function App() {
   function launchGame(game: ReturnType<typeof buildFallbackGame>, mode: 'ready' | 'fallback', notice: string) {
     setActiveGame(game);
     setGameGeneration(mode);
-    setGameNotice(notice);
     setSessionStatus('playing');
     setCompletedSummary('');
     setSessionKey(`${game.matchId}-${game.templateId}-${Date.now()}`);
@@ -325,7 +320,6 @@ export default function App() {
       game,
     });
     setGameGeneration(mode);
-    setGameNotice(notice);
     setSessionStatus('playing');
     setCompletedSummary('');
     setSessionKey(previewToken);
@@ -354,7 +348,6 @@ export default function App() {
       setPromptStatus('generating');
       setPromptError(null);
       setGameGeneration('loading');
-      setGameNotice('AI 正在把 Prompt 组合成场景、交互和三轮题面…');
       try {
         const response = await fetch('/api/games/generate', {
           method: 'POST',
@@ -405,7 +398,6 @@ export default function App() {
     setPromptStatus('generating');
     setPromptError(null);
     setGameGeneration('loading');
-    setGameNotice('AI 正在按你确认的 Prompt 生成题面，交互机制仍由固定模板控制…');
     try {
       const response = await fetch('/api/games/generate', {
         method: 'POST',
@@ -473,7 +465,6 @@ export default function App() {
     setPromptStatus('idle');
     if (gameGeneration === 'loading') {
       setGameGeneration('idle');
-      setGameNotice('本次生成已取消。你可以重新打开 Prompt，确认后再开始。');
     }
   }
 
@@ -493,26 +484,12 @@ export default function App() {
     }
   }
 
-  const idleTemplateStatus: Record<GameTemplateId, string> = {
-    'profile-riddle': '双方各选 3 个词 · 一起揭晓',
-    'keyword-wheel': '转一次 · 把话题自然聊深',
-    'rapid-choice': `${displayGame.questions.length} 题 · 每题 5 秒 · 一起揭晓`,
-    custom: '3 轮 Prompt-to-Game · 案例页无需登录',
-  };
   const firstStepNote: Record<GameTemplateId, string> = {
     'profile-riddle': '双方分别选词，揭晓前彼此不可见',
     'keyword-wheel': '转盘从公开话题中随机抽取一个追问',
     'rapid-choice': '双方分别作答，答案不会提前暴露',
     custom: '在当前接口案例中本地试玩，不进入真实匹配',
   };
-  const gameCardStatus = gameGeneration === 'loading'
-    ? 'AI 正在按 Prompt 临场出题…'
-    : sessionStatus === 'complete'
-      ? completedSummary
-      : sessionStatus === 'playing'
-        ? `${activeGame.gameType}进行中 · 随时可以继续`
-        : `${displayGame.estimatedMinutes} 分钟 · ${idleTemplateStatus[displayGame.templateId]}`;
-
   return (
     <div className="app-shell">
       <aside className="brand-rail" aria-label="主导航">
@@ -564,12 +541,11 @@ export default function App() {
 
           <article className={`game-invite ${sessionStatus !== 'idle' ? 'is-active' : ''} ${!gameEligible ? 'is-ineligible' : ''}`} aria-busy={gameGeneration === 'loading'}>
             <div className="game-invite__glow" aria-hidden="true">✦</div>
-            <div className="game-invite__topline"><span className="game-label">上下文双人破冰</span><span>{gameEligible ? gameCardStatus : '此刻不推荐发起'}</span></div>
+            <div className="game-invite__topline"><span className="game-label">上下文双人破冰</span></div>
             {gameEligible ? (sessionStatus === 'playing' || sessionStatus === 'complete' ? <h2>{activeGame.title}</h2> : <RollingGameTitle items={visibleGameTypes} activeId={selectedOption.id} paused={rollingLocked || promptStudioOpen || gameOpen || casePromptOpen} onActiveChange={selectRollingTemplate} />) : <h2>尊重结束，也是一种认真</h2>}
             <p>{gameEligible ? (sessionStatus === 'idle' ? selectedOption.description : activeGame.description) : '最近对话里出现了明确的结束信号。此时不应该用游戏重新施压，系统会安静收起邀请。'}</p>
             {gameEligible && sessionStatus === 'idle' && <div className="game-template-picker" aria-label="选择游戏类型">{visibleGameTypes.map((option) => <button key={option.id} className={`${option.id === selectedOption.id ? 'is-active' : ''} ${!option.available ? 'is-waiting' : ''}`} type="button" aria-pressed={option.id === selectedOption.id} onClick={() => chooseTemplate(option.id)}>{option.label}</button>)}</div>}
             {gameEligible && sessionStatus !== 'idle' && <div className="topic-chips" aria-label="游戏话题">{activeGame.topics.map((topic) => <span key={topic}>{topic}</span>)}</div>}
-            {gameEligible && <p className={`game-ai-note is-${gameGeneration}`} role="status" aria-live="polite">{gameNotice}</p>}
             <button className="game-invite__button" type="button" onClick={gameEligible ? startOrResumeGame : restoreDemo} disabled={gameGeneration === 'loading'}>{gameEligible ? gameGeneration === 'loading' ? '正在生成…' : sessionStatus === 'playing' ? '继续这一局' : sessionStatus === 'complete' ? '换个 Prompt 再玩' : selectedOption.available ? '一起玩' : '查看接入状态' : '回到适合破冰的演示样例'}<span aria-hidden="true">→</span></button>
           </article>
         </section>
