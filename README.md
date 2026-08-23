@@ -86,6 +86,10 @@ node /opt/hackathon-chat/deploy/bootstrap-production.mjs
 
 脚本会保留已有比赛 Token，幂等创建加密主密钥、管理员密码哈希及 root-only 的 `/root/hackathon-admin-password`，不会把明文密码打印到日志。
 
+## 自动部署
+
+合并 PR 到 `main` 或直接更新 `main` 会触发 GitHub Actions 生产发布：先在无生产凭据的独立 runner 完成完整验证和构建，再由新的 runner 使用 `production` 环境中的专用 SSH 密钥调用服务器固定发布程序。服务器会校验 exact SHA、归档结构和静态资源，原子切换代码，并在健康检查失败时同步回滚代码、静态文件与状态快照。详细契约与一次性配置见 [生产部署文档](docs/production-deployment.md)。
+
 ## 当前完成的链路
 
 1. 聊天时间线和接口字段映射；

@@ -1,0 +1,4 @@
+# Production automation changes require repository-owner review.
+/.github/ @achen919
+/deploy/ @achen919
+/docs/production-deployment.md @achen919
