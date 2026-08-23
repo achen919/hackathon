@@ -13,6 +13,7 @@ import {
 } from './game-templates.mjs';
 import { buildExclusiveFallbackGame, requireExclusiveSeries } from './exclusive-series.mjs';
 import { isPromptGameDefinition } from './prompt-game.mjs';
+import { createGameResultService } from './result-card.mjs';
 
 export const DEFAULT_UPSTREAM_URL =
   'https://intellimatch.cn/api/v7/hackathon/match?format=json';
@@ -249,6 +250,7 @@ export function createApiHandler({
   configStore = createConfigStore(),
   sessions = createAdminSessions(),
   aiService = createAiGameService({ fetchImpl }),
+  resultCardService = createGameResultService({ fetchImpl }),
 } = {}) {
   const safeRateLimit = Number.isFinite(rateLimit) ? Math.max(1, rateLimit) : 24;
   const safeTimeoutMs = Number.isFinite(timeoutMs) ? Math.max(1_000, timeoutMs) : 10_000;
@@ -530,6 +532,62 @@ export function createApiHandler({
     }
   }
 
+  async function handleResultCard(request, response, requestId) {
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, requestId, 'POST');
+      return;
+    }
+    if (!sameOrigin(request, publicOrigin) || !hasJsonContentType(request)) {
+      sendJson(response, 403, { error: 'Same-origin JSON request required', request_id: requestId }, requestId);
+      return;
+    }
+    const rate = takeAiRate(clientAddress(request, trustProxy));
+    if (!rate.allowed) {
+      sendJson(response, 429, { error: 'Too many AI result requests', request_id: requestId }, requestId, {
+        ...rateHeaders(rate), 'Retry-After': String(rate.retryAfterSeconds),
+      });
+      return;
+    }
+    let body;
+    try {
+      body = await readJsonBody(request, 80_000);
+    } catch (error) {
+      sendJson(response, error.status ?? 400, { error: error.message, request_id: requestId }, requestId);
+      return;
+    }
+    const game = body?.game;
+    const players = body?.players;
+    if (!isRecord(body) || !isRecord(game) || !isRecord(players) || !isRecord(body.result) ||
+      typeof game.id !== 'string' || game.id.length > 200 || typeof game.matchId !== 'string' || game.matchId.length > 200 ||
+      typeof game.templateId !== 'string' || !['profile-riddle', 'keyword-wheel', 'rapid-choice', 'custom'].includes(game.templateId) || typeof game.gameType !== 'string' || game.gameType.length > 200 ||
+      typeof game.title !== 'string' || game.title.length > 200 || typeof game.description !== 'string' || game.description.length > 2_000 ||
+      typeof players.a?.nickname !== 'string' || typeof players.b?.nickname !== 'string') {
+      sendJson(response, 400, { error: 'Invalid game result request', request_id: requestId }, requestId);
+      return;
+    }
+    try {
+      const config = await configStore.get();
+      const card = await resultCardService.create(config, {
+        game: {
+          id: game.id,
+          matchId: game.matchId,
+          templateId: game.templateId,
+          gameType: game.gameType,
+          title: game.title,
+          description: game.description,
+        },
+        result: body.result,
+        players: {
+          a: { nickname: players.a.nickname.slice(0, 100) },
+          b: { nickname: players.b.nickname.slice(0, 100) },
+        },
+      });
+      sendJson(response, 200, { card }, requestId);
+    } catch (error) {
+      sendJson(response, 500, { error: 'Unable to create game result card', request_id: requestId }, requestId);
+    }
+  }
+
   async function handlePrompt(request, response, requestId) {
     if (request.method !== 'POST') {
       methodNotAllowed(response, requestId, 'POST');
@@ -715,6 +773,7 @@ export function createApiHandler({
       '/api/games/status',
       '/api/games/prompt',
       '/api/games/generate',
+      '/api/games/result-card',
       '/api/admin/session',
       '/api/admin/config',
       '/api/admin/models',
@@ -757,6 +816,7 @@ export function createApiHandler({
         }
       }
     } else if (path === '/api/games/prompt') await handlePrompt(request, response, requestId);
+    else if (path === '/api/games/result-card') await handleResultCard(request, response, requestId);
     else if (path === '/api/games/generate') await handleGenerate(request, response, requestId);
     else if (path === '/api/admin/session') await handleAdminSession(request, response, requestId);
     else if (path === '/api/admin/config') await handleAdminConfig(request, response, requestId);

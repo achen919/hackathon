@@ -9,11 +9,30 @@ export interface MatchUser {
   memories_ideal: string[];
 }
 
+export interface GameResultCard {
+  id: string;
+  gameId: string;
+  gameTitle: string;
+  templateId: GameTemplateId;
+  status: 'ready' | 'generating' | 'fallback';
+  badge: string;
+  headline: string;
+  score: number;
+  summary: string;
+  highlights: string[];
+  nextPrompt: string;
+  backgroundUrl?: string;
+  backgroundPrompt?: string;
+  generatedBy: 'ai' | 'fallback';
+  createdAt: string;
+}
+
 export interface MatchMessage {
   from: ParticipantId;
-  type: 'text' | 'non_text' | string;
+  type: 'text' | 'non_text' | 'game_result' | string;
   content: string;
   sent_at: string;
+  gameResult?: GameResultCard;
 }
 
 export interface MatchPayload {
