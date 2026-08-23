@@ -5,12 +5,14 @@ import { GamePromptStudio } from './components/GamePromptStudio';
 import { ProfileExplorer } from './components/ProfileExplorer';
 import { RollingGameTitle } from './components/RollingGameTitle';
 import { TemplateGameDialog } from './components/TemplateGameDialog';
+import { GameResultCardView } from './components/GameResultCard';
 import type { TemplateGameResult } from './components/TemplateGameStage';
 import { normalizeCarnivalExclusiveGame } from './carnival-api';
 import type { CarnivalExclusiveGameDefinition, CarnivalGamePreview } from './carnival-types';
 import { demoMatch } from './data/demoMatch';
 import { buildLocalPromptPreview, DEFAULT_GAME_TYPES } from './game/catalog';
 import { buildDemoPromptGame } from './game/demo-prompt-game';
+import { buildFallbackResultCard, type ResultCardRequest } from './game-result';
 import { buildFallbackGame, isGameDefinition } from './game/questions';
 import {
   genderLabel,
@@ -21,6 +23,7 @@ import {
 } from './lib/participants';
 import type {
   AiGameResponse,
+  GameResultCard,
   AiGameStatus,
   GamePromptPreview,
   GameTemplateId,
@@ -96,9 +99,31 @@ function customGameShell(match: MatchPayload, game: CarnivalExclusiveGameDefinit
   };
 }
 
+function resultHistoryKey(matchId: string) {
+  return `liangpei:game-results:${matchId}`;
+}
+
+function storedResultMessages(matchId: string): MatchMessage[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(resultHistoryKey(matchId)) ?? '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is MatchMessage => Boolean(item && typeof item === 'object' && item.type === 'game_result' && item.gameResult));
+  } catch {
+    return [];
+  }
+}
+
+function mergeStoredResultMessages(matchId: string, baseMessages: MatchMessage[]) {
+  const stored = storedResultMessages(matchId);
+  if (stored.length === 0) return baseMessages;
+  const known = new Set(baseMessages.map((message) => message.gameResult?.id).filter(Boolean));
+  return [...baseMessages, ...stored.filter((message) => message.gameResult?.id && !known.has(message.gameResult.id))];
+}
+
 export default function App() {
   const [match, setMatch] = useState<MatchPayload>(demoMatch);
-  const [messages, setMessages] = useState<MatchMessage[]>(demoMatch.messages);
+  const [messages, setMessages] = useState<MatchMessage[]>(() => mergeStoredResultMessages(demoMatch.match_id, demoMatch.messages));
   const [dataSource, setDataSource] = useState<'loading' | 'live' | 'demo'>('demo');
   const [sourceMessage, setSourceMessage] = useState('稳定演示样例 · 可从接口随机抽取');
   const [gameContextId, setGameContextId] = useState<string | null>(null);
@@ -124,6 +149,7 @@ export default function App() {
   const timelineRef = useRef<HTMLElement>(null);
   const generationVersionRef = useRef(0);
   const promptVersionRef = useRef(0);
+  const resultCardIdsRef = useRef(new Set<string>());
 
   const visibleGameTypes = useMemo(() => {
     const visible = gameTypes.filter((option) => option.enabled);
@@ -161,6 +187,23 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const resultMessages = messages.filter((message) => message.type === 'game_result' && message.gameResult);
+    try {
+      let serialized = JSON.stringify(resultMessages);
+      if (serialized.length > 3_500_000) {
+        serialized = JSON.stringify(resultMessages.map((message) => ({
+          ...message,
+          gameResult: message.gameResult ? { ...message.gameResult, backgroundUrl: undefined } : undefined,
+        })));
+      }
+      window.localStorage.setItem(resultHistoryKey(match.match_id), serialized);
+    } catch {
+      // Browsers may disable storage or run out of quota; the in-memory chat remains usable.
+    }
+  }, [match.match_id, messages]);
+
+  useEffect(() => {
     const timeline = timelineRef.current;
     if (timeline) timeline.scrollTop = timeline.scrollHeight;
   }, [messages.length, sessionStatus]);
@@ -185,6 +228,7 @@ export default function App() {
     setPromptText('');
     setPromptError(null);
     setRollingLocked(false);
+    resultCardIdsRef.current.clear();
   }
 
   async function loadMatch() {
@@ -200,7 +244,7 @@ export default function App() {
       const payload = (await response.json()) as MatchPayload;
       if (!payload.user_a || !payload.user_b || !Array.isArray(payload.messages)) throw new Error('Unexpected payload');
       setMatch(payload);
-      setMessages(payload.messages);
+      setMessages(mergeStoredResultMessages(payload.match_id, payload.messages));
       setGameContextId(nextGameContextId);
       setDataSource('live');
       setSourceMessage(`已缓存案例 ${payload.match_id.slice(-8)}`);
@@ -210,7 +254,7 @@ export default function App() {
       resetSession(payload);
     } catch {
       setMatch(demoMatch);
-      setMessages(demoMatch.messages);
+      setMessages(mergeStoredResultMessages(demoMatch.match_id, demoMatch.messages));
       setGameContextId(null);
       setDataSource('demo');
       setSourceMessage(fallbackMessage);
@@ -226,7 +270,7 @@ export default function App() {
     generationVersionRef.current += 1;
     promptVersionRef.current += 1;
     setMatch(demoMatch);
-    setMessages(demoMatch.messages);
+    setMessages(mergeStoredResultMessages(demoMatch.match_id, demoMatch.messages));
     setGameContextId(null);
     setDataSource('demo');
     setSourceMessage('稳定演示样例 · 可从接口随机抽取');
@@ -443,14 +487,65 @@ export default function App() {
     window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('#chat-composer')?.focus(), 80);
   }
 
+  function resultCardInput(game: typeof activeGame): ResultCardRequest['game'] {
+    return {
+      id: game.id,
+      matchId: game.matchId,
+      templateId: game.templateId,
+      gameType: game.gameType,
+      title: game.title,
+      description: game.description,
+    };
+  }
+
+  function appendResultCard(result: unknown, game = activeGame) {
+    const cardKey = game.id + ':' + sessionKey;
+    if (resultCardIdsRef.current.has(cardKey)) return;
+    resultCardIdsRef.current.add(cardKey);
+    const inputGame = resultCardInput(game);
+    const players = {
+      a: { nickname: match.user_a.nickname },
+      b: { nickname: match.user_b.nickname },
+    } as ResultCardRequest['players'];
+    const placeholder = buildFallbackResultCard(inputGame, result, players, 'generating');
+    const sentAt = new Date().toISOString();
+    setMessages((current) => [...current, {
+      from: viewer,
+      type: 'game_result',
+      content: '',
+      sent_at: sentAt,
+      gameResult: placeholder,
+    }]);
+    void fetch('/api/games/result-card', {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ game: inputGame, result, players }),
+    }).then(async (response) => {
+      const payload = (await response.json().catch(() => ({}))) as { card?: GameResultCard };
+      if (!response.ok || !payload.card) throw new Error('Result card request failed');
+      const generatedCard = payload.card as GameResultCard;
+      setMessages((current) => current.map((message) => message.gameResult?.id === placeholder.id
+        ? { ...message, gameResult: { ...generatedCard, id: placeholder.id, status: generatedCard.generatedBy === 'ai' ? 'ready' : 'fallback' } }
+        : message));
+    }).catch(() => {
+      setMessages((current) => current.map((message) => message.gameResult?.id === placeholder.id
+        ? { ...message, gameResult: { ...placeholder, status: 'fallback' } }
+        : message));
+    });
+  }
+
   function completeGame(result: TemplateGameResult) {
     setSessionStatus('complete');
     setCompletedSummary(sessionSummary(result));
+    appendResultCard(result);
+    setGameOpen(false);
   }
 
   function completeCasePromptGame() {
     setSessionStatus('complete');
     setCompletedSummary('三轮 Prompt-to-Game 试玩已完成 · 可以顺着结尾问句继续聊');
+    appendResultCard({ type: 'custom', completed: true, gameType: activeGame.gameType });
+    setCasePromptOpen(false);
   }
 
   function restartCasePromptGame() {
@@ -536,6 +631,9 @@ export default function App() {
           {messages.map((message, index) => {
             const sender = getUser(match, message.from);
             const mine = message.from === viewer;
+            if (message.type === 'game_result' && message.gameResult) {
+              return <div className="message-row message-row--system" key={`${message.gameResult.id}-${index}`}><div className="message-content message-content--result"><GameResultCardView card={message.gameResult} onPrompt={bringFollowUpToChat} /><time>{formatTime(message.sent_at)}</time></div></div>;
+            }
             return <div className={`message-row message-row--${toneFor(message.from)} ${mine ? 'is-mine' : ''}`} key={`${message.sent_at}-${index}`}>{!mine && <Avatar name={sender.nickname} tone={toneFor(message.from)} size="small" />}<div className="message-content"><div className="message-bubble">{message.content || (message.type === 'non_text' ? '非文本消息' : '空消息')}</div><time>{formatTime(message.sent_at)}</time></div></div>;
           })}
 

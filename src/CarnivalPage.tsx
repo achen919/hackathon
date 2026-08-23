@@ -37,7 +37,10 @@ import type {
   CarnivalState,
   CarnivalTextMessage,
 } from './carnival-types';
-import { CarnivalGameBridge } from './components/CarnivalGameBridge';
+import { CarnivalGameBridge, type CarnivalGameCompletion } from './components/CarnivalGameBridge';
+import { GameResultCardView } from './components/GameResultCard';
+import { buildFallbackResultCard, type ResultCardRequest } from './game-result';
+import type { GameResultCard } from './types';
 import { PromptGamePreviewCard } from './components/PromptGamePreviewCard';
 import './carnival.css';
 
@@ -88,10 +91,43 @@ const REGENERABLE_PREVIEW_ERROR_CODES = new Set([
 
 type TimelineEntry =
   | { kind: 'message'; id: string; createdAt: string; message: CarnivalTextMessage }
-  | { kind: 'invite'; id: string; createdAt: string; invite: CarnivalInvite };
+  | { kind: 'invite'; id: string; createdAt: string; invite: CarnivalInvite }
+  | { kind: 'result'; id: string; createdAt: string; card: GameResultCard };
 
 interface PendingInviteDraft extends CarnivalCreateInviteInput {
   label: string;
+}
+
+function carnivalResultHistoryKey(roomId: string) {
+  return `liangpei:carnival-game-results:${roomId}`;
+}
+
+function readCarnivalResultCards(roomId: string): GameResultCard[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(carnivalResultHistoryKey(roomId)) ?? '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is GameResultCard => Boolean(
+      item && typeof item === 'object' && typeof item.id === 'string' &&
+      typeof item.gameId === 'string' && typeof item.gameTitle === 'string' &&
+      typeof item.headline === 'string' && typeof item.summary === 'string',
+    ));
+  } catch {
+    return [];
+  }
+}
+
+function writeCarnivalResultCards(roomId: string, cards: GameResultCard[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    let serialized = JSON.stringify(cards);
+    if (serialized.length > 3_500_000) {
+      serialized = JSON.stringify(cards.map((card) => ({ ...card, backgroundUrl: undefined })));
+    }
+    window.localStorage.setItem(carnivalResultHistoryKey(roomId), serialized);
+  } catch {
+    // The current in-memory timeline remains usable when storage is unavailable.
+  }
 }
 
 function safeReadToken(storageKey: string) {
@@ -379,6 +415,11 @@ export default function CarnivalPage({
   const [activeInviteId, setActiveInviteId] = useState<string | null>(null);
   const [openingInviteId, setOpeningInviteId] = useState<string | null>(null);
   const [openInviteError, setOpenInviteError] = useState<string | null>(null);
+  const [unlockAnnounced, setUnlockAnnounced] = useState(false);
+  const [resultCards, setResultCards] = useState<GameResultCard[]>([]);
+  const resultRoomIdRef = useRef<string | null>(null);
+  const resultCardIdsRef = useRef(new Set<string>());
+  const previousGateRef = useRef<{ roomId: string; unlocked: boolean } | null>(null);
   const timelineRef = useRef<HTMLElement>(null);
   const nearBottomRef = useRef(true);
 
@@ -539,6 +580,23 @@ export default function CarnivalPage({
   }, [api, applyState, clearLocalSession, hasState, makeController, releaseController, safePollInterval, token]);
 
   const room = carnivalState?.status === 'matched' ? carnivalState.room : undefined;
+  useEffect(() => {
+    const roomId = room?.roomId ?? null;
+    if (resultRoomIdRef.current === roomId) return;
+    resultRoomIdRef.current = roomId;
+    const cards = roomId ? readCarnivalResultCards(roomId) : [];
+    resultCardIdsRef.current = new Set(cards.map((card) => card.gameId));
+    setResultCards(cards);
+  }, [room?.roomId]);
+
+  useEffect(() => {
+    const roomId = room?.roomId;
+    if (!roomId || resultRoomIdRef.current !== roomId) return;
+    writeCarnivalResultCards(roomId, resultCards);
+  }, [resultCards, room?.roomId]);
+
+
+
   const self = carnivalState?.self;
   const partner = room?.participants.find((participant) => participant.participantId !== self?.participantId);
   const currentRoomContext = useMemo(() => gamePreviewContextFingerprint(room), [room]);
@@ -616,11 +674,17 @@ export default function CarnivalPage({
         createdAt: item.createdAt,
         invite: item,
       })),
+      ...resultCards.map((card) => ({
+        kind: 'result' as const,
+        id: card.id,
+        createdAt: card.createdAt,
+        card,
+      })),
     ].sort((left, right) => {
       const time = Date.parse(left.createdAt) - Date.parse(right.createdAt);
       return time || left.id.localeCompare(right.id);
     });
-  }, [room]);
+  }, [room, resultCards]);
 
   const partnerEnteredInvite = useMemo(() => {
     if (!room || !self || !partner) return null;
@@ -938,6 +1002,57 @@ export default function CarnivalPage({
     }
   }, [api, applyState, clearLocalSession, invalidateGamePreview, makeController, releaseController, token]);
 
+  function handleCarnivalGameComplete(completion: CarnivalGameCompletion) {
+    const cardKey = completion.invitation.inviteId;
+    if (resultCardIdsRef.current.has(cardKey)) return;
+    resultCardIdsRef.current.add(cardKey);
+    const game: ResultCardRequest['game'] = {
+      id: completion.invitation.inviteId,
+      matchId: completion.roomId,
+      templateId: completion.invitation.templateId as ResultCardRequest['game']['templateId'],
+      gameType: completion.invitation.gameLabel,
+      title: completion.invitation.title,
+      description: completion.invitation.promptPreview || completion.invitation.title,
+    };
+    const placeholder = buildFallbackResultCard(game, completion.result, completion.players, 'generating');
+    setResultCards((current) => [...current, placeholder]);
+    void fetch('/api/games/result-card', {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ game, result: completion.result, players: completion.players }),
+    }).then(async (response) => {
+      const payload = (await response.json().catch(() => ({}))) as { card?: GameResultCard };
+      if (!response.ok || !payload.card) throw new Error('Result card request failed');
+      setResultCards((current) => current.map((card) => card.id === placeholder.id
+        ? { ...payload.card!, id: placeholder.id, status: payload.card!.generatedBy === 'ai' ? 'ready' : 'fallback' }
+        : card));
+    }).catch(() => {
+      setResultCards((current) => current.map((card) => card.id === placeholder.id
+        ? { ...placeholder, status: 'fallback' }
+        : card));
+    });
+  }
+
+  // Polling can observe a completed invite even when an external renderer owns the modal.
+  // Generate the result card from the persisted public game state so the chat timeline does not
+  // depend on the user reopening the game at exactly the moment it finishes.
+  useEffect(() => {
+    if (!room || !self || !partner) return;
+    for (const invitation of room.invites) {
+      const definition = invitation.game?.definition;
+      if (invitation.status !== 'completed' || !definition || typeof definition !== 'object') continue;
+      handleCarnivalGameComplete({
+        invitation,
+        result: definition,
+        roomId: room.roomId,
+        players: {
+          a: { nickname: self.nickname },
+          b: { nickname: partner.nickname },
+        },
+      });
+    }
+  }, [partner, room, self]);
+
   function createInvite() {
     const customPreview = selectedGameType?.templateId === 'custom' && gamePreview &&
       gamePreview.game.seriesId === selectedSeriesId &&
@@ -1218,6 +1333,21 @@ export default function CarnivalPage({
             <div className="carnival-empty-chat"><span aria-hidden="true">👋</span><p>先打个招呼吧。每一句都在靠近游戏摊位。</p></div>
           )}
           {timeline.map((entry) => {
+            if (entry.kind === 'result') {
+              return (
+                <article className="carnival-result-entry" key={`result-${entry.id}`}>
+                  <GameResultCardView
+                    card={entry.card}
+                    onPrompt={(text) => {
+                      setDraft(text);
+                      setActiveInviteId(null);
+                      window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('.carnival-composer textarea')?.focus(), 50);
+                    }}
+                  />
+                  <time dateTime={entry.createdAt}>{formatClock(entry.createdAt)}</time>
+                </article>
+              );
+            }
             if (entry.kind === 'message') {
               const mine = entry.message.senderId === self.participantId;
               const author = mine ? self : partner;
@@ -1437,6 +1567,7 @@ export default function CarnivalPage({
             setActiveInviteId(null);
             window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('.carnival-composer textarea')?.focus(), 50);
           }}
+          onGameComplete={handleCarnivalGameComplete}
         />
       )}
       {renderNetworkGame && (

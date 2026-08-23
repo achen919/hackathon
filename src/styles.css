@@ -2293,6 +2293,60 @@ p {
   .prompt-studio__actions { display: grid; grid-template-columns: auto 1fr; position: sticky; bottom: 0; padding-top: 12px; background: #fffdfb; }
 }
 
+.message-row--system { justify-content: center; padding: 14px 8px 10px; }
+.carnival-result-entry { display: flex; flex-direction: column; align-items: center; gap: 8px; width: min(100%, 560px); margin: 14px auto 10px; }
+.carnival-result-entry > time { color: rgba(74, 55, 80, .58); font-size: 10px; }
+.carnival-result-entry .game-result-card { width: 100%; }
+.message-content--result { width: min(100%, 560px); align-items: stretch; }
+.message-content--result > time { align-self: center; margin-top: 8px; }
+
+.game-result-card {
+  position: relative;
+  overflow: hidden;
+  min-height: 310px;
+  border: 1px solid rgba(255, 255, 255, .5);
+  border-radius: 26px;
+  color: #fff;
+  background: linear-gradient(145deg, #6c5bd4 0%, #d67d80 100%);
+  background-size: cover;
+  background-position: center;
+  box-shadow: 0 18px 44px rgba(70, 50, 87, .22);
+}
+.game-result-card::before,
+.game-result-card::after { content: ''; position: absolute; border-radius: 999px; pointer-events: none; }
+.game-result-card::before { width: 190px; height: 190px; top: -72px; right: -40px; background: rgba(255,255,255,.18); filter: blur(2px); }
+.game-result-card::after { width: 130px; height: 130px; bottom: -52px; left: -25px; background: rgba(255,218,174,.28); filter: blur(1px); }
+.game-result-card__content { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 13px; min-height: 310px; padding: 24px 24px 18px; background: linear-gradient(180deg, rgba(31, 23, 48, .1), rgba(31, 23, 48, .6)); }
+.game-result-card__topline { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+.game-result-card__eyebrow { opacity: .78; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.game-result-card__badge { flex: 0 0 auto; padding: 6px 10px; border: 1px solid rgba(255,255,255,.35); border-radius: 999px; background: rgba(255,255,255,.16); font-size: 11px; letter-spacing: 0; text-transform: none; }
+.game-result-card__score { display: flex; align-items: baseline; gap: 8px; margin-top: 4px; }
+.game-result-card__score strong { font-family: Georgia, serif; font-size: 62px; line-height: .9; letter-spacing: -.08em; }
+.game-result-card__score span { color: rgba(255,255,255,.72); font-size: 10px; line-height: 1.45; }
+.game-result-card h3 { max-width: 450px; margin: 0; font-size: clamp(23px, 4vw, 34px); line-height: 1.08; letter-spacing: -.04em; }
+.game-result-card p { max-width: 490px; margin: 0; color: rgba(255,255,255,.86); font-size: 13px; line-height: 1.7; }
+.game-result-card ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.game-result-card li { position: relative; padding-left: 17px; color: rgba(255,255,255,.88); font-size: 11px; line-height: 1.5; }
+.game-result-card li::before { content: '✦'; position: absolute; left: 0; color: #ffd9a8; }
+.game-result-card__footer { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-top: auto; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.2); }
+.game-result-card__footer span { color: rgba(255,255,255,.76); font-size: 11px; line-height: 1.5; }
+.game-result-card__footer button { flex: 0 0 auto; padding: 8px 11px; border: 0; border-radius: 12px; color: #3b2d4e; background: #fff8ef; font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
+.game-result-card__source { color: rgba(255,255,255,.55); font-size: 9px; }
+.game-result-card--generating { animation: result-card-pulse 1.8s ease-in-out infinite; }
+.game-result-card--fallback { background: linear-gradient(145deg, #766bb9 0%, #b96e78 100%); }
+.game-result-card--compact { min-height: 220px; }
+.game-result-card--compact .game-result-card__content { min-height: 220px; padding: 18px; }
+.game-result-card--compact .game-result-card__score strong { font-size: 44px; }
+@keyframes result-card-pulse { 0%, 100% { filter: saturate(.92); } 50% { filter: saturate(1.15) brightness(1.04); } }
+
+@media (max-width: 620px) {
+  .message-row--system { padding-inline: 0; }
+  .game-result-card { border-radius: 22px; }
+  .game-result-card__content { padding: 20px 18px 15px; }
+  .game-result-card__footer { align-items: stretch; flex-direction: column; }
+  .game-result-card__footer button { align-self: flex-start; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

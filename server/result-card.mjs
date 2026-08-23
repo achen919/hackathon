@@ -1,0 +1,117 @@
+﻿import { randomUUID } from 'node:crypto';
+
+function endpointFor(baseUrl, suffix) {
+  const base = new URL(baseUrl);
+  const pathname = base.pathname.replace(/\/+$/, '');
+  if (pathname.endsWith('/v1')) return `${base.origin}${pathname}${suffix}`;
+  return `${base.origin}${pathname}/v1${suffix}`;
+}
+
+async function providerText(response) {
+  const text = await response.text();
+  if (text.length > 2_000_000) throw new Error('AI provider response is too large');
+  return text;
+}
+
+function providerError(status, raw) {
+  const error = new Error(`AI provider returned HTTP ${status}`);
+  error.status = status;
+  error.raw = raw.slice(0, 500);
+  return error;
+}
+
+function jsonFromModel(content) {
+  const text = String(content ?? '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  const parsed = JSON.parse(text);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('AI result evaluator returned invalid JSON');
+  return parsed;
+}
+
+function clampText(value, fallback, max = 500) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return (text || fallback).slice(0, max);
+}
+
+function normalizeCard(value, input, generatedBy = 'ai') {
+  const highlights = Array.isArray(value.highlights)
+    ? value.highlights.filter((item) => typeof item === 'string' && item.trim()).slice(0, 4).map((item) => item.trim().slice(0, 180))
+    : [];
+  return {
+    id: randomUUID(),
+    gameId: input.game.id,
+    gameTitle: input.game.title,
+    templateId: input.game.templateId,
+    status: generatedBy === 'ai' ? 'ready' : 'fallback',
+    badge: clampText(value.badge, '轻松完成', 30),
+    headline: clampText(value.headline, '这一局，留下了一点只属于你们的默契', 120),
+    score: Math.max(0, Math.min(100, Math.round(Number(value.score) || 80))),
+    summary: clampText(value.summary, '你们完成了一次轻松的共同体验，答案不同的地方也值得继续聊。', 300),
+    highlights: highlights.length ? highlights : ['愿意一起完成游戏，就是很好的默契', '不同答案可以成为下一段聊天的入口'],
+    nextPrompt: clampText(value.nextPrompt, '刚才哪个答案最让你意外？为什么？', 180),
+    backgroundPrompt: clampText(value.backgroundPrompt, `一张温暖、抽象、轻松的双人破冰游戏结果卡背景，主题是${input.game.title}，${value.mood ?? '柔和、有光、带一点庆祝感'}，不出现文字、人物脸部或可识别身份。`, 500),
+    generatedBy,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function fallbackValue(input) {
+  return {
+    badge: '轻松完成',
+    headline: '这一局，把彼此的答案放在了同一张桌上',
+    score: 80,
+    summary: `${input.players.a.nickname} 和 ${input.players.b.nickname} 完成了「${input.game.title}」。不急着给关系下结论，先把这一刻留下。`,
+    highlights: ['愿意一起玩完，就是很好的默契', '答案不同的地方，也是一扇新的聊天入口'],
+    nextPrompt: '如果把这一局延长 10 分钟，你们最想继续聊哪个答案？',
+    backgroundPrompt: '温暖、抽象、轻松的双人游戏结果卡背景，柔和紫色与珊瑚色渐变，微小星光和纸张纹理，不出现文字和人物。',
+  };
+}
+
+export function createGameResultService({ fetchImpl = globalThis.fetch, timeoutMs = 30_000 } = {}) {
+  async function evaluate(config, input) {
+    if (!config.apiKey) return normalizeCard(fallbackValue(input), input, 'fallback');
+    const prompt = `请评估一局双人破冰小游戏的结果，并只输出 JSON。不要判断两人是否适合、不要预测感情结果、不要暴露个人资料。语气轻松、具体、尊重边界。\n\n游戏：${JSON.stringify(input.game)}\n玩家：${JSON.stringify(input.players)}\n结果：${JSON.stringify(input.result)}\n\nJSON 字段：badge(不超过10字)、headline(不超过30字)、score(0-100的整数，仅表示本局互动完成度，不表示匹配度)、summary(不超过80字)、highlights(2-3条数组)、nextPrompt(不超过50字)、backgroundPrompt(供生图模型使用的无文字抽象背景描述)、mood(氛围词)。`;
+    const response = await fetchImpl(endpointFor(config.apiBaseUrl, '/chat/completions'), {
+      method: 'POST',
+      redirect: 'error',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey}`, 'User-Agent': 'liangpei-hackathon/1.0' },
+      body: JSON.stringify({ model: config.model, temperature: 0.55, max_tokens: 700, response_format: { type: 'json_object' }, messages: [
+        { role: 'system', content: '你是双人小游戏结果卡评估助手。只输出合法 JSON。' },
+        { role: 'user', content: prompt },
+      ]}),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const raw = await providerText(response);
+    if (!response.ok) throw providerError(response.status, raw);
+    const payload = JSON.parse(raw);
+    const content = payload?.choices?.[0]?.message?.content;
+    return normalizeCard(jsonFromModel(content), input, 'ai');
+  }
+
+  async function generateBackground(config, card) {
+    if (!config.apiKey || !config.imageModel) return card;
+    const response = await fetchImpl(endpointFor(config.apiBaseUrl, '/images/generations'), {
+      method: 'POST', redirect: 'error',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey}`, 'User-Agent': 'liangpei-hackathon/1.0' },
+      body: JSON.stringify({ model: config.imageModel, prompt: card.backgroundPrompt, size: '1024x1024', response_format: 'b64_json', n: 1 }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const raw = await providerText(response);
+    if (!response.ok) throw providerError(response.status, raw);
+    const payload = JSON.parse(raw);
+    const item = payload?.data?.[0];
+    if (typeof item?.b64_json === 'string' && item.b64_json.length < 8_000_000) return { ...card, backgroundUrl: `data:image/png;base64,${item.b64_json}` };
+    if (typeof item?.url === 'string' && item.url.length < 4_000) return { ...card, backgroundUrl: item.url };
+    throw new Error('AI provider returned no image');
+  }
+
+  async function create(config, input) {
+    let card;
+    try { card = await evaluate(config, input); } catch { card = normalizeCard(fallbackValue(input), input, 'fallback'); }
+    if (card.generatedBy === 'ai') {
+      try { card = await generateBackground(config, card); } catch { /* text card remains useful when image service is unavailable */ }
+    }
+    return card;
+  }
+
+  return { create, evaluate, generateBackground };
+}

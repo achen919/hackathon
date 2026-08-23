@@ -115,16 +115,26 @@ function isExclusiveGameState(
     typeof candidate.serverNowMs === 'number';
 }
 
+export interface CarnivalGameCompletion {
+  invitation: CarnivalNetworkGameContext['invitation'];
+  result: unknown;
+  roomId: string;
+  players: { a: { nickname: string }; b: { nickname: string } };
+}
+
 export function CarnivalGameBridge({
   context,
   onUseChatPrompt,
+  onGameComplete,
 }: {
   context: CarnivalNetworkGameContext;
   onUseChatPrompt?: (text: string) => void;
+  onGameComplete?: (completion: CarnivalGameCompletion) => void;
 }) {
   const [actionPending, setActionPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const joiningRef = useRef(false);
+  const reportedCompletionRef = useRef<string | null>(null);
   const invite = useMemo(() => inviteState(context), [context]);
   const exclusiveInvite = useMemo(() => exclusiveInviteState(context), [context]);
   const gameState = invite && isGameState(
@@ -138,6 +148,27 @@ export function CarnivalGameBridge({
     exclusiveInvite.seriesId,
   ) ? context.invitation.game?.definition : null;
   const supportedInvite = invite ?? exclusiveInvite;
+  const completionState = exclusiveGameState ?? gameState;
+  const gameCompleted = Boolean(completionState && (
+    supportedInvite?.status === 'completed' ||
+    ('phase' in completionState && (completionState.phase === 'revealed' || completionState.phase === 'completed'))
+  ));
+
+  useEffect(() => {
+    if (!onGameComplete || !gameCompleted || !completionState || !supportedInvite) return;
+    if (reportedCompletionRef.current === context.inviteId) return;
+    reportedCompletionRef.current = context.inviteId;
+    onGameComplete({
+      invitation: context.invitation,
+      result: completionState,
+      roomId: context.roomId,
+      players: {
+        a: { nickname: context.self.nickname },
+        b: { nickname: context.partner.nickname },
+      },
+    });
+  }, [completionState, context, gameCompleted, onGameComplete, supportedInvite]);
+
   const needsJoin = Boolean(supportedInvite && (
     !supportedInvite.participants.a.joined ||
     (invite && invite.templateId === 'rapid-choice' && invite.status === 'active' && gameState &&
