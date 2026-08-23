@@ -15,6 +15,7 @@ import {
   type CarnivalExclusivePublicState,
 } from './CarnivalExclusiveGameDialog';
 import { exclusiveSeriesById } from '../carnival-exclusive';
+import { CarnivalArcadeGameDialog, normalizeCarnivalArcadePublicState } from '../arcade';
 
 const TEMPLATE_IDS = new Set<CarnivalStableTemplateId>([
   'profile-riddle',
@@ -67,6 +68,7 @@ function exclusiveInviteState(context: CarnivalNetworkGameContext): CarnivalExcl
   const invitation = context.invitation;
   if (invitation.templateId !== 'custom') return null;
   const definition = invitation.game?.definition;
+  if (definition && typeof definition === 'object' && 'engine' in definition && definition.engine === 'arcade-v1') return null;
   const definitionSeriesId = definition && typeof definition === 'object' && 'seriesId' in definition
     ? (definition as { seriesId?: unknown }).seriesId
     : undefined;
@@ -137,6 +139,14 @@ export function CarnivalGameBridge({
   const reportedCompletionRef = useRef<string | null>(null);
   const invite = useMemo(() => inviteState(context), [context]);
   const exclusiveInvite = useMemo(() => exclusiveInviteState(context), [context]);
+  const rawDefinition = context.invitation.game?.definition;
+  const arcadeCandidate = Boolean(rawDefinition && typeof rawDefinition === 'object' && (
+    ('engine' in rawDefinition && rawDefinition.engine === 'arcade-v1') ||
+    ('schemaVersion' in rawDefinition && rawDefinition.schemaVersion === 4)
+  ));
+  const arcadeGameState = arcadeCandidate
+    ? normalizeCarnivalArcadePublicState(rawDefinition, context.inviteId)
+    : null;
   const gameState = invite && isGameState(
     context.invitation.game?.definition,
     context.inviteId,
@@ -185,6 +195,34 @@ export function CarnivalGameBridge({
       joiningRef.current = false;
     });
   }, [context, needsJoin, supportedInvite]);
+
+  useEffect(() => {
+    if (!arcadeCandidate || context.invitation.joinedParticipantIds.includes(context.self.participantId) || joiningRef.current) return;
+    joiningRef.current = true;
+    setActionError(null);
+    void context.sendAction('join').catch(() => {
+      setActionError('暂时没能加入这一局，请关闭后重试。');
+    }).finally(() => {
+      joiningRef.current = false;
+    });
+  }, [arcadeCandidate, context]);
+
+  if (arcadeCandidate) {
+    if (!arcadeGameState) {
+      return (
+        <div className="carnival-game-backdrop" role="presentation">
+          <section className="carnival-game-dialog" role="dialog" aria-modal="true" aria-label="正在同步 AI 游戏">
+            <div className="carnival-game-notice" role="status">
+              <span aria-hidden="true">✦</span><h3>正在同步这份 AI 游戏代码</h3>
+              <p>{actionError ?? '邀请卡与代码版本校验完成后会自动进入。'}</p>
+              <button className="carnival-game-primary" type="button" onClick={context.close}>返回聊天</button>
+            </div>
+          </section>
+        </div>
+      );
+    }
+    return <CarnivalArcadeGameDialog context={context} state={arcadeGameState} onUseChatPrompt={onUseChatPrompt} />;
+  }
 
   if (!supportedInvite) {
     return (

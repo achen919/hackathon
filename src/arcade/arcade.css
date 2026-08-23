@@ -257,3 +257,38 @@
   .arcade-runtime *,
   .generated-game-sandbox * { scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
+
+.arcade-network-dialog {
+  width: min(960px, calc(100vw - 24px));
+  max-height: min(920px, calc(100dvh - 24px));
+  overflow-y: auto;
+}
+
+.arcade-network-presence {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 16px;
+  background: #f4f1fb;
+  color: #655f70;
+  font-size: 13px;
+}
+
+.arcade-network-presence span { padding: 5px 8px; border-radius: 99px; background: #e6e0ee; }
+.arcade-network-presence span.is-ready { background: #dff7eb; color: #287758; }
+.arcade-network-presence b { justify-self: end; color: #5145a4; }
+.arcade-network-result { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; margin-top: 12px; padding: 14px; border-radius: 18px; background: linear-gradient(135deg, #fff4e9, #eee9ff); }
+.arcade-network-result > span { font-size: 30px; }
+.arcade-network-result strong,.arcade-network-result p { display: block; margin: 0; }
+.arcade-network-result p { margin-top: 4px; color: #6f6877; }
+.arcade-network-result button { min-height: 44px; padding: 0 14px; border: 0; border-radius: 14px; background: #6555bb; color: #fff; font-weight: 800; }
+
+@media (max-width: 620px) {
+  .arcade-network-dialog { width: 100%; max-height: 100dvh; border-radius: 0; }
+  .arcade-network-presence { grid-template-columns: 1fr 1fr; }
+  .arcade-network-presence b { grid-column: 1 / -1; justify-self: start; }
+  .arcade-network-result { grid-template-columns: auto 1fr; }
+  .arcade-network-result button { grid-column: 1 / -1; width: 100%; }
+}

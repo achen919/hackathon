@@ -1,10 +1,12 @@
 import { useEffect, useRef } from 'react';
+import { ArcadeGameRuntime, type ArcadeGameDefinition } from '../arcade';
 import type { CarnivalGamePreview } from '../carnival-types';
 import { PromptGamePreviewCard } from './PromptGamePreviewCard';
 
 interface CasePromptGameDialogProps {
   open: boolean;
-  preview: CarnivalGamePreview;
+  preview?: CarnivalGamePreview;
+  localArcade?: ArcadeGameDefinition;
   onClose: () => void;
   onComplete: () => void;
   onRestart: () => void;
@@ -13,6 +15,7 @@ interface CasePromptGameDialogProps {
 export function CasePromptGameDialog({
   open,
   preview,
+  localArcade,
   onClose,
   onComplete,
   onRestart,
@@ -79,12 +82,26 @@ export function CasePromptGameDialog({
           <div><h2 id="case-prompt-game-title">Prompt 已变成可玩游戏</h2></div>
           <button type="button" onClick={onClose} aria-label="收起游戏，返回案例聊天">×</button>
         </header>
-        <PromptGamePreviewCard
-          preview={preview}
-          expired={false}
-          onComplete={onComplete}
-          onRestart={onRestart}
-        />
+        {preview ? (
+          <PromptGamePreviewCard
+            preview={preview}
+            expired={false}
+            onComplete={onComplete}
+            onRestart={onRestart}
+          />
+        ) : localArcade ? (
+          <ArcadeGameRuntime
+            definition={localArcade}
+            viewer="a"
+            players={{ a: { nickname: '角色 A' }, b: { nickname: '角色 B' } }}
+            sessionKey={`case-${localArcade.seed}`}
+            mode="local-preview"
+            allowPerspectiveSwitch
+            onComplete={onComplete}
+          />
+        ) : (
+          <p className="carnival-game-notice" role="alert">这局游戏暂时无法载入，请返回重新生成。</p>
+        )}
       </section>
     </div>
   );

@@ -1,4 +1,6 @@
 export { ArcadeGameRuntime } from './ArcadeGameRuntime';
+export { ArcadePromptPreview } from './ArcadePromptPreview';
+export { CarnivalArcadeGameDialog, normalizeCarnivalArcadePublicState } from './CarnivalArcadeGameDialog';
 export { GeneratedGameSandbox } from './GeneratedGameSandbox';
 export {
   ARCADE_GAME_KINDS,

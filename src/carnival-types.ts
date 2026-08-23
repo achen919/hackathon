@@ -159,6 +159,53 @@ export interface CarnivalExclusiveGameDefinition {
   questions: CarnivalExclusiveGeneratedQuestionDefinition[];
 }
 
+export type CarnivalArcadeKind = 'competition' | 'cooperation' | 'sport' | 'adventure' | 'strategy';
+export type CarnivalArcadePreset =
+  | 'dash-duel'
+  | 'tandem-rescue'
+  | 'basketball-duel'
+  | 'relic-expedition'
+  | 'grid-command';
+
+export interface CarnivalArcadeRoleDefinition {
+  id: string;
+  label: string;
+  objective: string;
+  controls: string[];
+}
+
+/** Public, code-free projection of an executable AI game artifact. */
+export interface CarnivalArcadeGameDefinition {
+  schemaVersion: 4;
+  templateId: 'custom';
+  seriesId: 'prompt-arcade';
+  engine: 'arcade-v1';
+  generatedBy: 'ai' | 'fallback';
+  title: string;
+  eyebrow: string;
+  description: string;
+  whyItFits: string;
+  estimatedMinutes: number;
+  topics: string[];
+  arcade: {
+    kind: CarnivalArcadeKind;
+    preset: CarnivalArcadePreset;
+    theme: 'sunset' | 'neon' | 'forest' | 'ocean' | 'cosmos';
+    difficulty: 'easy' | 'normal' | 'hard';
+    params: Record<string, number>;
+    roles: CarnivalArcadeRoleDefinition[];
+  };
+  artifact: {
+    artifactId: string;
+    codeHash: string;
+    runtimePath: string;
+  };
+}
+
+export type CarnivalPromptGameDefinition =
+  | CarnivalExclusiveGameDefinition
+  | CarnivalArcadeGameDefinition;
+
 export interface CarnivalGamePreviewInput {
   templateId: 'custom';
   seriesId: CarnivalExclusiveSeriesId;
@@ -168,7 +215,7 @@ export interface CarnivalGamePreviewInput {
 export interface CarnivalGamePreview {
   previewToken: string;
   expiresAt: string;
-  game: CarnivalExclusiveGameDefinition;
+  game: CarnivalPromptGameDefinition;
 }
 
 export interface CarnivalCreateInviteInput {
