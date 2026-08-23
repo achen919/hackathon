@@ -125,8 +125,17 @@ function fallbackValue(input) {
   };
 }
 
+function assertResultCardSupported(input) {
+  if (input?.game?.templateId !== 'profile-riddle') return;
+  const error = new Error('Result cards are not available for profile-riddle games');
+  error.code = 'RESULT_CARD_UNSUPPORTED';
+  error.status = 400;
+  throw error;
+}
+
 export function createGameResultService({ fetchImpl = globalThis.fetch, timeoutMs = 30_000 } = {}) {
   async function evaluate(config, input) {
+    assertResultCardSupported(input);
     if (!config.apiKey) return normalizeCard(fallbackValue(input), input, 'fallback');
     const prompt = `请评估一局双人破冰小游戏的结果，并只输出 JSON。不要判断两人是否适合、不要预测感情结果、不要暴露个人资料。语气轻松、具体、尊重边界。\n\n游戏：${JSON.stringify(input.game)}\n玩家：${JSON.stringify(input.players)}\n结果：${JSON.stringify(input.result)}\n\nJSON 字段：badge(不超过10字)、headline(不超过30字)、score(0-100的整数，仅表示本局互动完成度，不表示匹配度)、summary(不超过80字)、highlights(2-3条数组)、nextPrompt(不超过50字)、backgroundPrompt(供生图模型使用的无文字抽象背景描述)、mood(氛围词)。`;
     const response = await fetchImpl(endpointFor(config.apiBaseUrl, '/chat/completions'), {
@@ -182,6 +191,7 @@ export function createGameResultService({ fetchImpl = globalThis.fetch, timeoutM
   }
 
   async function create(config, input) {
+    assertResultCardSupported(input);
     let card;
     try { card = await evaluate(config, input); } catch { card = normalizeCard(fallbackValue(input), input, 'fallback'); }
     try { card = await generateBackground(config, card, input); } catch { /* text card remains useful when image service is unavailable */ }

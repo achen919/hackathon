@@ -108,7 +108,10 @@ function storedResultMessages(matchId: string): MatchMessage[] {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(resultHistoryKey(matchId)) ?? '[]');
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item): item is MatchMessage => Boolean(item && typeof item === 'object' && item.type === 'game_result' && item.gameResult));
+    return parsed.filter((item): item is MatchMessage => Boolean(
+      item && typeof item === 'object' && item.type === 'game_result' && item.gameResult &&
+      item.gameResult.templateId !== 'profile-riddle',
+    ));
   } catch {
     return [];
   }
@@ -188,7 +191,9 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const resultMessages = messages.filter((message) => message.type === 'game_result' && message.gameResult);
+    const resultMessages = messages.filter((message) =>
+      message.type === 'game_result' && message.gameResult && message.gameResult.templateId !== 'profile-riddle'
+    );
     try {
       let serialized = JSON.stringify(resultMessages);
       if (serialized.length > 3_500_000) {
@@ -550,6 +555,7 @@ export default function App() {
   function completeGame(result: TemplateGameResult) {
     setSessionStatus('complete');
     setCompletedSummary(sessionSummary(result));
+    if (result.type === 'profile-riddle') return;
     appendResultCard(result);
     setGameOpen(false);
   }

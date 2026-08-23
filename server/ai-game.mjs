@@ -423,6 +423,25 @@ function normalizedLeakText(value) {
   return String(value).toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
 }
 
+const DIRECT_CHAT_RESTATEMENT_MIN_LENGTH = 6;
+
+function directlyRestatesTargetChat(label, targetMessages) {
+  const normalizedLabel = normalizedLeakText(label);
+  if (normalizedLabel.length < DIRECT_CHAT_RESTATEMENT_MIN_LENGTH) return false;
+  return targetMessages.some((message) => {
+    const normalizedMessage = normalizedLeakText(message);
+    for (
+      let index = 0;
+      index <= normalizedLabel.length - DIRECT_CHAT_RESTATEMENT_MIN_LENGTH;
+      index += 1
+    ) {
+      const fragment = normalizedLabel.slice(index, index + DIRECT_CHAT_RESTATEMENT_MIN_LENGTH);
+      if (normalizedMessage.includes(fragment)) return true;
+    }
+    return false;
+  });
+}
+
 function leaksPrivateContext(game, match) {
   const visible = normalizedLeakText(JSON.stringify(game));
   const publicChat = normalizedLeakText(match.messages.map((message) => message.content).join('\n'));
@@ -449,11 +468,10 @@ function directlyRestatesProfileSignal(game, match) {
   if (!isRecord(game?.questionsByTarget)) return false;
   return ['a', 'b'].some((target) => {
     const user = target === 'a' ? match.user_a : match.user_b;
-    const targetChatText = match.messages
+    const targetMessages = match.messages
       .filter((message) => message.from === target)
-      .map((message) => message.content)
-      .join(' ')
-      .toUpperCase();
+      .map((message) => message.content);
+    const targetChatText = targetMessages.join(' ').toUpperCase();
     const signals = [
       ...safePersonalizationSignals(user, { includeMemories: false }),
       ...SAFE_PERSONALIZATION_SIGNALS.filter((signal) => targetChatText.includes(signal.toUpperCase())),
@@ -461,7 +479,9 @@ function directlyRestatesProfileSignal(game, match) {
     const labels = (game.questionsByTarget[target] ?? [])
       .flatMap((question) => question.options ?? [])
       .map((value) => normalizedLeakText(value));
-    return labels.some((label) => signals.some((signal) => label.includes(signal)));
+    return labels.some((label) =>
+      signals.some((signal) => label.includes(signal)) || directlyRestatesTargetChat(label, targetMessages)
+    );
   });
 }
 

@@ -647,6 +647,14 @@ export function createApiHandler({
       sendJson(response, 400, { error: 'Invalid game result request', request_id: requestId }, requestId);
       return;
     }
+    if (game.templateId === 'profile-riddle') {
+      sendJson(response, 400, {
+        error: 'Result cards are not available for profile-riddle games',
+        code: 'RESULT_CARD_UNSUPPORTED',
+        request_id: requestId,
+      }, requestId);
+      return;
+    }
     try {
       const config = await configStore.get();
       const card = await resultCardService.create(config, {
