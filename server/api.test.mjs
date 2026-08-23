@@ -488,6 +488,7 @@ test('prompt arcade stays playable without an AI key and compiles edited prompts
       assert.match(runtime.headers.get('content-security-policy'), /script-src 'sha256-/);
       assert.doesNotMatch(runtime.headers.get('content-security-policy'), /script-src 'unsafe-inline'/);
       assert.equal(runtime.headers.get('x-arcade-code-hash'), cosmic.game.artifact.codeHash);
+      assert.equal(runtime.headers.get('x-arcade-presentation-only'), '1');
       assert.match(runtimeDocument, /^<!doctype html>/);
 
       const cachedResponse = await generate(cosmicPrompt);

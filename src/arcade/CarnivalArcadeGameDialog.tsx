@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CarnivalApiError } from '../carnival-api';
 import type { CarnivalNetworkGameContext } from '../carnival-types';
-import { GeneratedGameSandbox, type PairPlayInput, type PairPlayMode } from './GeneratedGameSandbox';
+import { GeneratedGameSandbox, type PairPlayInput } from './GeneratedGameSandbox';
 
 type ArcadePhase = 'waiting' | 'countdown' | 'playing' | 'finished';
+type NetworkArcadePreset = 'dash-duel' | 'tandem-rescue' | 'basketball-duel' | 'relic-expedition' | 'grid-command';
 
 interface CarnivalArcadePublicState {
   inviteId: string;
@@ -16,7 +17,7 @@ interface CarnivalArcadePublicState {
   description: string;
   generatedBy: 'ai' | 'fallback';
   arcade: {
-    preset: PairPlayMode;
+    preset: NetworkArcadePreset;
     kind: string;
     roles: Array<{ id: string; label: string; objective: string; controls: string[] }>;
   };
@@ -31,7 +32,7 @@ interface CarnivalArcadePublicState {
   outcome?: { score?: Record<string, number>; reason?: string } | null;
 }
 
-const PRESETS = new Set<PairPlayMode>([
+const PRESETS = new Set<NetworkArcadePreset>([
   'dash-duel', 'tandem-rescue', 'basketball-duel', 'relic-expedition', 'grid-command',
 ]);
 const PHASES = new Set<ArcadePhase>(['waiting', 'countdown', 'playing', 'finished']);
@@ -46,6 +47,39 @@ const NON_FATAL_ACTION_CODES = new Set([
   'ROUND_LIMIT',
   'GAME_COMPLETE',
 ]);
+
+const MOBILE_PRESET_COPY: Record<NetworkArcadePreset, {
+  icon: string;
+  title: string;
+  hint: string;
+  moveLeft: string;
+  moveRight: string;
+}> = {
+  'dash-duel': { icon: '⚡', title: '冲线控制台', hint: '按住前进，抓住时机冲刺', moveLeft: '调整节奏', moveRight: '按住前进' },
+  'tandem-rescue': { icon: '✦', title: '救援控制台', hint: '校准位置，与对方同时发出脉冲', moveLeft: '向左校准', moveRight: '向右校准' },
+  'basketball-duel': { icon: '●', title: '球场控制台', hint: '拖动或使用大按钮完成攻防', moveLeft: '按住向左', moveRight: '按住向右' },
+  'relic-expedition': { icon: '◇', title: '探险控制台', hint: '移动位置，使用你的角色能力', moveLeft: '向左移动', moveRight: '向右移动' },
+  'grid-command': { icon: '⌗', title: '九格指挥台', hint: '先选节点，再锁定本轮指令', moveLeft: '上一格', moveRight: '下一格' },
+};
+
+const MOBILE_ACTION_COPY: Record<string, string> = {
+  boost: '⚡ 立即冲刺',
+  sync: '✦ 发出同步脉冲',
+  jump: '↑ 跳跃越障',
+  guard: '◇ 开启防护',
+};
+
+function useMobileGameShell() {
+  const [mobile, setMobile] = useState(false);
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 620px), (max-height: 520px) and (pointer: coarse)');
+    const update = () => setMobile(query.matches);
+    update();
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+  return mobile;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -62,7 +96,7 @@ export function normalizeCarnivalArcadePublicState(value: unknown, inviteId: str
     typeof value.revision !== 'number' || !Number.isFinite(value.revision) ||
     typeof value.serverNowMs !== 'number' || !Number.isFinite(value.serverNowMs) ||
     !PHASES.has(value.phase as ArcadePhase) || !isRecord(value.arcade) || !isRecord(value.artifact) ||
-    !isRecord(value.self) || !isRecord(value.peer) || !PRESETS.has(value.arcade.preset as PairPlayMode)) return null;
+    !isRecord(value.self) || !isRecord(value.peer) || !PRESETS.has(value.arcade.preset as NetworkArcadePreset)) return null;
   const selfControls = safeControls(value.self.controls);
   const roles = Array.isArray(value.arcade.roles) ? value.arcade.roles : [];
   if (!selfControls || roles.length !== 2 || !roles.every((role) => isRecord(role) && safeControls(role.controls))) return null;
@@ -85,7 +119,7 @@ export function normalizeCarnivalArcadePublicState(value: unknown, inviteId: str
     description: typeof value.description === 'string' ? value.description.slice(0, 240) : '',
     generatedBy: value.generatedBy === 'ai' ? 'ai' : 'fallback',
     arcade: {
-      preset: value.arcade.preset as PairPlayMode,
+      preset: value.arcade.preset as NetworkArcadePreset,
       kind: typeof value.arcade.kind === 'string' ? value.arcade.kind : 'competition',
       roles: roles.map((role) => {
         const item = role as Record<string, unknown>;
@@ -132,13 +166,17 @@ export function CarnivalArcadeGameDialog({
   const continuousTimersRef = useRef(new Map<string, number>());
   const queuedContinuousRef = useRef(new Map<string, PairPlayInput>());
   const readyRetryTimerRef = useRef<number | null>(null);
-  const keeperHoldRef = useRef<{ pointerId: number; startedAt: number } | null>(null);
-  const keeperStopTimerRef = useRef<number | null>(null);
+  const moveHoldRef = useRef<{ pointerId: number; startedAt: number } | null>(null);
+  const moveStopTimerRef = useRef<number | null>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const [hostAim, setHostAim] = useState(0);
   const [hostPower, setHostPower] = useState(0.72);
+  const [hostSelected, setHostSelected] = useState<number | null>(null);
+  const mobileGameShell = useMobileGameShell();
   const closeRef = useRef(context.close);
   closeRef.current = context.close;
+  const sendActionRef = useRef(context.sendAction);
+  sendActionRef.current = context.sendAction;
   const roleDefinition = useMemo(() => state.arcade.roles.find((role) => role.id === state.self.role), [state.arcade.roles, state.self.role]);
   const peerRole = useMemo(() => state.arcade.roles.find((role) => role.id === state.peer.role), [state.arcade.roles, state.peer.role]);
   const rendererState = useMemo(() => ({
@@ -165,15 +203,8 @@ export function CarnivalArcadeGameDialog({
     const input = isRecord(state.self.input) ? state.self.input : {};
     if (typeof input.aim === 'number' && Number.isFinite(input.aim)) setHostAim(Math.max(-1, Math.min(1, input.aim)));
     if (typeof input.power === 'number' && Number.isFinite(input.power)) setHostPower(Math.max(0.25, Math.min(1, input.power)));
+    setHostSelected(Number.isInteger(input.select) && Number(input.select) >= 0 && Number(input.select) <= 8 ? Number(input.select) : null);
   }, [state.self.input, state.self.role]);
-
-  useEffect(() => () => {
-    continuousTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-    continuousTimersRef.current.clear();
-    queuedContinuousRef.current.clear();
-    if (readyRetryTimerRef.current !== null) window.clearTimeout(readyRetryTimerRef.current);
-    if (keeperStopTimerRef.current !== null) window.clearTimeout(keeperStopTimerRef.current);
-  }, []);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -190,7 +221,7 @@ export function CarnivalArcadeGameDialog({
       }
       if (event.key !== 'Tab' || !dialog) return;
       const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), iframe, [tabindex]:not([tabindex="-1"])',
+        'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), iframe:not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])',
       ));
       if (focusable.length === 0) {
         event.preventDefault();
@@ -287,39 +318,104 @@ export function CarnivalArcadeGameDialog({
     });
   };
 
-  const startKeeperMove = (event: React.PointerEvent<HTMLButtonElement>, direction: -1 | 1) => {
+  const startMove = (event: React.PointerEvent<HTMLButtonElement>, direction: -1 | 1) => {
     if (state.phase !== 'playing') return;
     event.preventDefault();
-    if (keeperStopTimerRef.current !== null) {
-      window.clearTimeout(keeperStopTimerRef.current);
-      keeperStopTimerRef.current = null;
+    if (moveStopTimerRef.current !== null) {
+      window.clearTimeout(moveStopTimerRef.current);
+      moveStopTimerRef.current = null;
     }
-    keeperHoldRef.current = { pointerId: event.pointerId, startedAt: performance.now() };
+    moveHoldRef.current = { pointerId: event.pointerId, startedAt: performance.now() };
     event.currentTarget.setPointerCapture(event.pointerId);
     void sendInput({ control: 'move', value: direction, sequence: 0 })?.catch(() => undefined);
   };
 
-  const stopKeeperMove = (event: React.PointerEvent<HTMLButtonElement>) => {
-    const hold = keeperHoldRef.current;
+  const stopMove = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const hold = moveHoldRef.current;
     if (!hold || hold.pointerId !== event.pointerId) return;
-    keeperHoldRef.current = null;
+    moveHoldRef.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     const finish = () => {
-      keeperStopTimerRef.current = null;
+      moveStopTimerRef.current = null;
       void sendInput({ control: 'move', value: 0, sequence: 0 })?.catch(() => undefined);
     };
-    // A quick phone tap must still advance at least one authoritative frame;
-    // otherwise move=-1/+1 and move=0 can land in the same server tick.
+    // A quick phone tap must still advance at least one authoritative frame.
     const remaining = Math.max(0, 180 - (performance.now() - hold.startedAt));
-    keeperStopTimerRef.current = window.setTimeout(finish, remaining);
+    moveStopTimerRef.current = window.setTimeout(finish, remaining);
   };
+
+  const pulseMove = (direction: -1 | 1) => {
+    if (state.phase !== 'playing') return;
+    if (moveStopTimerRef.current !== null) window.clearTimeout(moveStopTimerRef.current);
+    void sendInput({ control: 'move', value: direction, sequence: 0 })?.catch(() => undefined);
+    moveStopTimerRef.current = window.setTimeout(() => {
+      moveStopTimerRef.current = null;
+      void sendInput({ control: 'move', value: 0, sequence: 0 })?.catch(() => undefined);
+    }, 220);
+  };
+
+  useEffect(() => {
+    const releaseMove = () => {
+      if (!moveHoldRef.current && moveStopTimerRef.current === null) return;
+      moveHoldRef.current = null;
+      if (moveStopTimerRef.current !== null) window.clearTimeout(moveStopTimerRef.current);
+      moveStopTimerRef.current = null;
+      void sendInput({ control: 'move', value: 0, sequence: 0 })?.catch(() => undefined);
+    };
+    const onVisibility = () => { if (document.hidden) releaseMove(); };
+    window.addEventListener('blur', releaseMove);
+    document.addEventListener('visibilitychange', onVisibility);
+    if (state.phase !== 'playing') releaseMove();
+    return () => {
+      window.removeEventListener('blur', releaseMove);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [state.phase]);
+
+  useEffect(() => () => {
+    const queuedMove = queuedContinuousRef.current.get('move');
+    const hadLiveMove = moveHoldRef.current !== null || moveStopTimerRef.current !== null ||
+      (queuedMove !== undefined && queuedMove.value !== 0);
+    continuousTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    continuousTimersRef.current.clear();
+    queuedContinuousRef.current.clear();
+    moveHoldRef.current = null;
+    if (readyRetryTimerRef.current !== null) window.clearTimeout(readyRetryTimerRef.current);
+    if (moveStopTimerRef.current !== null) window.clearTimeout(moveStopTimerRef.current);
+    moveStopTimerRef.current = null;
+    if (!hadLiveMove) return;
+    // Keep the current request chain alive and enqueue the release after any
+    // movement already in flight. Closing the dialog must not leave a remote
+    // role moving until it reaches an arena boundary.
+    const sequence = ++seqRef.current;
+    const release = chainRef.current.catch(() => undefined).then(() => sendActionRef.current('arcade.input', {
+      control: 'move',
+      value: 0,
+      seq: sequence,
+      requestId: actionId(),
+    }));
+    chainRef.current = release.catch(() => undefined);
+  }, []);
 
   const finished = state.phase === 'finished';
   const score = isRecord(state.outcome?.score) ? state.outcome?.score : null;
+  const mobileCopy = MOBILE_PRESET_COPY[state.arcade.preset];
+  const actionControl = state.self.controls.find((control) => MOBILE_ACTION_COPY[control]);
+  const controlsEnabled = state.phase === 'playing';
+  const hasCommitted = isRecord(state.self.input) && state.self.input.commit === 1;
 
   return (
     <div className="carnival-game-backdrop arcade-network-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && context.close()}>
-      <section ref={dialogRef} className="carnival-game-dialog arcade-network-dialog" role="dialog" aria-modal="true" aria-labelledby="carnival-arcade-title" tabIndex={-1}>
+      <section
+        ref={dialogRef}
+        className="carnival-game-dialog arcade-network-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="carnival-arcade-title"
+        tabIndex={-1}
+        data-preset={state.arcade.preset}
+        data-phase={state.phase}
+      >
         <header className="carnival-game-header">
           <div>
             <p className="carnival-game-kicker">专属小游戏 · {state.generatedBy === 'ai' ? 'AI 生成代码' : '安全离线代码'} · {context.inviteId.slice(-6)}</p>
@@ -337,6 +433,7 @@ export function CarnivalArcadeGameDialog({
 
         {syncError && <p className="carnival-game-error" role="alert">{syncError}</p>}
         <GeneratedGameSandbox
+          className="arcade-network-sandbox"
           artifact={state.artifact}
           role={state.self.role}
           playMode="network"
@@ -346,27 +443,64 @@ export function CarnivalArcadeGameDialog({
           remoteEvents={state.events}
           allowedControls={state.self.controls}
           paused={state.phase !== 'playing'}
+          presentationOnly={mobileGameShell}
           title={state.title}
           onReady={markReady}
           onInput={sendInput}
         />
 
-        {state.arcade.preset === 'basketball-duel' && (
-          <section className="arcade-mobile-controls" aria-label="手机篮球操作区">
+        {!finished && (
+          <section className="arcade-mobile-controls" aria-label={`${mobileCopy.title}，手机主操作区`} data-preset={state.arcade.preset}>
             <header>
-              <strong>{state.self.role === 'shooter' ? '投手触控台' : '篮筐触控台'}</strong>
-              <span>{state.phase === 'playing' ? '现在可以操作' : state.phase === 'countdown' ? '倒计时后自动解锁' : '等待双方进入同一局'}</span>
+              <span className="arcade-mobile-controls__icon" aria-hidden="true">{mobileCopy.icon}</span>
+              <div><strong>{mobileCopy.title}</strong><small>{roleDefinition?.label ?? state.self.role} · {roleDefinition?.objective ?? mobileCopy.hint}</small></div>
+              <em>{state.phase === 'playing' ? '操作中' : state.phase === 'countdown' ? '准备' : '等待'}</em>
             </header>
-            {state.self.role === 'shooter' ? (
+            {state.arcade.preset === 'basketball-duel' && state.self.role === 'shooter' ? (
               <div className="arcade-mobile-controls__shooter">
                 <label><span>角度 {Math.round(28 + (hostAim + 1) * 22)}°</span><input type="range" min="-1" max="1" step="0.02" value={hostAim} disabled={state.phase !== 'playing'} onChange={(event) => { const value = Number(event.target.value); setHostAim(value); void sendInput({ control: 'aim', value, sequence: 0 })?.catch(() => undefined); }} /></label>
                 <label><span>力度 {Math.round(hostPower * 100)}%</span><input type="range" min="0.25" max="1" step="0.02" value={hostPower} disabled={state.phase !== 'playing'} onChange={(event) => { const value = Number(event.target.value); setHostPower(value); void sendInput({ control: 'power', value, sequence: 0 })?.catch(() => undefined); }} /></label>
-                <button type="button" disabled={state.phase !== 'playing'} onClick={() => { void sendInput({ control: 'shoot', value: 1, sequence: 0 })?.catch(() => undefined); }}>投篮</button>
+                <button className="arcade-mobile-controls__primary" type="button" disabled={!controlsEnabled} onClick={() => { void sendInput({ control: 'shoot', value: 1, sequence: 0 })?.catch(() => undefined); }}>● 投篮</button>
+              </div>
+            ) : state.arcade.preset === 'grid-command' ? (
+              <div className="arcade-mobile-controls__strategy">
+                <div className="arcade-mobile-controls__grid" role="radiogroup" aria-label="选择九格节点">
+                  {Array.from({ length: 9 }, (_, cell) => (
+                    <button
+                      key={cell}
+                      type="button"
+                      role="radio"
+                      aria-checked={hostSelected === cell}
+                      className={hostSelected === cell ? 'is-selected' : ''}
+                      disabled={!controlsEnabled || hasCommitted}
+                      onClick={() => {
+                        setHostSelected(cell);
+                        void sendInput({ control: 'select', value: cell, sequence: 0 })?.catch(() => undefined);
+                      }}
+                    >{cell + 1}</button>
+                  ))}
+                </div>
+                <button className="arcade-mobile-controls__primary" type="button" disabled={!controlsEnabled || hostSelected === null || hasCommitted} onClick={() => { void sendInput({ control: 'commit', value: 1, sequence: 0 })?.catch(() => undefined); }}>{hasCommitted ? '等待对方锁定' : hostSelected === null ? '先选择一个节点' : `锁定 ${hostSelected + 1} 号节点`}</button>
               </div>
             ) : (
-              <div className="arcade-mobile-controls__keeper">
-                <button type="button" disabled={state.phase !== 'playing'} onPointerDown={(event) => startKeeperMove(event, -1)} onPointerUp={stopKeeperMove} onPointerCancel={stopKeeperMove} onLostPointerCapture={stopKeeperMove}>按住向左</button>
-                <button type="button" disabled={state.phase !== 'playing'} onPointerDown={(event) => startKeeperMove(event, 1)} onPointerUp={stopKeeperMove} onPointerCancel={stopKeeperMove} onLostPointerCapture={stopKeeperMove}>按住向右</button>
+              <div className="arcade-mobile-controls__actions">
+                {state.self.controls.includes('move') && (
+                  <div className="arcade-mobile-controls__direction" aria-label="移动控制">
+                    {([-1, 1] as const).map((direction) => (
+                      <button
+                        key={direction}
+                        type="button"
+                        disabled={!controlsEnabled}
+                        onPointerDown={(event) => startMove(event, direction)}
+                        onPointerUp={stopMove}
+                        onPointerCancel={stopMove}
+                        onLostPointerCapture={stopMove}
+                        onClick={(event) => { if (event.detail === 0) pulseMove(direction); }}
+                      ><span aria-hidden="true">{direction < 0 ? '←' : '→'}</span>{direction < 0 ? mobileCopy.moveLeft : mobileCopy.moveRight}</button>
+                    ))}
+                  </div>
+                )}
+                {actionControl && <button className="arcade-mobile-controls__primary" type="button" disabled={!controlsEnabled} onClick={() => { void sendInput({ control: actionControl, value: 1, sequence: 0 })?.catch(() => undefined); }}>{MOBILE_ACTION_COPY[actionControl]}</button>}
               </div>
             )}
           </section>

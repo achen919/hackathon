@@ -49,6 +49,9 @@ export interface GeneratedGameSandboxProps {
   timeoutMs?: number;
   title?: string;
   className?: string;
+  /** Keep the generated iframe as a visual renderer while host-owned controls
+   * are the only input surface (used by the mobile network game shell). */
+  presentationOnly?: boolean;
   fallback?: ReactNode;
   onInput: (input: PairPlayInput) => void | Promise<void>;
   /**
@@ -201,6 +204,7 @@ export function GeneratedGameSandbox({
   timeoutMs = 8_000,
   title = 'AI 生成的双人小游戏',
   className = '',
+  presentationOnly = false,
   fallback,
   onInput,
   onComplete,
@@ -213,6 +217,7 @@ export function GeneratedGameSandbox({
   const [status, setStatus] = useState<SandboxStatus>('verifying');
   const [verifiedRuntimeUrl, setVerifiedRuntimeUrl] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [presentationSupport, setPresentationSupport] = useState<boolean | null>(null);
   const channelRef = useRef(createChannel());
   const sequenceRef = useRef(0);
   const rateRef = useRef({ startedAt: performance.now(), count: 0 });
@@ -237,9 +242,10 @@ export function GeneratedGameSandbox({
     state: stateSnapshot,
     events: eventSnapshot,
     paused,
+    presentationOnly,
     reducedMotion,
     controls: controlList,
-  }), [controlList, eventSnapshot, paused, reducedMotion, resolvedPlayMode, stateSnapshot]);
+  }), [controlList, eventSnapshot, paused, presentationOnly, reducedMotion, resolvedPlayMode, stateSnapshot]);
   const syncSignature = useMemo(() => JSON.stringify(syncPayload), [syncPayload]);
 
   const reportError = useCallback((message: string) => {
@@ -293,6 +299,7 @@ export function GeneratedGameSandbox({
     setStatus('verifying');
     setVerifiedRuntimeUrl(null);
     setErrorMessage(null);
+    setPresentationSupport(null);
     frameLoadCountRef.current = 0;
     bootstrapSeenRef.current = false;
     initSentRef.current = false;
@@ -315,12 +322,14 @@ export function GeneratedGameSandbox({
       if (disposed || controller.signal.aborted) return;
       const contentType = response.headers.get('Content-Type')?.split(';', 1)[0]?.trim().toLowerCase();
       const codeHash = response.headers.get('X-Arcade-Code-Hash');
+      const presentationHeader = response.headers.get('X-Arcade-Presentation-Only');
       const finalUrl = safeRuntimeUrl(response.url);
       if (!response.ok || response.redirected || finalUrl !== runtimeUrl || contentType !== 'text/html' || codeHash !== artifact.codeHash) {
         throw new Error('RUNTIME_VERSION_MISMATCH');
       }
       window.clearTimeout(verificationTimer);
       preflightRef.current = null;
+      setPresentationSupport(presentationHeader === '1');
       setVerifiedRuntimeUrl(runtimeUrl);
       setStatus('loading');
       timeoutRef.current = window.setTimeout(() => {
@@ -383,6 +392,10 @@ export function GeneratedGameSandbox({
         setErrorMessage(null);
         onReady?.();
       } else if (data.type === 'game.input') {
+        // On mobile network play the host is the only input surface. Legacy or
+        // non-conforming generated documents can render, but cannot race or
+        // cancel the host's authoritative controls.
+        if (presentationOnly) return;
         if (!hasOnlyKeys(data, ['pairplay', 'type', 'channel', 'control', 'value'])) return;
         if (typeof data.control !== 'string' || !controls.has(data.control)) return;
         const hasValue = Object.prototype.hasOwnProperty.call(data, 'value');
@@ -416,7 +429,7 @@ export function GeneratedGameSandbox({
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [controls, mode, onComplete, onEscape, onInput, onReady, reportError, sendInit, status]);
+  }, [controls, mode, onComplete, onEscape, onInput, onReady, presentationOnly, reportError, sendInit, status]);
 
   useEffect(() => {
     if (status !== 'ready') return;
@@ -473,7 +486,13 @@ export function GeneratedGameSandbox({
   };
 
   return (
-    <section className={`generated-game-sandbox ${className}`.trim()} aria-label={title} data-code-hash={artifact.codeHash}>
+    <section
+      className={`generated-game-sandbox ${presentationOnly ? 'is-presentation-only' : ''} ${presentationOnly && presentationSupport === false ? 'is-legacy-presentation' : ''} ${className}`.trim()}
+      aria-label={title}
+      data-code-hash={artifact.codeHash}
+      data-mode={mode}
+      data-play-mode={resolvedPlayMode}
+    >
       <header>
         <span><i className={`is-${status}`} aria-hidden="true" />{status === 'ready' ? 'AI GAME · LIVE' : status === 'verifying' ? '正在校验游戏版本' : status === 'loading' ? '正在启动隔离游戏' : status === 'stopped' ? '游戏已停止' : '游戏启动失败'}</span>
         <small title={artifact.codeHash}>版本 {artifact.codeHash.slice(0, 8)}</small>
@@ -485,6 +504,8 @@ export function GeneratedGameSandbox({
             ref={iframeRef}
             src={verifiedRuntimeUrl}
             title={title}
+            tabIndex={presentationOnly ? -1 : undefined}
+            aria-hidden={presentationOnly ? true : undefined}
             sandbox="allow-scripts"
             allow=""
             referrerPolicy="no-referrer"

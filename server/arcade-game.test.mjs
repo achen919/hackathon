@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
+import { Script as VmScript } from 'node:vm';
 import {
   ARCADE_GAME_ENGINE,
   ARCADE_GAME_KINDS,
@@ -15,9 +16,17 @@ import {
   buildArcadeGameDefinition,
   createArcadeSession,
   isArcadeGamePayload,
+  supportsArcadePresentationOnly,
 } from './arcade-game.mjs';
 
 const match = { match_id: 'arcade-test-match', messages: [] };
+const PRESET_PAIRS = [
+  ['competition', 'dash-duel'],
+  ['cooperation', 'tandem-rescue'],
+  ['sport', 'basketball-duel'],
+  ['adventure', 'relic-expedition'],
+  ['strategy', 'grid-command'],
+];
 
 function payload(overrides = {}) {
   return {
@@ -38,16 +47,9 @@ function payload(overrides = {}) {
 }
 
 test('accepts only the five paired preset kinds and expands server-owned roles and numeric params', () => {
-  const pairs = [
-    ['competition', 'dash-duel'],
-    ['cooperation', 'tandem-rescue'],
-    ['sport', 'basketball-duel'],
-    ['adventure', 'relic-expedition'],
-    ['strategy', 'grid-command'],
-  ];
-  assert.deepEqual([...ARCADE_GAME_KINDS], pairs.map(([kind]) => kind));
-  assert.deepEqual([...ARCADE_GAME_PRESETS], pairs.map(([, preset]) => preset));
-  for (const [kind, preset] of pairs) {
+  assert.deepEqual([...ARCADE_GAME_KINDS], PRESET_PAIRS.map(([kind]) => kind));
+  assert.deepEqual([...ARCADE_GAME_PRESETS], PRESET_PAIRS.map(([, preset]) => preset));
+  for (const [kind, preset] of PRESET_PAIRS) {
     const candidate = payload({ kind, preset });
     assert.equal(isArcadeGamePayload(candidate), true, preset);
     const definition = buildArcadeGameDefinition(candidate, {
@@ -139,37 +141,95 @@ test('fallback runtime bootstraps PairPlay and provides a local-opponent preview
   assert.match(FALLBACK_ARCADE_DOCUMENT, /Math\.sin\(now\/620\)/u);
   assert.match(FALLBACK_ARCADE_DOCUMENT, /grid-template-rows:minmax\(0,1fr\) auto/u);
   assert.match(FALLBACK_ARCADE_DOCUMENT, /setPointerCapture/u);
-  assert.match(FALLBACK_ARCADE_DOCUMENT, /keeperPointerMove/u);
+  assert.match(FALLBACK_ARCADE_DOCUMENT, /function dragMove/u);
   assert.match(FALLBACK_ARCADE_DOCUMENT, /按住向左/u);
+  assert.match(FALLBACK_ARCADE_DOCUMENT, /presentationOnly/u);
+  assert.match(FALLBACK_ARCADE_DOCUMENT, /pairplay-presentation/u);
+  assert.match(FALLBACK_ARCADE_DOCUMENT, /controls\.hidden=presentationOnly/u);
+  assert.equal(supportsArcadePresentationOnly(FALLBACK_ARCADE_DOCUMENT), true);
+  assert.match(FALLBACK_ARCADE_DOCUMENT, /冲刺加速/u);
+  assert.match(FALLBACK_ARCADE_DOCUMENT, /同步脉冲/u);
+  assert.match(FALLBACK_ARCADE_DOCUMENT, /跳跃探索/u);
+  assert.match(FALLBACK_ARCADE_DOCUMENT, /举盾防护/u);
+  assert.match(FALLBACK_ARCADE_DOCUMENT, /for\(let index=0;index<9/u);
+  assert.match(FALLBACK_ARCADE_DOCUMENT, /落点 /u);
+  assert.match(FALLBACK_ARCADE_DOCUMENT, /mode==='dash-duel'/u);
+  assert.match(FALLBACK_ARCADE_DOCUMENT, /mode==='tandem-rescue'/u);
+  assert.match(FALLBACK_ARCADE_DOCUMENT, /mode==='relic-expedition'/u);
+  assert.match(FALLBACK_ARCADE_DOCUMENT, /mode==='grid-command'/u);
   assert.doesNotMatch(FALLBACK_ARCADE_DOCUMENT, /等待双方进入游戏/u);
+  const script = FALLBACK_ARCADE_DOCUMENT.match(/<script>([\s\S]*?)<\/script>/u)?.[1];
+  assert.equal(typeof script, 'string');
+  assert.doesNotThrow(() => new VmScript(script));
 });
 
-test('basketball documents must expose a real mobile pointer control path', () => {
-  assert.equal(isArcadeGamePayload(payload()), true);
-  assert.equal(isArcadeGamePayload(payload({
-    document: FALLBACK_ARCADE_DOCUMENT.replaceAll('pointermove', 'mousemove'),
-  })), false);
-  assert.equal(isArcadeGamePayload(payload({
-    document: FALLBACK_ARCADE_DOCUMENT.replaceAll('setPointerCapture', 'capturePointer'),
-  })), false);
-});
-
-test('keeps persisted schema v4 basketball invitations readable after the mobile gate', () => {
-  const current = buildArcadeGameDefinition(payload(), {
-    id: 'persisted-basketball-v4', matchId: 'persisted-match', generatedBy: 'fallback',
-  });
-  const legacyDocument = current.artifact.document
-    .replaceAll('pointermove', 'mousemove')
-    .replaceAll('setPointerCapture', 'capturePointer');
-  const persisted = {
-    ...current,
-    artifact: {
-      ...current.artifact,
-      document: legacyDocument,
-      codeHash: createHash('sha256').update(legacyDocument).digest('hex'),
-    },
+test('new documents for all five presets must expose their complete mobile control path', () => {
+  const controlsByPreset = {
+    'dash-duel': ['move', 'boost'],
+    'tandem-rescue': ['move', 'sync'],
+    'basketball-duel': ['aim', 'power', 'shoot', 'move'],
+    'relic-expedition': ['move', 'jump', 'guard'],
+    'grid-command': ['select', 'commit'],
   };
-  assert.deepEqual(assertArcadeGameDefinition(persisted), persisted);
+  for (const [kind, preset] of PRESET_PAIRS) {
+    const candidate = payload({ kind, preset });
+    assert.equal(isArcadeGamePayload(candidate), true, preset);
+    for (const control of controlsByPreset[preset]) {
+      assert.equal(isArcadeGamePayload({
+        ...candidate,
+        document: candidate.document.replaceAll(`'${control}'`, `'missing-${control}'`),
+      }), false, `${preset} requires ${control}`);
+    }
+    assert.equal(isArcadeGamePayload({
+      ...candidate,
+      document: candidate.document.replaceAll('setPointerCapture', 'capturePointer'),
+    }), false, `${preset} requires pointer capture`);
+    assert.equal(isArcadeGamePayload({
+      ...candidate,
+      document: candidate.document.replaceAll('pointerdown', 'mousedown'),
+    }), false, `${preset} requires pointerdown`);
+    assert.equal(isArcadeGamePayload({
+      ...candidate,
+      document: candidate.document.replaceAll('touch-action', 'touch-behavior'),
+    }), false, `${preset} requires touch-action`);
+    assert.equal(isArcadeGamePayload({
+      ...candidate,
+      document: candidate.document.replace('pairplay-presentation', 'legacy-presentation'),
+    }), false, `${preset} requires host-only presentation contract`);
+    assert.equal(isArcadeGamePayload({
+      ...candidate,
+      document: candidate.document.replaceAll('controls.hidden=presentationOnly', 'controls.hidden=false'),
+    }), false, `${preset} must hide generated controls in host-only mode`);
+    const withoutPointerMove = {
+      ...candidate,
+      document: candidate.document.replaceAll('pointermove', 'mousemove'),
+    };
+    assert.equal(isArcadeGamePayload(withoutPointerMove), preset === 'grid-command', `${preset} move gesture`);
+  }
+});
+
+test('keeps persisted schema v4 invitations for all five presets readable after the mobile gate', () => {
+  for (const [kind, preset] of PRESET_PAIRS) {
+    const current = buildArcadeGameDefinition(payload({ kind, preset }), {
+      id: `persisted-${preset}-v4`, matchId: 'persisted-match', generatedBy: 'fallback',
+    });
+    const legacyDocument = current.artifact.document
+      .replaceAll('pointermove', 'mousemove')
+      .replaceAll('setPointerCapture', 'capturePointer')
+      .replaceAll('touch-action', 'touch-behavior')
+      .replace('pairplay-presentation', 'legacy-presentation')
+      .replaceAll('controls.hidden=presentationOnly', 'controls.hidden=false');
+    const persisted = {
+      ...current,
+      artifact: {
+        ...current.artifact,
+        document: legacyDocument,
+        codeHash: createHash('sha256').update(legacyDocument).digest('hex'),
+      },
+    };
+    assert.deepEqual(assertArcadeGameDefinition(persisted), persisted, preset);
+    assert.equal(supportsArcadePresentationOnly(legacyDocument), false, preset);
+  }
 });
 
 test('classifies prompts across all presets and defaults the prompt arcade to basketball', () => {
@@ -222,6 +282,10 @@ test('runs an authoritative basketball frame with roles, sequenced input, and pr
   assert.equal(applyArcadeAction(definition, session, 'player-b', {
     type: 'arcade-input', seq: 2, control: 'move', value: 1,
   }, 2_050).code, 'ACTION_THROTTLED');
+  assert.equal(applyArcadeAction(definition, session, 'player-b', {
+    type: 'arcade-input', seq: 2, control: 'move', value: 0,
+  }, 2_050).ok, true, 'an emergency release must bypass the continuous-input throttle');
+  assert.equal(session.inputsByParticipant['player-b'].move, 0);
   assert.equal(applyArcadeAction(definition, session, 'player-a', {
     type: 'arcade-input', seq: 4, control: 'aim', value: -0.2,
   }, 2_050).code, 'ACTION_THROTTLED');
@@ -230,7 +294,7 @@ test('runs an authoritative basketball frame with roles, sequenced input, and pr
   }, 2_050).code, 'STALE_ACTION');
 
   const advanced = applyArcadeAction(definition, session, 'player-b', {
-    type: 'arcade-tick', seq: 2,
+    type: 'arcade-tick', seq: 3,
   }, 2_501);
   assert.equal(advanced.ok, true);
   assert.equal(session.frame.tick > 0, true);
@@ -241,7 +305,7 @@ test('runs an authoritative basketball frame with roles, sequenced input, and pr
   assert.equal(shooterView.self.role, 'shooter');
   assert.equal(keeperView.self.role, 'keeper');
   assert.deepEqual(shooterView.self.input, { aim: 0.3, power: 0.8, shoot: 1 });
-  assert.deepEqual(keeperView.self.input, { move: -1 });
+  assert.deepEqual(keeperView.self.input, { move: 0 });
   assert.deepEqual(shooterView.events, keeperView.events);
   assert.equal(shooterView.events.some((event) => event.actorRole === 'shooter' && event.control === 'shoot'), true);
   assert.equal(JSON.stringify(shooterView.events).includes('player-a'), false);
@@ -249,6 +313,115 @@ test('runs an authoritative basketball frame with roles, sequenced input, and pr
   assert.equal('assignments' in shooterView, false);
   assert.equal('inputsByParticipant' in shooterView, false);
   assert.equal(JSON.stringify(keeperView).includes('"aim":0.3'), false);
+});
+
+test('normalizes persisted generic frames and advances public positions from authoritative move input', () => {
+  const movablePresets = [
+    ['competition', 'dash-duel'],
+    ['cooperation', 'tandem-rescue'],
+    ['adventure', 'relic-expedition'],
+  ];
+  for (const [kind, preset] of movablePresets) {
+    const definition = buildArcadeGameDefinition(payload({ kind, preset }), {
+      id: `moving-${preset}`, matchId: 'moving-match', generatedBy: 'ai',
+    });
+    const session = createArcadeSession(definition, ['a', 'b'], 'a', 0);
+    delete session.frame.positions;
+    delete session.frame.movement;
+    delete session.frame.grid;
+    delete session.generic;
+    session.lastContinuousAtByParticipant.a = 900;
+
+    const legacyView = arcadeSessionProjection(definition, session, 'a');
+    const startX = Math.round(definition.arcade.params.arenaWidth * 0.14);
+    assert.equal(legacyView.frame.positions.primary.x, startX, `${preset} legacy primary position`);
+    assert.deepEqual(legacyView.frame.movement, { primary: 0, secondary: 0 });
+    assert.equal(legacyView.frame.grid, null);
+
+    assert.equal(applyArcadeAction(definition, session, 'a', { type: 'arcade-ready', seq: 0 }, 0).ok, true);
+    assert.equal(applyArcadeAction(definition, session, 'b', { type: 'arcade-ready', seq: 0 }, 0).ok, true);
+    assert.equal(applyArcadeAction(definition, session, 'a', {
+      type: 'arcade-input', seq: 1, control: 'move', value: 1,
+    }, 1_001).ok, true, preset);
+    assert.equal(session.frame.movement.primary, 1, `${preset} immediate movement feedback`);
+    assert.equal(applyArcadeAction(definition, session, 'a', {
+      type: 'arcade-tick', seq: 2,
+    }, 1_501).ok, true);
+
+    const movingView = arcadeSessionProjection(definition, session, 'a');
+    assert.equal(movingView.frame.positions.primary.x > startX, true, `${preset} authoritative x movement`);
+    assert.equal(movingView.frame.movement.primary, 1);
+    assert.equal('assignments' in movingView, false);
+    assert.equal('inputsByParticipant' in movingView, false);
+
+    assert.equal(applyArcadeAction(definition, session, 'a', {
+      type: 'arcade-input', seq: 3, control: 'move', value: 0,
+    }, 1_601).ok, true);
+    assert.equal(arcadeSessionProjection(definition, session, 'a').frame.movement.primary, 0);
+  }
+});
+
+test('keeps grid selections private until both commits, then publishes and resets the round', () => {
+  const definition = buildArcadeGameDefinition(payload({ kind: 'strategy', preset: 'grid-command' }), {
+    id: 'private-grid-command', matchId: 'private-grid-match', generatedBy: 'ai',
+  });
+  const session = createArcadeSession(definition, ['a', 'b'], 'a', 0);
+  assert.equal(applyArcadeAction(definition, session, 'a', { type: 'arcade-ready', seq: 0 }, 0).ok, true);
+  assert.equal(applyArcadeAction(definition, session, 'b', { type: 'arcade-ready', seq: 0 }, 0).ok, true);
+  assert.equal(applyArcadeAction(definition, session, 'a', {
+    type: 'arcade-input', seq: 1, control: 'select', value: 7,
+  }, 1_001).ok, true);
+
+  let left = arcadeSessionProjection(definition, session, 'a');
+  let right = arcadeSessionProjection(definition, session, 'b');
+  assert.deepEqual(left.events.filter((event) => event.control === 'select').map((event) => event.value), [7]);
+  assert.deepEqual(right.events.filter((event) => event.control === 'select'), []);
+  assert.deepEqual(left.frame.event, { type: 'select', role: 'coral-commander' });
+  assert.equal(right.frame.event, null);
+  assert.equal(left.frame.grid, null);
+  assert.equal(right.frame.grid, null);
+
+  assert.equal(applyArcadeAction(definition, session, 'b', {
+    type: 'arcade-input', seq: 1, control: 'select', value: 2,
+  }, 1_001).ok, true);
+  left = arcadeSessionProjection(definition, session, 'a');
+  right = arcadeSessionProjection(definition, session, 'b');
+  assert.deepEqual(left.events.filter((event) => event.control === 'select').map((event) => event.value), [7]);
+  assert.deepEqual(right.events.filter((event) => event.control === 'select').map((event) => event.value), [2]);
+  assert.equal(left.frame.event, null);
+  assert.deepEqual(right.frame.event, { type: 'select', role: 'blue-commander' });
+  assert.deepEqual(left.self.input, { select: 7 });
+  assert.deepEqual(right.self.input, { select: 2 });
+
+  assert.equal(applyArcadeAction(definition, session, 'a', {
+    type: 'arcade-input', seq: 2, control: 'commit', value: 1,
+  }, 1_101).ok, true);
+  assert.equal(applyArcadeAction(definition, session, 'b', {
+    type: 'arcade-input', seq: 2, control: 'commit', value: 1,
+  }, 1_101).ok, true);
+
+  left = arcadeSessionProjection(definition, session, 'a');
+  right = arcadeSessionProjection(definition, session, 'b');
+  assert.equal(left.frame.round, 2);
+  assert.deepEqual(left.frame.score, { primary: 1, secondary: 0, team: 0 });
+  assert.deepEqual(left.frame.grid, {
+    round: 1,
+    selections: { primary: 7, secondary: 2 },
+    result: 'primary',
+  });
+  assert.deepEqual(right.frame.grid, left.frame.grid);
+  assert.deepEqual(left.self.input, {});
+  assert.deepEqual(right.self.input, {});
+  assert.deepEqual(session.generic.selectedByParticipant, {});
+  assert.deepEqual(session.generic.committedByParticipant, {});
+  assert.deepEqual(left.events.filter((event) => event.control === 'select').map((event) => event.value), [7]);
+  assert.deepEqual(right.events.filter((event) => event.control === 'select').map((event) => event.value), [2]);
+
+  assert.equal(applyArcadeAction(definition, session, 'a', {
+    type: 'arcade-input', seq: 3, control: 'select', value: 4,
+  }, 1_201).ok, true);
+  assert.deepEqual(arcadeSessionProjection(definition, session, 'a').self.input, { select: 4 });
+  assert.deepEqual(arcadeSessionProjection(definition, session, 'b').self.input, {});
 });
 
 test('runs bounded authoritative actions for competition, cooperation, adventure, and strategy presets', () => {
@@ -303,7 +476,8 @@ test('runs bounded authoritative actions for competition, cooperation, adventure
     item.check(session.frame);
     const left = arcadeSessionProjection(definition, session, 'a');
     const right = arcadeSessionProjection(definition, session, 'b');
-    assert.deepEqual(left.events, right.events);
+    if (item.preset === 'grid-command') assert.notDeepEqual(left.events, right.events);
+    else assert.deepEqual(left.events, right.events);
     assert.equal(left.events.some((event) => event.actorRole === definition.arcade.roles[0].id), true);
     assert.equal(JSON.stringify(left.events).includes('"a"'), false);
   }

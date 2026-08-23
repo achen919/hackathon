@@ -586,6 +586,7 @@ test('arcade preview serves isolated runtime, reuses it byte-for-byte, and keeps
     assert.equal(previewRuntime.headers.get('cache-control'), 'no-store');
     assert.equal(previewRuntime.headers.get('x-content-type-options'), 'nosniff');
     assert.equal(previewRuntime.headers.get('x-arcade-code-hash'), preview.payload.game.artifact.codeHash);
+    assert.equal(previewRuntime.headers.get('x-arcade-presentation-only'), '1');
     assert.match(previewRuntime.headers.get('content-security-policy'), /default-src 'none'/);
     assert.match(previewRuntime.headers.get('content-security-policy'), /sandbox allow-scripts/);
     assert.match(previewRuntime.headers.get('content-security-policy'), /connect-src 'none'/);
