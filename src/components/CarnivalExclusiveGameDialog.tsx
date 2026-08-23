@@ -454,7 +454,7 @@ function ExclusivePresence({ person, label, peer = false }: {
 }) {
   return (
     <div className={`carnival-game-person ${peer ? '' : 'is-me'}`}>
-      <span className="carnival-game-avatar" aria-hidden="true">{person.nickname.trim().slice(0, 1) || '?'}</span>
+      <span className={`carnival-game-avatar is-${person.gender}`} aria-hidden="true">{person.nickname.trim().slice(0, 1) || '?'}</span>
       <span><strong>{person.nickname || label}</strong><small>{label} · {person.joined ? '已加入' : '等待加入'}</small></span>
       <i className={person.online ? 'is-online' : ''} aria-hidden="true" />
     </div>
@@ -595,7 +595,7 @@ function ExclusiveRound({
         {Array.from({ length: roundCount }, (_, index) => <i key={index} className={index <= state.roundIndex ? 'is-active' : ''} />)}
       </div>
       <div className="carnival-game-turn">
-        <span className="carnival-game-avatar" aria-hidden="true">{invite.participants[participant].nickname.trim().slice(0, 1)}</span>
+        <span className={`carnival-game-avatar is-${invite.participants[participant].gender}`} aria-hidden="true">{invite.participants[participant].nickname.trim().slice(0, 1)}</span>
         <span><strong>{invite.participants[participant].nickname}</strong><small>{mineToAnswer ? '正在私密作答' : `正在猜 ${protagonist.nickname} 会怎么选`}</small></span>
         <em>仅自己可见</em>
       </div>

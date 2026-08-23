@@ -1,0 +1,627 @@
+/*
+ * Liangpei romance theme
+ * Visual-only overrides: color, shadow and non-layout decoration.
+ */
+:root {
+  color-scheme: light;
+  --theme-primary: #fd999a;
+  --theme-secondary: #ffb3c6;
+  --theme-accent: #d7fff1;
+  --theme-background: #fff5f7;
+  --theme-text: #4a2530;
+  --theme-icon-deep: #ff6b8a;
+  --theme-icon-mid: #fd999a;
+  --theme-icon-light: #ffb3c6;
+  --theme-male: #a3daff;
+  --theme-male-soft: #eef8ff;
+  --theme-male-ink: #356f96;
+  --theme-surface: #fffcfd;
+  --theme-surface-soft: #fff8fa;
+  --theme-primary-soft: #ffe9ef;
+  --theme-secondary-soft: #fff0f4;
+  --theme-accent-ink: #2f7560;
+  --theme-muted: #7c5963;
+  --theme-line: #f1d5dc;
+  --ink: var(--theme-text);
+  --muted: var(--theme-muted);
+  --line: var(--theme-line);
+  --paper: var(--theme-surface);
+  --canvas: var(--theme-background);
+  --violet: var(--theme-primary);
+  --violet-deep: var(--theme-icon-deep);
+  --violet-soft: var(--theme-primary-soft);
+  --coral: var(--theme-secondary);
+  --coral-soft: var(--theme-secondary-soft);
+  --green: var(--theme-accent-ink);
+  --shadow: 0 20px 60px rgba(112, 52, 70, 0.12);
+}
+
+body {
+  color: var(--theme-text);
+  background:
+    radial-gradient(circle at 9% 12%, rgba(253,153,154,.2), transparent 27%),
+    radial-gradient(circle at 91% 86%, rgba(215,255,241,.72), transparent 31%),
+    radial-gradient(circle at 78% 8%, rgba(255,179,198,.18), transparent 22%),
+    var(--theme-background);
+}
+
+button:focus-visible,
+textarea:focus-visible,
+input:focus-visible,
+select:focus-visible { outline-color: rgba(255,107,138,.34); }
+
+::selection { background: var(--theme-accent); color: var(--theme-text); }
+
+/* Main chat */
+.app-shell {
+  border-color: rgba(253,153,154,.28);
+  background: var(--theme-surface);
+  box-shadow: var(--shadow);
+}
+
+.brand-rail { background: linear-gradient(180deg, #4a2530, #663544); }
+
+.brand-mark {
+  background: linear-gradient(135deg, var(--theme-icon-deep), var(--theme-secondary));
+  color: var(--theme-text);
+  box-shadow: 0 10px 24px rgba(255,107,138,.28);
+}
+
+.rail-button { color: var(--theme-icon-light); }
+.rail-button:hover,
+.rail-button.is-active { background: rgba(215,255,241,.16); color: var(--theme-accent); }
+
+.match-sidebar,
+.context-panel { background: rgba(255,248,250,.96); }
+
+.match-list-item.is-active,
+.pair-profile-preview,
+.round-card,
+.safety-note,
+.pair-profile-card {
+  border-color: rgba(253,153,154,.22);
+  background: var(--theme-surface);
+  box-shadow: 0 12px 30px rgba(112,52,70,.07);
+}
+
+.icon-button { color: var(--theme-icon-mid); }
+.icon-button:hover { background: var(--theme-primary-soft); color: var(--theme-icon-deep); }
+
+.unread-dot,
+.perspective-switch__dot.is-violet,
+.perspective-switch__dot.is-coral { background: var(--theme-icon-deep); }
+
+.carnival-entry {
+  border-color: rgba(253,153,154,.28);
+  background: linear-gradient(135deg, var(--theme-primary-soft), rgba(215,255,241,.72));
+  box-shadow: 0 10px 24px rgba(112,52,70,.08);
+}
+.carnival-entry:hover { border-color: var(--theme-icon-deep); }
+.carnival-entry__icon { background: var(--theme-primary); color: var(--theme-text); }
+
+.avatar--violet { background: linear-gradient(135deg, var(--theme-primary), var(--theme-icon-deep)); }
+.avatar--coral { background: linear-gradient(135deg, var(--theme-secondary), var(--theme-primary)); }
+
+.chat-panel,
+.chat-header,
+.chat-composer { background: var(--theme-surface); }
+
+.chat-timeline {
+  background:
+    radial-gradient(circle at 50% 7%, rgba(253,153,154,.08), transparent 25%),
+    radial-gradient(circle at 93% 42%, rgba(215,255,241,.32), transparent 20%),
+    var(--theme-surface-soft);
+  scrollbar-color: var(--theme-secondary) transparent;
+}
+
+.timeline-date span,
+.perspective-switch,
+.pair-profile-card__counts span,
+.round-list li > span { background: var(--theme-secondary-soft); }
+
+.perspective-switch { border-color: var(--theme-line); }
+.perspective-switch button.is-active {
+  background: var(--theme-surface);
+  color: var(--theme-text);
+  box-shadow: 0 5px 14px rgba(112,52,70,.1);
+}
+
+.profile-open-button,
+.mobile-match-button {
+  border-color: var(--theme-line);
+  background: var(--theme-surface);
+  color: var(--theme-muted);
+}
+.profile-open-button:hover,
+.mobile-match-button:hover { border-color: var(--theme-primary); color: var(--theme-icon-deep); }
+
+.carnival-mobile-entry { background: var(--theme-primary); color: var(--theme-text); }
+
+.message-bubble {
+  border-color: var(--theme-line);
+  background: var(--theme-surface);
+  box-shadow: 0 6px 18px rgba(112,52,70,.06);
+}
+.message-row.is-mine .message-bubble,
+.message-row.is-mine.message-row--coral .message-bubble {
+  background: var(--theme-primary);
+  color: var(--theme-text);
+}
+
+.game-invite {
+  border-color: rgba(253,153,154,.34);
+  background:
+    radial-gradient(circle at 92% 8%, rgba(215,255,241,.88), transparent 28%),
+    linear-gradient(135deg, rgba(255,233,239,.96), rgba(255,252,253,.98));
+  box-shadow: 0 18px 44px rgba(112,52,70,.11);
+}
+.game-invite::after {
+  position: absolute;
+  right: 26px;
+  bottom: 17px;
+  color: var(--theme-icon-light);
+  content: "\2726  \00b7  \2726";
+  font-size: 10px;
+  letter-spacing: .34em;
+  opacity: .78;
+  pointer-events: none;
+}
+.game-invite.is-active { border-color: var(--theme-primary); }
+.game-invite__glow { background: rgba(215,255,241,.66); color: var(--theme-icon-deep); }
+
+.game-label,
+.privacy-chip,
+.topic-chips span { background: rgba(255,255,255,.72); color: var(--theme-text); }
+
+.game-invite__button,
+.send-button,
+.send-button--coral,
+.primary-button,
+.open-profile-explorer {
+  background: var(--theme-primary);
+  color: var(--theme-text);
+  box-shadow: 0 10px 22px rgba(253,153,154,.24);
+  transition: background-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+.game-invite__button:hover,
+.send-button:hover,
+.primary-button:hover,
+.open-profile-explorer:hover {
+  background: #ff8b8d;
+  box-shadow: 0 12px 26px rgba(255,107,138,.25);
+  transform: translateY(-1px);
+}
+
+.composer-game-button,
+.secondary-button { background: var(--theme-secondary-soft); color: var(--theme-icon-deep); }
+
+.chat-composer textarea,
+.prompt-studio__field textarea {
+  border-color: var(--theme-line);
+  background: var(--theme-surface-soft);
+  color: var(--theme-text);
+}
+.chat-composer textarea:focus,
+.prompt-studio__field textarea:focus {
+  border-color: var(--theme-primary);
+  box-shadow: 0 0 0 3px rgba(253,153,154,.14);
+}
+
+.pair-badge {
+  background: linear-gradient(135deg, var(--theme-primary-soft), var(--theme-accent));
+  color: var(--theme-text);
+}
+.pair-profile-card--violet.is-viewer,
+.pair-profile-card--coral.is-viewer {
+  border-color: rgba(253,153,154,.46);
+  background: linear-gradient(135deg, var(--theme-surface), var(--theme-primary-soft));
+  box-shadow: inset 3px 0 0 var(--theme-icon-deep);
+}
+
+.pair-profile-card__top em,
+.pair-profile-card--coral .pair-profile-card__top em,
+.round-count,
+.rolling-game-title__window { color: var(--theme-icon-deep); }
+
+.round-list li.is-current > span { background: var(--theme-primary-soft); color: var(--theme-icon-deep); }
+.round-list li.is-done > span,
+.safety-note { background: var(--theme-accent); color: var(--theme-accent-ink); }
+.safety-note > span { color: var(--theme-accent-ink); }
+
+.game-backdrop,
+.profile-explorer-backdrop,
+.prompt-studio-backdrop,
+.carnival-game-backdrop { background: rgba(74,37,48,.48); }
+
+.game-sheet,
+.profile-explorer,
+.prompt-studio,
+.template-game-dialog {
+  border: 1px solid rgba(253,153,154,.24);
+  background: var(--theme-surface);
+  box-shadow: 0 28px 90px rgba(74,37,48,.26);
+}
+
+.choice-button.is-selected,
+.profile-view-button.is-active {
+  border-color: var(--theme-primary);
+  background: var(--theme-primary-soft);
+  box-shadow: 0 0 0 2px rgba(253,153,154,.1);
+}
+
+.game-template-picker button {
+  border-color: rgba(253,153,154,.25);
+  background: rgba(255,255,255,.7);
+  color: var(--theme-muted);
+}
+.game-template-picker button.is-active { background: var(--theme-primary); color: var(--theme-text); }
+
+.prompt-studio__types button.is-active {
+  border-color: var(--theme-primary);
+  background: var(--theme-primary-soft);
+  box-shadow: inset 0 0 0 1px rgba(253,153,154,.12);
+}
+.prompt-studio__template-note {
+  background: linear-gradient(135deg, var(--theme-primary-soft), rgba(215,255,241,.72));
+}
+
+.game-result-card,
+.game-result-card--fallback {
+  background: linear-gradient(145deg, var(--theme-icon-deep), var(--theme-primary) 58%, var(--theme-secondary));
+  box-shadow: 0 18px 44px rgba(112,52,70,.24);
+}
+.game-result-card__content {
+  background: linear-gradient(180deg, rgba(74,37,48,.04), rgba(74,37,48,.58));
+}
+.game-result-card li::before { color: var(--theme-accent); }
+.game-result-card__footer button { background: var(--theme-accent); color: var(--theme-text); }
+
+/* Reusable game dialogs */
+.template-game {
+  --tg-violet: var(--theme-primary);
+  --tg-violet-deep: var(--theme-icon-deep);
+  --tg-violet-soft: var(--theme-primary-soft);
+  --tg-coral: var(--theme-secondary);
+  --tg-paper: var(--theme-surface);
+  --tg-ink: var(--theme-text);
+  --tg-muted: var(--theme-muted);
+  --tg-line: var(--theme-line);
+}
+.template-game button:focus-visible,
+.template-game select:focus-visible { outline-color: rgba(255,107,138,.34); }
+.template-game__close,
+.template-game__turn-banner { border-color: var(--theme-line); background: var(--theme-secondary-soft); }
+.template-game__avatar {
+  background: linear-gradient(135deg, var(--theme-primary), var(--theme-icon-deep));
+  color: var(--theme-text);
+}
+.template-game__sentence,
+.template-game__result-card {
+  border-color: rgba(253,153,154,.26);
+  background: linear-gradient(135deg, var(--theme-primary-soft), rgba(215,255,241,.48));
+}
+.template-game__primary {
+  background: var(--theme-primary);
+  color: var(--theme-text);
+  box-shadow: 0 10px 24px rgba(253,153,154,.24);
+}
+.template-game__secondary {
+  border-color: var(--theme-line);
+  background: var(--theme-surface);
+  color: var(--theme-icon-deep);
+}
+
+/* Carnival */
+.carnival-page {
+  --carnival-ink: var(--theme-text);
+  --carnival-muted: var(--theme-muted);
+  --carnival-paper: var(--theme-surface);
+  --carnival-line: var(--theme-line);
+  --carnival-violet: var(--theme-primary);
+  --carnival-violet-deep: var(--theme-icon-deep);
+  --carnival-violet-soft: var(--theme-primary-soft);
+  --carnival-coral: var(--theme-secondary);
+  --carnival-coral-soft: var(--theme-secondary-soft);
+  --carnival-green: var(--theme-accent-ink);
+  background:
+    radial-gradient(circle at 15% 8%, rgba(253,153,154,.24), transparent 31%),
+    radial-gradient(circle at 86% 18%, rgba(215,255,241,.74), transparent 34%),
+    var(--theme-background);
+}
+.carnival-page button:focus-visible,
+.carnival-page input:focus-visible,
+.carnival-page textarea:focus-visible,
+.carnival-gender-field label:focus-within { outline-color: rgba(255,107,138,.34); }
+
+.carnival-lantern--one { background: rgba(253,153,154,.18); color: var(--theme-primary); }
+.carnival-lantern--two { background: rgba(215,255,241,.62); color: var(--theme-accent-ink); }
+
+.carnival-register-card,
+.carnival-state-card {
+  border-color: rgba(253,153,154,.24);
+  background: rgba(255,252,253,.96);
+  box-shadow: 0 28px 90px rgba(112,52,70,.15);
+}
+.carnival-register-card::after {
+  position: absolute;
+  top: 22px;
+  right: 24px;
+  color: var(--theme-icon-light);
+  content: "\2726";
+  font-size: 15px;
+  opacity: .72;
+  pointer-events: none;
+}
+.carnival-brand > span,
+.carnival-avatar {
+  background: linear-gradient(135deg, var(--theme-primary), var(--theme-icon-deep));
+  color: var(--theme-text);
+  box-shadow: 0 10px 24px rgba(253,153,154,.25);
+}
+
+.carnival-field input,
+.carnival-gender-field label { border-color: var(--theme-line); background: var(--theme-surface); }
+.carnival-gender-field label.is-selected.is-female {
+  border-color: var(--theme-icon-deep);
+  background: var(--theme-primary-soft);
+  box-shadow: inset 0 0 0 1px rgba(255,107,138,.1);
+}
+.carnival-gender-field label.is-selected.is-male {
+  border-color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+  box-shadow: inset 0 0 0 1px rgba(47,117,96,.1);
+}
+.carnival-gender-field label.is-female > span { background: var(--theme-primary-soft); color: var(--theme-icon-deep); }
+.carnival-gender-field label.is-male > span { background: var(--theme-accent); color: var(--theme-accent-ink); }
+
+.carnival-primary,
+.carnival-game-primary {
+  background: var(--theme-primary);
+  color: var(--theme-text);
+  box-shadow: 0 10px 24px rgba(253,153,154,.25);
+}
+.carnival-secondary,
+.carnival-waiting-note { background: var(--theme-secondary-soft); color: var(--theme-icon-deep); }
+.carnival-orbit {
+  background: linear-gradient(135deg, var(--theme-primary-soft), var(--theme-accent));
+  color: var(--theme-icon-deep);
+}
+.carnival-waiting-people i { background: var(--theme-primary); }
+
+.carnival-game-dialog,
+.case-prompt-game-dialog,
+.carnival-prompt-game-preview {
+  --cg-ink: var(--theme-text);
+  --cg-muted: var(--theme-muted);
+  --cg-line: var(--theme-line);
+  --cg-paper: var(--theme-surface);
+  --cg-violet: var(--theme-primary);
+  --cg-violet-dark: var(--theme-icon-deep);
+  --cg-violet-soft: var(--theme-primary-soft);
+  --cg-coral: var(--theme-secondary);
+  --exclusive-accent: var(--theme-icon-deep);
+  --exclusive-soft: var(--theme-primary-soft);
+  border-color: rgba(253,153,154,.25);
+  background: var(--theme-surface);
+  color: var(--theme-text);
+}
+.carnival-game-dialog button:focus-visible,
+.carnival-game-dialog select:focus-visible,
+.carnival-game-dialog textarea:focus-visible { outline-color: rgba(255,107,138,.34); }
+.carnival-game-header,
+.carnival-game-presence { border-color: var(--theme-line); background: rgba(255,248,250,.96); }
+.carnival-game-close { background: var(--theme-secondary-soft); color: var(--theme-icon-deep); }
+.carnival-game-avatar,
+.carnival-game-person:nth-child(3) .carnival-game-avatar {
+  background: linear-gradient(135deg, var(--theme-primary), var(--theme-icon-deep));
+  color: var(--theme-text);
+}
+.carnival-game-state-icon,
+.carnival-game-notice > span { background: var(--theme-accent); color: var(--theme-accent-ink); }
+.carnival-game-secondary {
+  border-color: var(--theme-line);
+  background: var(--theme-surface);
+  color: var(--theme-icon-deep);
+}
+
+.carnival-prompt-game-preview.is-coral,
+.carnival-prompt-game-preview.is-violet,
+.carnival-prompt-game-preview.is-mint,
+.carnival-prompt-game-preview.is-gold,
+.carnival-prompt-game-preview.is-blue,
+.carnival-exclusive-game.is-coral,
+.carnival-exclusive-game.is-violet,
+.carnival-exclusive-game.is-mint,
+.carnival-exclusive-game.is-gold,
+.carnival-exclusive-game.is-blue {
+  --exclusive-accent: var(--theme-icon-deep);
+  --exclusive-soft: var(--theme-primary-soft);
+}
+
+/* Admin */
+.admin-page,
+.admin-login-shell,
+.admin-loading {
+  color: var(--theme-text);
+  background:
+    radial-gradient(circle at 5% 0%, rgba(253,153,154,.2), transparent 28%),
+    radial-gradient(circle at 95% 20%, rgba(215,255,241,.66), transparent 30%),
+    var(--theme-background);
+}
+.admin-sidebar,
+.admin-panel,
+.admin-login-card,
+.admin-stat-card,
+.admin-savebar {
+  border-color: rgba(253,153,154,.24);
+  background: rgba(255,252,253,.94);
+}
+.admin-wordmark > span,
+.admin-brand-mark,
+.admin-loading > span {
+  background: linear-gradient(135deg, var(--theme-icon-deep), var(--theme-secondary));
+  color: var(--theme-text);
+  box-shadow: 0 10px 25px rgba(253,153,154,.25);
+}
+.admin-nav-item.is-active {
+  border-color: rgba(253,153,154,.26);
+  background: linear-gradient(135deg, var(--theme-primary-soft), rgba(215,255,241,.58));
+  color: var(--theme-text);
+  box-shadow: 0 8px 24px rgba(112,52,70,.08);
+}
+.admin-nav-item.is-active .admin-nav-item__icon,
+.admin-nav-item i,
+.admin-kicker,
+.admin-page .eyebrow { color: var(--theme-icon-deep); }
+
+.admin-panel__heading span,
+.admin-model-results button,
+.admin-notice.is-info { background: var(--theme-primary-soft); color: var(--theme-icon-deep); }
+.admin-field input,
+.admin-field textarea {
+  border-color: var(--theme-line);
+  background: var(--theme-surface-soft);
+  color: var(--theme-text);
+}
+.admin-field input:focus,
+.admin-field textarea:focus {
+  border-color: var(--theme-primary);
+  box-shadow: 0 0 0 3px rgba(253,153,154,.14);
+}
+.admin-template-card.is-enabled {
+  border-color: rgba(253,153,154,.28);
+  background: linear-gradient(145deg, var(--theme-surface), var(--theme-primary-soft));
+}
+.admin-template-toggle input { accent-color: var(--theme-icon-deep); }
+
+.admin-welcome-card {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, #4a2530, #704052);
+  box-shadow: 0 20px 45px rgba(74,37,48,.18);
+}
+.admin-welcome-card::after {
+  position: absolute;
+  top: -44px;
+  right: 76px;
+  width: 150px;
+  height: 150px;
+  border-radius: 50%;
+  background: rgba(215,255,241,.1);
+  content: "";
+  pointer-events: none;
+}
+.admin-welcome-mark { color: var(--theme-secondary); }
+.admin-stat-card.is-purple,
+.admin-stat-card.is-orange { box-shadow: inset 0 3px var(--theme-primary); }
+.admin-stat-card.is-green { box-shadow: inset 0 3px var(--theme-accent-ink); }
+.admin-primary-button {
+  background: var(--theme-primary);
+  color: var(--theme-text);
+  box-shadow: 0 9px 22px rgba(253,153,154,.24);
+}
+.admin-secondary-button,
+.admin-security-strip span,
+.admin-notice.is-success { background: var(--theme-accent); color: var(--theme-accent-ink); }
+
+@media (max-width: 900px), (max-width: 1024px) and (max-height: 700px) {
+  .chat-header,
+  .chat-composer { background: rgba(255,252,253,.98); }
+  .game-sheet__header,
+  .profile-explorer__header,
+  .prompt-studio__actions { background: rgba(255,252,253,.96); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .game-invite__glow { animation: romance-glow 3.6s ease-in-out infinite; }
+}
+
+@keyframes romance-glow {
+  50% { transform: translate(-3px, 3px) scale(1.03); opacity: .86; }
+}
+/* Male identity: blue remains soft, while mint stays reserved for success states. */
+.avatar--coral {
+  background: linear-gradient(135deg, var(--theme-male), #82caff);
+  color: var(--theme-text);
+  box-shadow: 0 8px 18px rgba(74,150,201,.18);
+}
+
+.perspective-switch__dot.is-coral { background: var(--theme-male); }
+
+.message-row--coral .message-bubble {
+  border-color: rgba(163,218,255,.78);
+  background: var(--theme-male-soft);
+  color: var(--theme-text);
+}
+.message-row.is-mine.message-row--coral .message-bubble {
+  border: 0;
+  background: var(--theme-male);
+  color: var(--theme-text);
+}
+
+.send-button--coral {
+  background: var(--theme-male);
+  color: var(--theme-text);
+  box-shadow: 0 10px 22px rgba(74,150,201,.2);
+}
+.send-button--coral:hover { background: #8fd1fd; }
+
+.pair-profile-card--coral.is-viewer {
+  border-color: rgba(163,218,255,.95);
+  background: linear-gradient(135deg, var(--theme-surface), var(--theme-male-soft));
+  box-shadow: inset 3px 0 0 var(--theme-male);
+}
+.pair-profile-card--coral .pair-profile-card__top em,
+.profile-detail-card--coral .profile-data-section__title span {
+  color: var(--theme-male-ink);
+}
+.profile-detail-card--coral.is-viewer {
+  border-color: rgba(163,218,255,.95);
+  box-shadow: 0 13px 34px rgba(74,150,201,.13);
+}
+.profile-detail-card--coral .memory-list li::before { color: var(--theme-male-ink); }
+.profile-detail-card--coral .profile-view-button.is-active {
+  border-color: var(--theme-male);
+  background: var(--theme-male-soft);
+  color: var(--theme-male-ink);
+}
+
+.template-game { --tg-coral: var(--theme-male); }
+
+.carnival-gender-field label.is-male:focus-within {
+  outline-color: rgba(163,218,255,.72);
+}
+.carnival-gender-field label.is-selected.is-male {
+  border-color: var(--theme-male);
+  background: var(--theme-male-soft);
+  box-shadow: inset 0 0 0 1px rgba(74,150,201,.1);
+}
+.carnival-gender-field label.is-male > span {
+  background: var(--theme-male);
+  color: var(--theme-text);
+}
+
+.carnival-avatar.is-male,
+.carnival-game-avatar.is-male,
+.carnival-game-person .carnival-game-avatar.is-male {
+  background: linear-gradient(135deg, var(--theme-male), #82caff);
+  color: var(--theme-text);
+  box-shadow: 0 8px 20px rgba(74,150,201,.18);
+}
+
+.carnival-message.is-male p {
+  border-color: rgba(163,218,255,.78);
+  background: var(--theme-male-soft);
+  color: var(--theme-text);
+}
+.carnival-message.is-male.is-mine p {
+  border-color: transparent;
+  background: var(--theme-male);
+  color: var(--theme-text);
+}
+
+.carnival-composer.is-male .carnival-composer__send {
+  background: var(--theme-male);
+  color: var(--theme-text);
+  box-shadow: 0 9px 20px rgba(74,150,201,.18);
+}

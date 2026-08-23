@@ -4,6 +4,7 @@ import App from './App';
 import AdminPage from './AdminPage';
 import CarnivalPage from './CarnivalPage';
 import './styles.css';
+import './romance-theme.css';
 
 const isAdminRoute = window.location.pathname === '/admin' || window.location.pathname.startsWith('/admin/');
 const isCarnivalRoute = window.location.pathname === '/carnival' || window.location.pathname.startsWith('/carnival/');
