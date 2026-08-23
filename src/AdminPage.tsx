@@ -87,13 +87,13 @@ export default function AdminPage() {
     try { await readApi(await fetch('/api/admin/session', { method: 'DELETE', credentials: 'same-origin', headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken }, body: '{}' })); setSession({ authenticated: false }); setConfig(null); setNotice({ tone: 'info', text: '已退出管理控制台。' }); } catch (error) { handleFailure(error, '退出失败，请重试'); } finally { setBusy(null); }
   }
 
-  if (session === null) return <main className="admin-loading"><span>良</span><p>正在确认管理会话…</p></main>;
+  if (session === null) return <main className="admin-loading"><span>心</span><p>正在确认管理会话…</p></main>;
 
   if (!session.authenticated) return (
     <main className="admin-login-shell">
       <a className="admin-back-link" href="/">← 返回聊天演示</a>
       <form className="admin-login-card" onSubmit={login}>
-        <div className="admin-brand-mark">良</div><h1>专属游戏控制台</h1>
+        <div className="admin-brand-mark">心</div><h1>专属游戏控制台</h1>
         <input type="hidden" name="username" autoComplete="username" value="admin" readOnly />
         <label className="admin-field"><span>管理员密码</span><input type="password" name="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="输入独立管理密码" required /></label>
         {notice && <p className={`admin-notice is-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}>{notice.text}</p>}
@@ -102,14 +102,14 @@ export default function AdminPage() {
     </main>
   );
 
-  if (!config) return <main className="admin-loading"><span>良</span><p>{pageError ?? '正在读取 AI 配置…'}</p>{pageError && <button className="admin-primary-button" type="button" onClick={() => { setPageError(null); void loadConfig().catch((error) => setPageError(error instanceof Error ? error.message : '重试失败')); }}>重新读取配置</button>}</main>;
+  if (!config) return <main className="admin-loading"><span>心</span><p>{pageError ?? '正在读取 AI 配置…'}</p>{pageError && <button className="admin-primary-button" type="button" onClick={() => { setPageError(null); void loadConfig().catch((error) => setPageError(error instanceof Error ? error.message : '重试失败')); }}>重新读取配置</button>}</main>;
 
   const current = sections.find((item) => item.id === activeSection) ?? sections[0];
   const saveLabel = busy === 'save' ? '正在保存…' : '保存并立即生效';
   return (
     <main className="admin-page">
       <aside className="admin-sidebar">
-        <a className="admin-wordmark" href="/"><span>良</span><strong>Pair Playground</strong></a>
+        <a className="admin-wordmark" href="/"><span>心</span><strong>Pair Playground</strong></a>
         <div className="admin-sidebar__label">控制台目录</div>
         <nav className="admin-nav" aria-label="控制台功能区">
           {sections.map((item) => <a key={item.id} href={item.path} className={`admin-nav-item ${activeSection === item.id ? 'is-active' : ''}`} onClick={(event) => { event.preventDefault(); navigate(item.path); }}><span className="admin-nav-item__icon">{item.icon}</span><span><strong>{item.label}</strong><small>{item.caption}</small></span>{activeSection === item.id && <i aria-hidden="true">›</i>}</a>)}

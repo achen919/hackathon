@@ -11,7 +11,7 @@ document.documentElement.classList.toggle('is-admin-route', isAdminRoute);
 document.body.classList.toggle('is-admin-route', isAdminRoute);
 document.documentElement.classList.toggle('is-carnival-route', isCarnivalRoute);
 document.body.classList.toggle('is-carnival-route', isCarnivalRoute);
-if (isCarnivalRoute) document.title = '心动游园会 · 良配';
+if (isCarnivalRoute) document.title = '心动游园会 · 心近';
 
 const page = isAdminRoute
   ? <AdminPage />
